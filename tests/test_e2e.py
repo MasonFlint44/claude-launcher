@@ -175,3 +175,21 @@ def test_cleans_up_its_run_directory(launch):
     t.send("esc", "esc")
     t.wait_exit()
     assert list(launch.runtime.iterdir()) == []
+
+
+def test_tab_titled_while_picking_and_put_back(launch):
+    t = launch()
+    t.wait_for("Select a project directory for Claude")
+    t.send("enter")
+    t.wait_for("fake claude in")
+    t.wait_for("Select a project directory for Claude")
+    t.send("esc")
+    t.wait_for("esc again to quit")
+    t.send("esc")
+    assert t.wait_exit() == 0
+    raw = bytes(t.raw)
+    named = b"\x1b]0;Claude Code\x1b\\"
+    pushed, popped = raw.find(b"\x1b[22;0t"), raw.rfind(b"\x1b[23;0t")
+    first = raw.find(named)
+    again = raw.find(named, raw.find(b"fake claude in"))
+    assert 0 <= pushed < first < again < popped

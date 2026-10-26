@@ -2,7 +2,8 @@
 bindings and install.sh call. Not meant to be run by hand.
 
     resume-dir ARGS...       if ARGS has `--resume <id>`, print that session's directory
-    --run DIR theme apply|restore   switch this terminal to Claude Dark, or back
+    --run DIR theme apply|restore   switch this terminal to Claude Dark and save
+                             its title, or put both back
     --run DIR ui start ...   the picker (see picker.py)
     install add-hook|remove-hook|terminals|icon|... (see _install)
     terminal open guake [LAUNCHER]   what the Guake desktop entry runs
@@ -16,7 +17,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import fzf, install, logs, terminals, theme
+from . import fzf, install, logs, terminals, theme, title
 from .paths import CORE, REPO_DIR, Paths
 from .picker import FzfTooOld, Pick, Picker, resume_dir
 
@@ -37,28 +38,54 @@ def _resume_dir(args: list[str]) -> int:
     return NOT_RESUMING
 
 
-def _theme(run: Path, action: str) -> int:
-    """Switch this terminal to Claude Dark, or put its colors back. Quietly
-    does nothing when there's no terminal, or it won't say what its colors are."""
-    if action == "apply" and not theme.enabled():
-        return 0
+def _tty() -> int | None:
     try:
-        fd = os.open("/dev/tty", os.O_RDWR | os.O_NOCTTY)
+        return os.open("/dev/tty", os.O_RDWR | os.O_NOCTTY)
     except OSError:
+        return None
+
+
+def _theme(run: Path, action: str) -> int:
+    """Switch this terminal to Claude Dark and save its title, or put both
+    back. Quietly does nothing when there's no terminal, and leaves the colors
+    alone when it won't say what they are."""
+    if action not in ("apply", "restore"):
+        print(f"unknown theme action: {action}", file=sys.stderr)
+        return 2
+    colors = action == "restore" or theme.enabled()
+    titled = title.enabled()
+    if not (colors or titled):
+        return 0
+    fd = _tty()
+    if fd is None:
         return 0
     try:
         if action == "apply":
-            theme.apply(fd, theme.Theme.load(), run / "colors.json")
-        elif action == "restore":
-            theme.restore(fd, run / "colors.json")
+            if titled:
+                os.write(fd, title.PUSH)
+            if colors:
+                theme.apply(fd, theme.Theme.load(), run / "colors.json")
         else:
-            print(f"unknown theme action: {action}", file=sys.stderr)
-            return 2
+            theme.restore(fd, run / "colors.json")
+            if titled:
+                os.write(fd, title.POP)
     except OSError:
         pass  # the terminal went away
     finally:
         os.close(fd)
     return 0
+
+
+def _set_title() -> None:
+    """Name the tab while the picker shows; Claude leaves its own title behind."""
+    if not title.enabled() or (fd := _tty()) is None:
+        return
+    try:
+        os.write(fd, title.set_name())
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
 
 
 def _ui(run: Path, action: str, args: list[str]) -> int:
@@ -72,6 +99,7 @@ def _ui(run: Path, action: str, args: list[str]) -> int:
         except FzfTooOld as e:
             print(e, file=sys.stderr)
             return 1
+        _set_title()
         sys.stdout.write("".join(o + "\0" for o in opts))
         return 0
     if action == "menu":

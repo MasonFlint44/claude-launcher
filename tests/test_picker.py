@@ -382,3 +382,11 @@ class TestPick:
         p, _ = start(env)
         p.on_tab()
         assert env.picker().pick("") == "No sessions to resume"
+
+
+def test_title_skipped_on_dumb_terminals():
+    from claude_launcher import title
+
+    assert title.enabled({"TERM": "xterm-256color"})
+    assert not title.enabled({"TERM": "dumb"})
+    assert not title.enabled({})

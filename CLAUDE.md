@@ -6,7 +6,7 @@ A project and session picker for Claude Code on Linux (Ubuntu, systemd), plus a 
 
 | Path | Role |
 |---|---|
-| `bin/claude-launcher` | Bash. Sets the tab's colors, runs fzf with the options Python gives it, starts `claude`, loops. Keep it thin: no logic that could live in Python. |
+| `bin/claude-launcher` | Bash. Sets the tab's colors and title, runs fzf with the options Python gives it, starts `claude`, loops. Keep it thin: no logic that could live in Python. |
 | `bin/claude-session-hook` | Bash. Claude Code SessionStart/SessionEnd hook. Runs on every session start and end. |
 | `libexec/claude-launcher-core` | Entry script for the Python package. bash, fzf's key bindings and install.sh call it; it isn't on PATH. |
 | `src/claude_launcher/cli.py` | Subcommands for the entry script. Arguments are parsed by hand, because they include fzf's query and claude's own options. |
@@ -14,6 +14,7 @@ A project and session picker for Claude Code on Linux (Ubuntu, systemd), plus a 
 | `src/claude_launcher/logs.py` | Reading Claude's session logs: the sessions list, titles, directories. |
 | `src/claude_launcher/restart.py`, `journal.py` | The group of sessions a restart or logout closed. |
 | `src/claude_launcher/theme.py` | Reads `themes/claude-dark`; switches a terminal's colors and puts them back. |
+| `src/claude_launcher/title.py` | The tab title: "Claude Code" while the picker shows, and the old title put back on exit. |
 | `src/claude_launcher/fzf.py` | Which fzf to run, and fetching the pinned one when the system's is too old. |
 | `src/claude_launcher/install.py` | For install.sh: the settings.json hook merge, the desktop entries, and the app icon. |
 | `src/claude_launcher/terminals.py` | The terminals the desktop launcher can open, one class each, and how (options, profile, drop-down, fallback). |
