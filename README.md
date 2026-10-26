@@ -80,38 +80,38 @@ Profiles are the only change made to a terminal's own settings, and `--uninstall
 |---|---|
 | Type | Filter the list |
 | Enter | Open the highlighted directory |
-| Tab | Show your sessions in all directories, most recent first; while typing a path, complete the highlighted folder |
+| Tab | Show your sessions in all directories, most recent first; while typing a path, complete the highlighted directory |
 | Shift-Tab | Show the highlighted directory's sessions |
 | Ctrl-X | In a Sessions view, take the highlighted ↻ session out of the group a restart or logout closed |
 | Alt-X, Alt-X | In a Sessions view, do that for every ↻ session it shows |
-| Esc, Esc | Clear the search; on an empty search, quit. While typing a path, Esc backs up a folder instead |
+| Esc, Esc | Clear the search; on an empty search, quit. While typing a path, Esc backs up a directory instead |
 | Ctrl-C | Clear the search; on an empty search, press twice to quit |
 | Ctrl-D, Ctrl-D | On an empty search, quit |
 | Ctrl-U | Clear the search at once, a path included |
 
-Like in Claude, Esc, Ctrl-D and Ctrl-C on an empty search take two presses within a second. The first press shows what the second will do ("esc again to quit") where the key hints are.
+Like in Claude, Esc, Ctrl-D and Ctrl-C on an empty search take two presses within a second. The first press shows what the second will do ("esc again to quit") where the key hints are. In a narrower window, hints that don't fit beside the title go on a line under them.
 
 Your home directory is the top row, so Enter on an empty search opens it.
 
-**Opening a directory by path:** type a path starting with `/` or `~` (e.g. `~/git/new-repo`), and the list becomes the folders in the folder typed so far, like a shell's Tab completion:
+**Opening a directory by path:** type a path starting with `/` or `~` (e.g. `~/git/new-repo`), and the list becomes the directories in the one typed so far, like a shell's Tab completion:
 
 ```
-  Select a project directory for Claude         enter open   tab complete   shift-tab dir sessions   esc back
+  Directories in ~/git/                    enter open   tab complete   shift-tab dir sessions   esc back   ctrl-u clear
 
 project> ~/git/
   Directory                                          Last used
-▌ ~/git/                                             this folder
+▌ ~/git/                                             → claude-launcher, 2h ago
   ~/git/claude-launcher                              2h ago
   ~/git/dotfiles                                     → nvim/lua, 3d ago
   ~/git/archive
   ~/git/notes
 ```
 
-- The first row is the folder you've typed, until you start a name in it.
-- Folders Claude ran in come first, most recent first, with when you last used them. A folder you've only used something inside of says which, dimmed (`→ nvim/lua, 3d ago`). The rest follow A to Z, hidden ones last.
-- Typing filters by name as usual. Tab fills in the highlighted folder and lists what's in it; Enter opens it.
-- Esc backs up a folder at a time (`~/git/cla` → `~/git/` → `~/` → the start screen), so it never quits from a path. Ctrl-U clears the whole path.
-- Only real folders are listed. A path that matches none shows "Not a directory" on Enter, and a folder that doesn't exist says "No folder: ~/x" in place of the title. Plain words (`launcher`) still search every directory Claude ran in, however deep.
+- The title names the directory you've typed, and it's the first row until you start a name in it. A long path in the title is shortened from the left, so its end stays in view.
+- Directories Claude ran in come first, most recent first, with when you last used them. One you've only used something inside of says which, dimmed (`→ nvim/lua, 3d ago`). The rest follow A to Z, hidden ones last.
+- Typing filters by name as usual. Tab fills in the highlighted directory and lists what's in it; Enter opens it.
+- Esc backs up a directory at a time (`~/git/cla` → `~/git/` → `~/` → the start screen), so it never quits from a path. Ctrl-U clears the whole path.
+- Only real directories are listed. A path that matches none shows "Not a directory" on Enter, and one that doesn't exist says "No such directory: ~/x" in place of the title. Plain words (`launcher`) still search every directory Claude ran in, however deep.
 - Relative paths (`./`, `../`) aren't supported.
 
 Text that matches nothing shows "Nothing matches"; either way the list comes back.

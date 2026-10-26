@@ -15,8 +15,8 @@ Views: "projects" (the directory list, the start screen), "recent" (sessions
 in every directory) and "directory" (the highlighted directory's sessions).
 
 Path mode: while the query in the projects view starts with / or ~, the list
-is the folders in the folder typed so far, like a shell's completion. Tab
-fills in the highlighted one and Esc backs up a level.
+is the directories in the directory typed so far, like a shell's completion.
+Tab fills in the highlighted one and Esc backs up a level.
 
 Rows are "key<TAB>shown<TAB>note": fzf shows the last two and matches only
 the shown text, so a note like "→ git/claude-launcher" can't match a query.
@@ -46,6 +46,7 @@ from .theme import Theme
 MAX_WIDTH = 120  # widest the picker gets, in columns
 DIR_COLUMN = 50  # the directory list's first column
 DOUBLE_PRESS_MS = 1000
+HINT_GAP = 8  # the least space between the title and the hints beside it
 
 # How fzf reads and matches rows, the same in the picker and in `_nth_match`.
 MATCHING = ["--ansi", "--tiebreak=index", "--delimiter=\t", "--with-nth=2..", "--nth=1"]
@@ -59,6 +60,7 @@ class State:
     view: str = "projects"
     dir: str = ""  # the directory, in the "directory" view
     title: str = ""
+    title_path: str = ""  # a path after the title, shortened from the left to fit
     query: str = ""
     cols: int = 80
     width: int = 80
@@ -69,13 +71,13 @@ class State:
 
 
 @dataclass
-class Folder:
+class DirRow:
     """A row in path mode."""
 
     path: str  # the row's key
     shown: str  # in the form typed, ~/... or /..., so fzf matches it
     note: str = ""
-    is_parent: bool = False  # the folder typed so far
+    is_parent: bool = False  # the directory typed so far
 
 
 class FzfTooOld(Exception):
@@ -138,33 +140,65 @@ class Picker:
     def _accent(self, s: str) -> str:
         return color(s, self.theme.accent)
 
-    def _hints(self, *pairs: tuple[str, str]) -> str:
-        return "   ".join(f"{key} {self._dim(what)}" for key, what in pairs)
+    def _hint(self, key: str, what: str) -> str:
+        return f"{key} {self._dim(what)}"
 
-    def _view_hints(self) -> list[str]:
+    def _view_hints(self) -> list[tuple[str, bool]]:
+        """The view's key hints, each with whether it always goes beside the title."""
+        h = self._hint
         if self.state.view == "projects" and typed_path_like(self.state.query):
             return [
-                self._hints(("enter", "open"), ("tab", "complete"), ("shift-tab", "dir sessions"), ("esc", "back")),
-                self._hints(("enter", "open"), ("tab", "complete"), ("esc", "back")),
+                (h("enter", "open"), True),
+                (h("tab", "complete"), True),
+                (h("shift-tab", "dir sessions"), False),
+                (h("esc", "back"), True),
+                (h("ctrl-u", "clear"), False),
             ]
         if self.state.view == "projects":
             return [
-                self._hints(("enter", "open"), ("tab", "sessions"), ("shift-tab", "dir sessions"), ("esc", "quit")),
-                self._hints(("enter", "open"), ("tab", "sessions"), ("esc", "quit")),
+                (h("enter", "open"), True),
+                (h("tab", "sessions"), True),
+                (h("shift-tab", "dir sessions"), False),
+                (h("esc", "quit"), True),
             ]
-        plain = self._hints(("enter", "resume"), ("tab/esc", "back to projects"))
-        if self.state.has_group_rows:
-            return [
-                self._hints(
-                    ("enter", "resume"),
-                    ("ctrl-x", "dismiss ↻"),
-                    ("alt-x", "dismiss all"),
-                    ("tab/esc", "back to projects"),
-                ),
-                self._hints(("enter", "resume"), ("ctrl-x", "dismiss ↻"), ("tab/esc", "back")),
-                plain,
-            ]
-        return [plain]
+        dismiss = [(h("ctrl-x", "dismiss ↻"), True), (h("alt-x", "dismiss all"), False)]
+        return [
+            (h("enter", "resume"), True),
+            *(dismiss if self.state.has_group_rows else []),
+            (h("tab/esc", "back to projects"), True),
+        ]
+
+    def _hint_lines(self, title: str, hints: list[tuple[str, bool]]) -> list[str]:
+        """The title and the hints, right-aligned: beside the title as many as
+        fit (the main ones first), and the rest on lines under it rather than
+        left out."""
+        room = self.state.width - 3
+
+        def joined(chosen: set[int]) -> str:
+            return "   ".join(hint for i, (hint, _) in enumerate(hints) if i in chosen)
+
+        def fits(chosen: set[int]) -> bool:
+            return text_width(title) + HINT_GAP + text_width(joined(chosen)) <= room
+
+        top = {i for i, (_, main) in enumerate(hints) if main}
+        if not fits(top):
+            top = set()
+        for i, (_, main) in enumerate(hints):
+            if not top or main:
+                continue
+            if not fits(top | {i}):
+                break  # this one and the extras after it go under, in order
+            top.add(i)
+        below: list[str] = []
+        for i, (hint, _) in enumerate(hints):
+            if i in top:
+                continue
+            if below and text_width(below[-1]) + 3 + text_width(hint) <= room:
+                below[-1] += "   " + hint
+            else:
+                below.append(hint)
+        lines = [title + " " * (room - text_width(title) - text_width(joined(top))) + joined(top) if top else title]
+        return lines + [" " * max(0, room - text_width(line)) + line for line in below]
 
     def _closed_by(self) -> str:
         """What happened to the ↻ sessions, for the restart line."""
@@ -189,16 +223,15 @@ class Picker:
         return ""
 
     def make_header(self, hints: list[str] | None = None) -> str:
-        """The title, with the first set of key hints that fits right-aligned,
-        then the restart line if there is one, then a blank line."""
-        title = self._title()
-        top = title
-        for option in hints if hints is not None else self._view_hints():
-            gap = self.state.width - text_width(title) - text_width(option) - 3
-            if gap >= 3:
-                top = title + " " * gap + option
-                break
-        lines = [top]
+        """The title with the key hints (see `_hint_lines`), then the restart
+        line if there is one, then a blank line. `hints` takes the hints'
+        place beside the title, with the lines under it left blank so the
+        list doesn't move."""
+        lines = self._hint_lines(self._title(), self._view_hints())
+        if hints is not None:
+            usual = len(lines)
+            lines = self._hint_lines(self._title(), [(h, True) for h in hints])
+            lines += [" "] * (usual - len(lines))
         nudge = self._nudge()
         if nudge:
             lines.append(nudge)
@@ -206,12 +239,18 @@ class Picker:
         return "\n".join(lines)
 
     def _title(self) -> str:
+        """The title, with any path in it shortened from the left to fit, so
+        the end of the path stays in view."""
+        title, path = self.state.title, self.state.title_path
         query = self.state.query
         if self.state.view == "projects" and typed_path_like(query):
-            folder = split_path(query)[0]
-            if not os.path.isdir(expand(folder) or ""):
-                return f"No folder: {text.printable(folder.rstrip('/') or '/')}"
-        return self.state.title
+            typed = split_path(query)[0]
+            if os.path.isdir(expand(typed) or ""):
+                title, path = "Directories in ", typed
+            else:
+                title, path = "No such directory: ", typed.rstrip("/") or "/"
+        path = text.printable(path)
+        return title + truncate_left(path, max(10, self.state.width - 3 - text_width(title))) if path else title
 
     def _set_header(self, hints: list[str] | None = None) -> str:
         header = self.make_header(hints)
@@ -247,47 +286,68 @@ class Picker:
         return f"{key}\t{pad(shown, DIR_COLUMN)}\t{self._dim(note)}"
 
     def projects_rows(self, query: str) -> list[str]:
-        """The directory list, header row first: the folders in a typed path
+        """The directory list, header row first: the directories in a typed path
         (path mode), or every directory Claude ran in."""
         header = "\t" + self._dim(pad("Directory", DIR_COLUMN) + " Last used")
         if typed_path_like(query):
-            return [header] + [self._folder_row(f) for f in self.folders(query)]
+            return [header] + [self._dir_row(d) for d in self.directories(query)]
         return [header] + [
             self._project_row(d, text.printable(self.paths.tilde(d)), self._age(used)) for d, used in self._projects()
         ]
 
-    def _folder_row(self, f: Folder) -> str:
-        return self._project_row(f.path, text.printable(f.shown), f.note)
+    def _dir_row(self, d: DirRow) -> str:
+        return self._project_row(d.path, text.printable(d.shown), d.note)
 
-    def folders(self, query: str) -> list[Folder]:
-        """Path mode's rows: the folder typed so far (until a name is started),
-        then the folders in it. Folders Claude ran in, or in something inside,
-        come first, most recent first; then the rest A to Z, hidden ones last.
-        A folder named exactly as typed goes to the top."""
+    def _note(self, own: float, inside: tuple[float, str]) -> str:
+        """A directory's note in path mode: when Claude last ran in it, else
+        which project inside it was used last, and when."""
+        if own:
+            return self._age(own)
+        used, where = inside
+        if not used:
+            return ""
+        room = max(10, self.state.width - DIR_COLUMN - 14)
+        return f"→ {truncate_left(text.printable(where), room)}, {self._age(used)}"
+
+    def directories(self, query: str) -> list[DirRow]:
+        """Path mode's rows: the directory typed so far (until a name is
+        started), then the directories in it. Those Claude ran in, or in
+        something inside, come first, most recent first; then the rest A to Z,
+        hidden ones last. One named exactly as typed goes to the top."""
         typed, partial = split_path(query)
         parent = expand(typed)
         if parent is None or not os.path.isdir(parent):
             return []
-        rows = [] if partial else [Folder(parent, typed, "this folder", is_parent=True)]
+
+        none = (0.0, "")
+        parent_own, parent_inside = 0.0, none
+        own: dict[str, float] = {}  # name: when Claude last ran in it
+        inside: dict[str, tuple[float, str]] = {}  # name: (when, where) for the latest project inside it
+        prefix = parent.rstrip("/") + "/"
+        for directory, used in self._projects():
+            directory = os.path.normpath(directory)
+            if not used:
+                continue
+            if directory == parent:
+                parent_own = max(parent_own, used)
+            if not directory.startswith(prefix) or directory == parent:
+                continue
+            rest = directory[len(prefix) :]
+            if used > parent_inside[0]:
+                parent_inside = (used, rest)
+            name, _, deeper = rest.partition("/")
+            if not deeper:
+                own[name] = max(own.get(name, 0.0), used)
+            elif used > inside.get(name, none)[0]:
+                inside[name] = (used, deeper)
+
+        rows = [] if partial else [DirRow(parent, typed, self._note(parent_own, parent_inside), is_parent=True)]
         try:
             with os.scandir(parent) as entries:
                 # A name with control characters can't be typed or shown as it is.
                 names = [e.name for e in entries if _is_dir(e) and text.printable(e.name) == e.name]
         except OSError:
             return rows
-
-        own: dict[str, float] = {}  # name: when Claude last ran in it
-        inside: dict[str, tuple[float, str]] = {}  # name: (when, where) for the latest project inside it
-        prefix = parent.rstrip("/") + "/"
-        for directory, used in self._projects():
-            directory = os.path.normpath(directory)
-            if not used or not directory.startswith(prefix):
-                continue
-            name, _, deeper = directory[len(prefix) :].partition("/")
-            if not deeper:
-                own[name] = max(own.get(name, 0.0), used)
-            elif used > inside.get(name, (0.0, ""))[0]:
-                inside[name] = (used, deeper)
 
         def order(name: str) -> tuple:
             latest = max(own.get(name, 0.0), inside.get(name, (0.0, ""))[0])
@@ -297,16 +357,8 @@ class Picker:
                 return (1, -latest)
             return (2, name.startswith("."), name.casefold(), name)
 
-        room = max(10, self.state.width - DIR_COLUMN - 14)
         for name in sorted(names, key=order):
-            if name in own:
-                note = self._age(own[name])
-            elif name in inside:
-                used, deeper = inside[name]
-                note = f"→ {truncate_left(text.printable(deeper), room)}, {self._age(used)}"
-            else:
-                note = ""
-            rows.append(Folder(prefix + name, typed + name, note))
+            rows.append(DirRow(prefix + name, typed + name, self._note(own.get(name, 0.0), inside.get(name, none))))
         return rows
 
     def _build_sessions(self, log_dirs: list[Path]) -> bool:
@@ -362,6 +414,7 @@ class Picker:
     def _set_view(self, view: str, directory: str = "") -> str:
         """Switch to a view; the fzf actions that show it."""
         self.state.view, self.state.dir, self.state.key, self.state.query = view, directory, None, ""
+        self.state.title_path = ""
         prompt = SESSIONS_PROMPT
         if view == "projects":
             self.state.title, prompt = "Select a project directory for Claude", PROJECTS_PROMPT
@@ -370,8 +423,8 @@ class Picker:
             self.state.title = "Recent Claude sessions" if found else "No Claude sessions yet"
         else:
             found = self._build_sessions(self.paths.log_dirs_for(directory))
-            where = self.paths.tilde(directory)
-            self.state.title = f"Claude sessions in {where}" if found else f"No Claude sessions in {where}"
+            self.state.title = "Claude sessions in " if found else "No Claude sessions in "
+            self.state.title_path = self.paths.tilde(directory)
         header = self._set_header()
         self._save_state()
         return f"clear-query+change-prompt({prompt})+reload-sync({self.core} ui menu)+first+change-header:{header}"
@@ -439,17 +492,17 @@ class Picker:
         return f"{reload}change-header:{self._set_header()}"
 
     def on_tab(self, query: str | None = None) -> str:
-        """Tab: in path mode, fill in the highlighted folder; otherwise switch
+        """Tab: in path mode, fill in the highlighted directory; otherwise switch
         between the projects and the Sessions view."""
         query = self.state.query if query is None else query
         if self.state.view == "projects" and typed_path_like(query):
             # Tab right behind the typing reaches fzf while it's still loading
             # the rows, so take the row at the cursor from what the query
             # matches, as Enter does.
-            folders = self.folders(query)
-            key = _nth_match(self.state.fzf, [self._folder_row(f) for f in folders], query, _cursor())
-            folder = next((f for f in folders if f.path == key and not f.is_parent), None)
-            return f"change-query:{folder.shown}/" if folder else ""
+            rows = self.directories(query)
+            key = _nth_match(self.state.fzf, [self._dir_row(d) for d in rows], query, _cursor())
+            row = next((d for d in rows if d.path == key and not d.is_parent), None)
+            return f"change-query:{row.shown}/" if row else ""
         return self._set_view("recent" if self.state.view == "projects" else "projects")
 
     def on_shift_tab(self, row: str) -> str:
@@ -488,7 +541,7 @@ class Picker:
         second press within a second; the first press says so where the key
         hints are. Esc with text clears it on the second press; Ctrl-C clears
         it straight away and Ctrl-D deletes a character. In path mode Esc backs
-        up a folder, back to the start screen from ~/ or /, so it never quits.
+        up a directory, back to the start screen from ~/ or /, so it never quits.
         In a Sessions view Esc goes straight back to the projects, and Alt-X
         twice dismisses every ↻ session the view shows.
         """
@@ -592,29 +645,29 @@ def typed_path_like(query: str) -> bool:
 
 
 def split_path(query: str) -> tuple[str, str]:
-    """A typed path split into the folder so far (ending in /) and the start
-    of a name in it. `~` and `~user` on their own are that home folder."""
+    """A typed path split into the directory so far (ending in /) and the
+    start of a name in it. `~` and `~user` on their own are that home."""
     if query.startswith("~") and "/" not in query:
         return query + "/", ""
-    folder, _, partial = query.rpartition("/")
-    return folder + "/", partial
+    head, _, partial = query.rpartition("/")
+    return head + "/", partial
 
 
 def expand(typed: str) -> str | None:
-    """The folder a typed path names, or None for an unknown ~user."""
+    """The directory a typed path names, or None for an unknown ~user."""
     path = os.path.expanduser(typed)
     return None if path.startswith("~") else os.path.normpath(path)
 
 
 def up_a_level(query: str) -> str:
-    """Esc in path mode: drop a half-typed name, else the last folder.
+    """Esc in path mode: drop a half-typed name, else the last directory.
     "" once there's nothing left above (~/, / or ~user)."""
-    folder, partial = split_path(query)
+    head, partial = split_path(query)
     if partial:
-        return folder
+        return head
     if "/" not in query:  # ~ or ~user
         return ""
-    above = folder.rstrip("/")
+    above = head.rstrip("/")
     if not above or above.startswith("~") and "/" not in above:
         return ""
     return above.rpartition("/")[0] + "/"

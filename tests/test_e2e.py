@@ -111,8 +111,8 @@ def test_path_mode_tab_completes_then_enter_opens(launch, claude_home):
     t.send("tab")
     t.wait_for("> ~/git/claude-launcher/")
     t.wait_for("~/git/claude-launcher/src")
-    screen = t.wait_for("this folder")
-    assert screen.index("this folder") < screen.index("~/git/claude-launcher/src")
+    screen = t.wait_for("Directories in ~/git/claude-launcher/")
+    assert screen.index("▌ ~/git/claude-launcher/\n") < screen.index("~/git/claude-launcher/src")
     t.send("enter")
     t.wait_for("fake claude in")
     assert launch.calls() == [(str(home / "git" / "claude-launcher"), "")]
@@ -126,16 +126,27 @@ def test_path_mode_esc_backs_up_to_the_start_screen(launch, claude_home):
     t.wait_for("> ~/git/x")
     t.send("esc")
     t.wait_for("> ~/git/")
-    t.wait_for("this folder")
+    t.wait_for("Directories in ~/git/ ")
     t.send("esc")
-    t.wait_for("~/.claude")  # the folders in ~
+    t.wait_for("Directories in ~/ ")
     t.send("esc")
     t.wait_for("esc quit")
-    t.wait_gone("this folder")
+    t.wait_for("Select a project directory for Claude")
     t.send("esc")
     t.wait_for("esc again to quit")
     t.send("esc")
     assert t.wait_exit() == 0
+
+
+def test_ctrl_u_clears_a_path(launch, claude_home):
+    (claude_home.home / "git" / "x").mkdir(parents=True)
+    t = launch()
+    t.wait_for("Select a project directory for Claude")
+    t.type("~/git/x")
+    t.wait_for("ctrl-u clear")
+    t.send("ctrl-u")
+    t.wait_for("esc quit")
+    t.wait_gone("~/git")
 
 
 def test_a_path_never_opens_a_project_it_doesnt_name(launch, claude_home):

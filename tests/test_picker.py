@@ -69,7 +69,7 @@ def env(claude_home, tmp_path):
 
 def project(env, name, mtime):
     d = env.tmp / name
-    d.mkdir(exist_ok=True)
+    d.mkdir(parents=True, exist_ok=True)
     env.log(d, conversation(f"in {name}", d), mtime=mtime)
     return d
 
@@ -138,47 +138,47 @@ def listed(rows):
     return displayed(rows)[1:]
 
 
-def folders(env, *names):
+def make_dirs(env, *names):
     for name in names:
         (env.home / name).mkdir(parents=True)
 
 
 class TestPathMode:
-    def test_folder_then_its_folders(self, env):
-        folders(env, "b", "a", "c/deep")
+    def test_directory_then_whats_in_it(self, env):
+        make_dirs(env, "b", "a", "c/deep")
         (env.home / "file").write_text("")
         p, _ = start(env)
         rows = p.rows(query="~/")
         assert keys(rows) == [str(env.home), *(str(env.home / n) for n in ("a", "b", "c"))]
         shown = listed(rows)
-        assert shown[0].split() == ["~/", "this", "folder"]
+        assert shown[0] == "~/"  # no note: Claude never ran in this home
         assert shown[1:] == ["~/a", "~/b", "~/c"]
 
-    def test_this_folder_only_until_a_name_is_started(self, env):
-        folders(env, "git/x")
+    def test_typed_directory_only_until_a_name_is_started(self, env):
+        make_dirs(env, "git/x")
         p, _ = start(env)
         assert keys(p.rows(query="~/g")) == [str(env.home / "git")]
 
     def test_tilde_alone_is_home(self, env):
-        folders(env, "a")
+        make_dirs(env, "a")
         p, _ = start(env)
         assert listed(p.rows(query="~"))[1] == "~/a"
         assert keys(p.rows(query="~")) == keys(p.rows(query="~/"))
 
     def test_absolute_form_kept(self, env):
-        folders(env, "a")
+        make_dirs(env, "a")
         p, _ = start(env)
         rows = p.rows(query=f"{env.home}/")
         assert listed(rows)[1] == f"{env.home}/a"
         assert keys(rows)[1] == str(env.home / "a")
 
     def test_a_to_z_ignoring_case_hidden_last(self, env):
-        folders(env, ".cache", "Zed", "apple", "Banana", ".aaa")
+        make_dirs(env, ".cache", "Zed", "apple", "Banana", ".aaa")
         p, _ = start(env)
         assert listed(p.rows(query="~/"))[1:] == ["~/apple", "~/Banana", "~/Zed", "~/.aaa", "~/.cache"]
 
     def test_history_first_with_own_age_or_whats_inside(self, env):
-        folders(env, "aaa", "used", "parent/git/proj", "zzz")
+        make_dirs(env, "aaa", "used", "parent/git/proj", "zzz")
         env.log(env.home / "used", conversation("x", env.home / "used"), mtime=NOW - 7200)
         env.log(env.home / "parent/git/proj", conversation("x", env.home / "parent/git/proj"), mtime=NOW - 60)
         p, _ = start(env)
@@ -190,7 +190,7 @@ class TestPathMode:
         assert shown[3] == "~/aaa"
 
     def test_own_age_ordered_by_newest_inside(self, env):
-        folders(env, "a/inner", "b")
+        make_dirs(env, "a/inner", "b")
         env.log(env.home / "a", conversation("x", env.home / "a"), mtime=NOW - 9000)
         env.log(env.home / "a/inner", conversation("x", env.home / "a/inner"), mtime=NOW - 60)
         env.log(env.home / "b", conversation("x", env.home / "b"), mtime=NOW - 600)
@@ -201,7 +201,7 @@ class TestPathMode:
 
     def test_long_inside_path_cut_from_the_left(self, env):
         deep = "x/" + "/".join(["directory"] * 10)
-        folders(env, deep)
+        make_dirs(env, deep)
         env.log(env.home / deep, conversation("x", env.home / deep), mtime=NOW - 60)
         p, _ = start(env)
         note = listed(p.rows(query="~/"))[1].split(None, 1)[1]
@@ -209,37 +209,37 @@ class TestPathMode:
         assert width(note) <= 100 - 50
 
     def test_exact_name_first(self, env):
-        folders(env, "proj-new", "proj")
+        make_dirs(env, "proj-new", "proj")
         env.log(env.home / "proj-new", conversation("x", env.home / "proj-new"), mtime=NOW - 60)
         p, _ = start(env)
         assert keys(p.rows(query="~/proj")) == [str(env.home / "proj"), str(env.home / "proj-new")]
 
-    def test_symlinked_folder_counts(self, env):
-        folders(env, "real")
+    def test_symlinked_directory_counts(self, env):
+        make_dirs(env, "real")
         (env.home / "link").symlink_to(env.home / "real")
         (env.home / "broken").symlink_to(env.home / "nowhere")
         p, _ = start(env)
         assert listed(p.rows(query="~/"))[1:] == ["~/link", "~/real"]
 
     def test_odd_names_left_out(self, env):
-        folders(env, "ok", "bad\nname", "esc\x1b[31m")
+        make_dirs(env, "ok", "bad\nname", "esc\x1b[31m")
         p, _ = start(env)
         assert listed(p.rows(query="~/"))[1:] == ["~/ok"]
 
-    def test_missing_folder(self, env):
+    def test_missing_directory(self, env):
         p, _ = start(env)
         p.on_change("~/nope/x")
         assert p.rows() == p.rows()[:1]
-        assert strip_ansi(p.make_header()).startswith("No folder: ~/nope ")
+        assert strip_ansi(p.make_header()).startswith("No such directory: ~/nope ")
 
     def test_unknown_user(self, env):
         p, _ = start(env)
         p.on_change("~no-such-user-here")
         assert len(p.rows()) == 1
-        assert strip_ansi(p.make_header()).startswith("No folder: ~no-such-user-here")
+        assert strip_ansi(p.make_header()).startswith("No such directory: ~no-such-user-here")
 
-    def test_unreadable_folder(self, env):
-        folders(env, "locked/inner")
+    def test_unreadable_directory(self, env):
+        make_dirs(env, "locked/inner")
         (env.home / "locked").chmod(0)
         try:
             p, _ = start(env)
@@ -248,40 +248,72 @@ class TestPathMode:
         finally:
             (env.home / "locked").chmod(0o755)
 
-    def test_hints(self, env):
+    def test_title_names_the_directory(self, env):
+        make_dirs(env, "git/x")
         p, _ = start(env, cols=110)
-        p.on_change("~/")
-        top = strip_ansi(p.make_header().split("\n")[0])
-        assert "tab complete" in top and top.endswith("esc back")
+        p.on_change("~/git/x")
+        assert strip_ansi(p.make_header()).startswith("Directories in ~/git/ ")
+        p.on_change("")
+        assert strip_ansi(p.make_header()).startswith("Select a project directory for Claude ")
+
+    def test_long_path_in_the_title_cut_from_the_left(self, env):
+        deep = "/".join(["directory"] * 12)
+        make_dirs(env, deep)
+        p, _ = start(env, cols=60)
+        p.on_change(f"~/{deep}/")
+        title = strip_ansi(p.make_header()).split("\n")[0]
+        assert title.startswith("Directories in …") and title.endswith("directory/directory/")
+        assert width(title) == 57
+
+    def test_typed_directory_shows_its_own_age(self, env):
+        make_dirs(env, "git/x")
+        env.log(env.home / "git", conversation("x", env.home / "git"), mtime=NOW - 7200)
+        p, _ = start(env)
+        assert listed(p.rows(query="~/git/"))[0].split() == ["~/git/", "2h", "ago"]
+
+    def test_typed_directory_shows_the_latest_project_inside(self, env):
+        make_dirs(env, "git/a/b", "git/c")
+        env.log(env.home / "git/a/b", conversation("x", env.home / "git/a/b"), mtime=NOW - 60)
+        env.log(env.home / "git/c", conversation("x", env.home / "git/c"), mtime=NOW - 600)
+        p, _ = start(env)
+        assert listed(p.rows(query="~/git/"))[0].split(None, 1) == ["~/git/", "→ a/b, 1m ago"]
+
+    def test_hints(self, env):
+        make_dirs(env, "git/claude-launcher")
+        p, _ = start(env, cols=110)
+        p.on_change("~/git/claude-launcher/")
+        lines = strip_ansi(p.make_header()).split("\n")
+        assert lines[0].endswith("enter open   tab complete   shift-tab dir sessions   esc back")
+        assert lines[1].endswith("ctrl-u clear") and width(lines[1]) == 107
         p.on_change("abc")
         assert "tab sessions" in strip_ansi(p.make_header())
 
 
 class TestPathKeys:
     def test_tab_completes(self, env, monkeypatch):
-        folders(env, "git/claude-launcher", "git/command-center")
+        make_dirs(env, "git/claude-launcher", "git/command-center")
         monkeypatch.setenv("FZF_POS", "1")
         p, _ = start(env)
         p.on_change("~/git/cl")
         assert p.on_tab("~/git/cl") == "change-query:~/git/claude-launcher/"
 
     def test_tab_takes_the_row_at_the_cursor(self, env, monkeypatch):
-        folders(env, "git/aa", "git/ab", "git/b")
+        make_dirs(env, "git/aa", "git/ab", "git/b")
         monkeypatch.setenv("FZF_POS", "2")
         p, _ = start(env)
         assert p.on_tab("~/git/a") == "change-query:~/git/ab/"
 
     def test_tab_before_the_list_caught_up(self, env, monkeypatch):
-        folders(env, "git/claude-launcher", "git/command-center")
+        make_dirs(env, "git/claude-launcher", "git/command-center")
         monkeypatch.setenv("FZF_POS", "0")  # fzf was still loading the rows
         p, _ = start(env)
         assert p.on_tab("~/git/cl") == "change-query:~/git/claude-launcher/"
 
-    def test_tab_on_this_folder_or_nothing_does_nothing(self, env, monkeypatch):
-        folders(env, "git")
+    def test_tab_on_the_typed_directory_or_nothing_does_nothing(self, env, monkeypatch):
+        make_dirs(env, "git")
         monkeypatch.setenv("FZF_POS", "1")
         p, _ = start(env)
-        assert p.on_tab("~/git/") == ""  # the cursor is on "this folder"
+        assert p.on_tab("~/git/") == ""  # the cursor is on ~/git/ itself
         assert p.on_tab("~/git/zzz") == ""  # no rows
         assert p.on_tab("~/nope/") == ""
 
@@ -315,22 +347,22 @@ class TestPathKeys:
         env.clock.t += 0.2
         assert "esc again" in strip_ansi(env.picker().on_key("esc", ""))  # only now does it ask
 
-    def test_enter_opens_the_highlighted_folder(self, env, monkeypatch):
-        folders(env, "git/claude-launcher", "git/other")
+    def test_enter_opens_the_highlighted_directory(self, env, monkeypatch):
+        make_dirs(env, "git/claude-launcher", "git/other")
         start(env)
         monkeypatch.setenv("FZF_POS", "1")
         env.picker().on_accept(str(env.home / "git/claude-launcher"))
         assert env.picker().pick("~/git/cla") == Pick(str(env.home / "git/claude-launcher"))
 
-    def test_enter_on_this_folder(self, env, monkeypatch):
-        folders(env, "git/x")
+    def test_enter_on_the_typed_directory(self, env, monkeypatch):
+        make_dirs(env, "git/x")
         start(env)
         monkeypatch.setenv("FZF_POS", "1")
         env.picker().on_accept(str(env.home / "git"))
         assert env.picker().pick("~/git/") == Pick(str(env.home / "git"))
 
-    def test_a_path_no_folder_matches_opens_nothing(self, env, monkeypatch):
-        folders(env, "git/command-center")
+    def test_a_path_no_directory_matches_opens_nothing(self, env, monkeypatch):
+        make_dirs(env, "git/command-center")
         project(env, "command-center", NOW - 60)  # history no longer matches a typed path
         start(env)
         (env.run / "accept").unlink(missing_ok=True)
@@ -339,19 +371,55 @@ class TestPathKeys:
 
 class TestHeader:
     def test_hints_right_aligned(self, env):
+        p, _ = start(env, cols=110)
+        lines = strip_ansi(p.make_header()).split("\n")
+        assert lines[0].startswith("Select a project directory for Claude")
+        assert lines[0].endswith("enter open   tab sessions   shift-tab dir sessions   esc quit")
+        assert width(lines[0]) == 107 and lines[1] == " "
+
+    def test_narrow_window_moves_extra_hints_under(self, env):
+        p, _ = start(env, cols=90)
+        lines = strip_ansi(p.make_header()).split("\n")
+        assert lines[0].endswith("enter open   tab sessions   esc quit")
+        assert lines[1] == " " * (87 - len("shift-tab dir sessions")) + "shift-tab dir sessions"
+
+    def test_hints_keep_their_distance_from_the_title(self, env):
+        make_dirs(env, "git/claude-launcher")
+        p, _ = start(env, cols=110)
+        p.on_change("~/git/claude-launcher/")
+        top = strip_ansi(p.make_header()).split("\n")[0]
+        assert "claude-launcher/" + " " * 8 in top  # ctrl-u too would leave only 4
+        assert not top.endswith("ctrl-u clear")
+
+    def test_extras_move_under_in_order(self, env):
+        make_dirs(env, "git/claude-launcher")
         p, _ = start(env, cols=100)
-        top = strip_ansi(p.make_header().split("\n")[0])
-        assert top.startswith("Select a project directory for Claude")
-        assert top.endswith("esc quit") and width(top) == 97
+        p.on_change("~/git/claude-launcher/")
+        lines = strip_ansi(p.make_header()).split("\n")
+        assert lines[0].endswith("enter open   tab complete   esc back")
+        assert lines[1].endswith("shift-tab dir sessions   ctrl-u clear")
 
-    def test_narrow_window_gets_short_hints(self, env):
-        p, _ = start(env, cols=80)
-        top = strip_ansi(p.make_header().split("\n")[0])
-        assert "shift-tab" not in top and top.endswith("esc quit")
-
-    def test_very_narrow_window_gets_no_hints(self, env):
+    def test_very_narrow_window_puts_all_hints_under(self, env):
         p, _ = start(env, cols=40)
-        assert strip_ansi(p.make_header().split("\n")[0]) == "Select a project directory for Claude"
+        lines = strip_ansi(p.make_header()).split("\n")
+        assert lines[0] == "Select a project directory for Claude"
+        assert [line.strip() for line in lines[1:3]] == [
+            "enter open   tab sessions",
+            "shift-tab dir sessions   esc quit",
+        ]
+        assert all(width(line) <= 37 for line in lines)
+
+    def test_sessions_hints(self, env):
+        p, _ = start(env, cols=100)
+        p.on_tab()
+        assert strip_ansi(p.make_header()).split("\n")[0].endswith("enter resume   tab/esc back to projects")
+
+    def test_press_again_keeps_the_header_height(self, env):
+        p, _ = start(env, cols=90)
+        usual = strip_ansi(p.make_header()).split("\n")
+        asked = strip_ansi(env.picker().on_key("esc", "").removeprefix("change-header:")).split("\n")
+        assert asked[0].endswith("   esc again to quit") and width(asked[0]) == 87
+        assert asked[1] == " " and len(asked) == len(usual)
 
     def test_capped_width(self, env):
         p, opts = start(env, cols=200)
@@ -363,8 +431,9 @@ class TestHeader:
         env.paths.restored.write_text(json.dumps({sid: closed(NOW - 300)}))
         p, _ = start(env)
         lines = strip_ansi(p.make_header()).split("\n")
-        assert "1 session was open when your computer restarted" in lines[1]
-        assert lines[1].endswith("tab to see them")
+        assert lines[1].strip() == "shift-tab dir sessions"
+        assert "1 session was open when your computer restarted" in lines[2]
+        assert lines[2].endswith("tab to see them")
 
     def test_logout_nudge(self, env):
         a = env.log("/tmp", conversation("a", "/tmp"))
@@ -425,6 +494,14 @@ class TestSessions:
         assert "Claude sessions in" in p.on_shift_tab(str(a))
         assert displayed(p.rows())[1].endswith("in a")
         assert len(p.rows()) == 2
+
+    def test_long_directory_in_the_title_cut_from_the_left(self, env):
+        d = project(env, "/".join(["directory"] * 12), NOW - 60)
+        p, _ = start(env, cols=60)
+        p.on_shift_tab(str(d))
+        title = strip_ansi(p.make_header()).split("\n")[0]
+        assert title.startswith("Claude sessions in …") and title.endswith("directory/directory")
+        assert width(title) == 57
 
     def test_shift_tab_ignores_a_session_row(self, env):
         p, _ = start(env)
