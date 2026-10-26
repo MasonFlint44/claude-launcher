@@ -80,19 +80,41 @@ Profiles are the only change made to a terminal's own settings, and `--uninstall
 |---|---|
 | Type | Filter the list |
 | Enter | Open the highlighted directory |
-| Tab | Show your sessions in all directories, most recent first |
+| Tab | Show your sessions in all directories, most recent first; while typing a path, complete the highlighted folder |
 | Shift-Tab | Show the highlighted directory's sessions |
 | Ctrl-X | In a Sessions view, take the highlighted ↻ session out of the group a restart or logout closed |
 | Alt-X, Alt-X | In a Sessions view, do that for every ↻ session it shows |
-| Esc, Esc | Clear the search; on an empty search, quit |
+| Esc, Esc | Clear the search; on an empty search, quit. While typing a path, Esc backs up a folder instead |
 | Ctrl-C | Clear the search; on an empty search, press twice to quit |
 | Ctrl-D, Ctrl-D | On an empty search, quit |
+| Ctrl-U | Clear the search at once, a path included |
 
 Like in Claude, Esc, Ctrl-D and Ctrl-C on an empty search take two presses within a second. The first press shows what the second will do ("esc again to quit") where the key hints are.
 
 Your home directory is the top row, so Enter on an empty search opens it.
 
-**Opening a directory by path:** type a path starting with `/` or `~` (e.g. `~/git/new-repo`). If it's an existing directory, it becomes the first row, labelled "typed path" if it isn't in the list, so Enter opens it. A path that doesn't exist shows "Not a directory", and text that matches nothing shows "Nothing matches"; either way the list comes back.
+**Opening a directory by path:** type a path starting with `/` or `~` (e.g. `~/git/new-repo`), and the list becomes the folders in the folder typed so far, like a shell's Tab completion:
+
+```
+  Select a project directory for Claude         enter open   tab complete   shift-tab dir sessions   esc back
+
+project> ~/git/
+  Directory                                          Last used
+▌ ~/git/                                             this folder
+  ~/git/claude-launcher                              2h ago
+  ~/git/dotfiles                                     → nvim/lua, 3d ago
+  ~/git/archive
+  ~/git/notes
+```
+
+- The first row is the folder you've typed, until you start a name in it.
+- Folders Claude ran in come first, most recent first, with when you last used them. A folder you've only used something inside of says which, dimmed (`→ nvim/lua, 3d ago`). The rest follow A to Z, hidden ones last.
+- Typing filters by name as usual. Tab fills in the highlighted folder and lists what's in it; Enter opens it.
+- Esc backs up a folder at a time (`~/git/cla` → `~/git/` → `~/` → the start screen), so it never quits from a path. Ctrl-U clears the whole path.
+- Only real folders are listed. A path that matches none shows "Not a directory" on Enter, and a folder that doesn't exist says "No folder: ~/x" in place of the title. Plain words (`launcher`) still search every directory Claude ran in, however deep.
+- Relative paths (`./`, `../`) aren't supported.
+
+Text that matches nothing shows "Nothing matches"; either way the list comes back.
 
 **Where the list comes from:** each directory under `~/.claude/projects/` (or `$CLAUDE_CONFIG_DIR/projects/`) holds session logs for one project. The picker reads the working directory from the newest log in each, sorts by that log's date, and skips directories that no longer exist. Your home directory is always first. A directory you've never used Claude in won't be listed until you open it once by typing its path.
 

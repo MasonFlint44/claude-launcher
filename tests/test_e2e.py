@@ -92,10 +92,63 @@ def test_typed_path(launch, tmp_path):
     t = launch()
     t.wait_for("Select a project directory for Claude")
     t.type(str(target))
-    t.wait_for("typed path")
+    t.wait_for("> " + str(target))
+    t.settle(0.5)
     t.send("enter")
     t.wait_for("fake claude in")
     assert launch.calls() == [(str(target), "")]
+
+
+def test_path_mode_tab_completes_then_enter_opens(launch, claude_home):
+    home = claude_home.home
+    (home / "git" / "claude-launcher" / "src").mkdir(parents=True)
+    (home / "git" / "command-center").mkdir()
+    t = launch()
+    t.wait_for("Select a project directory for Claude")
+    t.type("~/git/cl")
+    t.wait_for("tab complete")
+    t.wait_gone("~/git/command-center")
+    t.send("tab")
+    t.wait_for("> ~/git/claude-launcher/")
+    t.wait_for("~/git/claude-launcher/src")
+    screen = t.wait_for("this folder")
+    assert screen.index("this folder") < screen.index("~/git/claude-launcher/src")
+    t.send("enter")
+    t.wait_for("fake claude in")
+    assert launch.calls() == [(str(home / "git" / "claude-launcher"), "")]
+
+
+def test_path_mode_esc_backs_up_to_the_start_screen(launch, claude_home):
+    (claude_home.home / "git" / "x").mkdir(parents=True)
+    t = launch()
+    t.wait_for("Select a project directory for Claude")
+    t.type("~/git/x")
+    t.wait_for("> ~/git/x")
+    t.send("esc")
+    t.wait_for("> ~/git/")
+    t.wait_for("this folder")
+    t.send("esc")
+    t.wait_for("~/.claude")  # the folders in ~
+    t.send("esc")
+    t.wait_for("esc quit")
+    t.wait_gone("this folder")
+    t.send("esc")
+    t.wait_for("esc again to quit")
+    t.send("esc")
+    assert t.wait_exit() == 0
+
+
+def test_a_path_never_opens_a_project_it_doesnt_name(launch, claude_home):
+    proj = claude_home.home / "git" / "command-center"
+    proj.mkdir(parents=True)
+    claude_home.log(proj, conversation("x", proj))
+    t = launch()
+    t.wait_for("Select a project directory for Claude")
+    t.type("~/git/cmdx")
+    t.settle(0.5)
+    t.send("enter")
+    t.wait_for("Not a directory: ~/git/cmdx")
+    assert launch.calls() == []
 
 
 def test_not_a_directory(launch):

@@ -6,13 +6,20 @@ binding, and those calls print fzf actions. Between calls, the picker's state
 lives in a per-run directory:
 
     state.json     the view, the query, the last double-press key, ...
-    projects.json  the directory list
+    projects.json  the directory list: [directory, last used] pairs
     sessions.json  the Sessions view's rows
     header         the header fzf is showing
     accept         the cursor position and highlighted row when Enter was pressed
 
 Views: "projects" (the directory list, the start screen), "recent" (sessions
 in every directory) and "directory" (the highlighted directory's sessions).
+
+Path mode: while the query in the projects view starts with / or ~, the list
+is the folders in the folder typed so far, like a shell's completion. Tab
+fills in the highlighted one and Esc backs up a level.
+
+Rows are "key<TAB>shown<TAB>note": fzf shows the last two and matches only
+the shown text, so a note like "→ git/claude-launcher" can't match a query.
 """
 
 from __future__ import annotations
@@ -32,13 +39,16 @@ from . import fzf, logs, text
 from .logs import is_session_id
 from .paths import CORE, Paths
 from .restart import Group, RestartState
-from .text import color, pad, truncate
+from .text import color, pad, truncate, truncate_left
 from .text import width as text_width
 from .theme import Theme
 
 MAX_WIDTH = 120  # widest the picker gets, in columns
 DIR_COLUMN = 50  # the directory list's first column
 DOUBLE_PRESS_MS = 1000
+
+# How fzf reads and matches rows, the same in the picker and in `_nth_match`.
+MATCHING = ["--ansi", "--tiebreak=index", "--delimiter=\t", "--with-nth=2..", "--nth=1"]
 
 PROJECTS_PROMPT = "project> "
 SESSIONS_PROMPT = "session> "
@@ -56,6 +66,16 @@ class State:
     restored: list = field(default_factory=lambda: [0, 0.0, []])  # [count, latest, reasons]
     has_group_rows: bool = False  # the Sessions view shows ↻ rows
     fzf: str = "fzf"  # the fzf program the picker runs
+
+
+@dataclass
+class Folder:
+    """A row in path mode."""
+
+    path: str  # the row's key
+    shown: str  # in the form typed, ~/... or /..., so fzf matches it
+    note: str = ""
+    is_parent: bool = False  # the folder typed so far
 
 
 class FzfTooOld(Exception):
@@ -122,6 +142,11 @@ class Picker:
         return "   ".join(f"{key} {self._dim(what)}" for key, what in pairs)
 
     def _view_hints(self) -> list[str]:
+        if self.state.view == "projects" and typed_path_like(self.state.query):
+            return [
+                self._hints(("enter", "open"), ("tab", "complete"), ("shift-tab", "dir sessions"), ("esc", "back")),
+                self._hints(("enter", "open"), ("tab", "complete"), ("esc", "back")),
+            ]
         if self.state.view == "projects":
             return [
                 self._hints(("enter", "open"), ("tab", "sessions"), ("shift-tab", "dir sessions"), ("esc", "quit")),
@@ -166,7 +191,7 @@ class Picker:
     def make_header(self, hints: list[str] | None = None) -> str:
         """The title, with the first set of key hints that fits right-aligned,
         then the restart line if there is one, then a blank line."""
-        title = self.state.title
+        title = self._title()
         top = title
         for option in hints if hints is not None else self._view_hints():
             gap = self.state.width - text_width(title) - text_width(option) - 3
@@ -180,6 +205,14 @@ class Picker:
         lines.append(" ")
         return "\n".join(lines)
 
+    def _title(self) -> str:
+        query = self.state.query
+        if self.state.view == "projects" and typed_path_like(query):
+            folder = split_path(query)[0]
+            if not os.path.isdir(expand(folder) or ""):
+                return f"No folder: {text.printable(folder.rstrip('/') or '/')}"
+        return self.state.title
+
     def _set_header(self, hints: list[str] | None = None) -> str:
         header = self.make_header(hints)
         self._write("header", header)
@@ -188,38 +221,92 @@ class Picker:
     # --- Rows ----------------------------------------------------------------
 
     def _build_projects(self) -> None:
-        now = self.now()
+        """Save the directories Claude ran in, ~ first, then most recent first."""
         home = str(self.paths.home)
-        home_age = ""
+        home_used = 0.0
         rows = []
         for used, directory in logs.recent_projects(self.paths):
             if directory == home:
-                home_age = text.age(used, now)
+                home_used = used
             else:
-                rows.append([directory, text.age(used, now)])
-        self._write("projects.json", json.dumps([[home, home_age], *rows]))
+                rows.append([directory, used])
+        self._write("projects.json", json.dumps([[home, home_used], *rows]))
 
-    def _projects(self) -> list[list[str]]:
+    def _projects(self) -> list[list]:
         try:
             return json.loads(self._file("projects.json").read_text())
         except (OSError, ValueError):
-            return [[str(self.paths.home), ""]]
+            return [[str(self.paths.home), 0.0]]
 
-    def _project_row(self, directory: str, label: str, note: str) -> str:
-        return f"{directory}\t{pad(label, DIR_COLUMN)} {self._dim(note)}".rstrip(" ")
+    def _age(self, used: float) -> str:
+        return text.age(used, self.now()) if used else ""
+
+    def _project_row(self, key: str, shown: str, note: str = "") -> str:
+        if not note:
+            return f"{key}\t{shown}"
+        return f"{key}\t{pad(shown, DIR_COLUMN)}\t{self._dim(note)}"
 
     def projects_rows(self, query: str) -> list[str]:
-        """The directory list, header row first. When the query is the path of
-        an existing directory, that directory comes first, shown as typed so
-        it matches: with its age if it's listed, else labelled "typed path"."""
+        """The directory list, header row first: the folders in a typed path
+        (path mode), or every directory Claude ran in."""
         header = "\t" + self._dim(pad("Directory", DIR_COLUMN) + " Last used")
-        projects = self._projects()
-        typed = typed_directory(query)
-        rows = [header]
-        if typed:
-            age = next((a for d, a in projects if d == typed), None)
-            rows.append(self._project_row(typed, query, "typed path" if age is None else age))
-        rows += [self._project_row(d, text.printable(self.paths.tilde(d)), a) for d, a in projects if d != typed]
+        if typed_path_like(query):
+            return [header] + [self._folder_row(f) for f in self.folders(query)]
+        return [header] + [
+            self._project_row(d, text.printable(self.paths.tilde(d)), self._age(used)) for d, used in self._projects()
+        ]
+
+    def _folder_row(self, f: Folder) -> str:
+        return self._project_row(f.path, text.printable(f.shown), f.note)
+
+    def folders(self, query: str) -> list[Folder]:
+        """Path mode's rows: the folder typed so far (until a name is started),
+        then the folders in it. Folders Claude ran in, or in something inside,
+        come first, most recent first; then the rest A to Z, hidden ones last.
+        A folder named exactly as typed goes to the top."""
+        typed, partial = split_path(query)
+        parent = expand(typed)
+        if parent is None or not os.path.isdir(parent):
+            return []
+        rows = [] if partial else [Folder(parent, typed, "this folder", is_parent=True)]
+        try:
+            with os.scandir(parent) as entries:
+                # A name with control characters can't be typed or shown as it is.
+                names = [e.name for e in entries if _is_dir(e) and text.printable(e.name) == e.name]
+        except OSError:
+            return rows
+
+        own: dict[str, float] = {}  # name: when Claude last ran in it
+        inside: dict[str, tuple[float, str]] = {}  # name: (when, where) for the latest project inside it
+        prefix = parent.rstrip("/") + "/"
+        for directory, used in self._projects():
+            directory = os.path.normpath(directory)
+            if not used or not directory.startswith(prefix):
+                continue
+            name, _, deeper = directory[len(prefix) :].partition("/")
+            if not deeper:
+                own[name] = max(own.get(name, 0.0), used)
+            elif used > inside.get(name, (0.0, ""))[0]:
+                inside[name] = (used, deeper)
+
+        def order(name: str) -> tuple:
+            latest = max(own.get(name, 0.0), inside.get(name, (0.0, ""))[0])
+            if name == partial:
+                return (0,)
+            if latest:
+                return (1, -latest)
+            return (2, name.startswith("."), name.casefold(), name)
+
+        room = max(10, self.state.width - DIR_COLUMN - 14)
+        for name in sorted(names, key=order):
+            if name in own:
+                note = self._age(own[name])
+            elif name in inside:
+                used, deeper = inside[name]
+                note = f"→ {truncate_left(text.printable(deeper), room)}, {self._age(used)}"
+            else:
+                note = ""
+            rows.append(Folder(prefix + name, typed + name, note))
         return rows
 
     def _build_sessions(self, log_dirs: list[Path]) -> bool:
@@ -319,21 +406,19 @@ class Picker:
             self.state.fzf,
             "--print-query",
             "--layout=reverse",
-            "--tiebreak=index",
-            "--delimiter=\t",
-            "--with-nth=2",
+            *MATCHING,
+            "--tabstop=1",  # the tab before a note shows as one space
             "--header-lines=1",
             "--header-first",
             f"--header={self._file('header').read_text()}",
             f"--prompt={PROJECTS_PROMPT}",
-            "--ansi",
             "--info=inline-right",
             f"--margin=0,{self.state.cols - self.state.width},0,0",
             f"--listen={self._file('fzf.sock')}",
             "--with-shell=bash -c",
             f"--bind=change:transform:{c} ui change {{q}}",
             f"--bind=enter:execute-silent({c} ui accept {{1}})+accept",
-            f"--bind=tab:transform:{c} ui tab",
+            f"--bind=tab:transform:{c} ui tab {{q}}",
             f"--bind=btab:transform:{c} ui shift-tab {{1}}",
             f"--bind=ctrl-x:transform:{c} ui dismiss {{1}}",
             *(f"--bind={key}:transform:{c} ui key {key} {{q}}" for key in ("alt-x", "esc", "ctrl-c", "ctrl-d")),
@@ -344,7 +429,7 @@ class Picker:
     # --- Key bindings ----------------------------------------------------------
 
     def on_change(self, query: str) -> str:
-        """Typing. In the projects view, a typed path can add a row, so reload."""
+        """Typing. In the projects view, a typed path has rows of its own, so reload."""
         was_path = typed_path_like(self.state.query)
         self.state.query, self.state.key = query, None
         self._save_state()
@@ -353,7 +438,18 @@ class Picker:
             reload = f"reload-sync({self.core} ui menu)+"
         return f"{reload}change-header:{self._set_header()}"
 
-    def on_tab(self) -> str:
+    def on_tab(self, query: str | None = None) -> str:
+        """Tab: in path mode, fill in the highlighted folder; otherwise switch
+        between the projects and the Sessions view."""
+        query = self.state.query if query is None else query
+        if self.state.view == "projects" and typed_path_like(query):
+            # Tab right behind the typing reaches fzf while it's still loading
+            # the rows, so take the row at the cursor from what the query
+            # matches, as Enter does.
+            folders = self.folders(query)
+            key = _nth_match(self.state.fzf, [self._folder_row(f) for f in folders], query, _cursor())
+            folder = next((f for f in folders if f.path == key and not f.is_parent), None)
+            return f"change-query:{folder.shown}/" if folder else ""
         return self._set_view("recent" if self.state.view == "projects" else "projects")
 
     def on_shift_tab(self, row: str) -> str:
@@ -391,12 +487,16 @@ class Picker:
         Like in Claude, Esc, Ctrl-C and Ctrl-D on an empty search quit with a
         second press within a second; the first press says so where the key
         hints are. Esc with text clears it on the second press; Ctrl-C clears
-        it straight away and Ctrl-D deletes a character. In a Sessions view Esc
-        goes straight back to the projects, and Alt-X twice dismisses every ↻
-        session the view shows.
+        it straight away and Ctrl-D deletes a character. In path mode Esc backs
+        up a folder, back to the start screen from ~/ or /, so it never quits.
+        In a Sessions view Esc goes straight back to the projects, and Alt-X
+        twice dismisses every ↻ session the view shows.
         """
         if key == "esc" and self.state.view != "projects":
             return self._set_view("projects")
+        if key == "esc" and typed_path_like(query):
+            up = up_a_level(query)
+            return f"change-query:{up}" if up else "clear-query"
         if key == "ctrl-d" and query:
             return "delete-char"
         if key == "ctrl-c" and query:
@@ -435,7 +535,7 @@ class Picker:
 
     def on_accept(self, row: str) -> None:
         """Enter: note the cursor position and highlighted row for pick()."""
-        self._write("accept", f"{os.environ.get('FZF_POS', '1')}\n{row}\n")
+        self._write("accept", f"{_cursor()}\n{row}\n")
 
     # --- After fzf exits -------------------------------------------------------
 
@@ -444,7 +544,7 @@ class Picker:
         pos, row = 1, ""
         try:
             lines = self._file("accept").read_text().split("\n")
-            pos = max(1, int(lines[0]))  # 0 when the list hadn't caught up and showed nothing
+            pos = max(1, int(lines[0]))
             row = lines[1]
         except (OSError, ValueError, IndexError):
             pass
@@ -491,12 +591,40 @@ def typed_path_like(query: str) -> bool:
     return query.startswith(("/", "~"))
 
 
-def typed_directory(query: str) -> str | None:
-    """The directory `query` names, if it's a path to an existing one."""
-    if not typed_path_like(query):
-        return None
-    path = os.path.normpath(os.path.expanduser(query))
-    return path if os.path.isdir(path) else None
+def split_path(query: str) -> tuple[str, str]:
+    """A typed path split into the folder so far (ending in /) and the start
+    of a name in it. `~` and `~user` on their own are that home folder."""
+    if query.startswith("~") and "/" not in query:
+        return query + "/", ""
+    folder, _, partial = query.rpartition("/")
+    return folder + "/", partial
+
+
+def expand(typed: str) -> str | None:
+    """The folder a typed path names, or None for an unknown ~user."""
+    path = os.path.expanduser(typed)
+    return None if path.startswith("~") else os.path.normpath(path)
+
+
+def up_a_level(query: str) -> str:
+    """Esc in path mode: drop a half-typed name, else the last folder.
+    "" once there's nothing left above (~/, / or ~user)."""
+    folder, partial = split_path(query)
+    if partial:
+        return folder
+    if "/" not in query:  # ~ or ~user
+        return ""
+    above = folder.rstrip("/")
+    if not above or above.startswith("~") and "/" not in above:
+        return ""
+    return above.rpartition("/")[0] + "/"
+
+
+def _is_dir(entry: os.DirEntry) -> bool:
+    try:
+        return entry.is_dir()  # follows symlinks
+    except OSError:
+        return False
 
 
 def resume_dir(directory: str, paths: Paths) -> str:
@@ -521,13 +649,22 @@ def _group_key(session_id: str, group: Group, continued_from: dict[str, str]) ->
     return None
 
 
+def _cursor() -> int:
+    """The cursor's position in fzf's list, from 1. fzf says 0 when the list
+    shows nothing, as when it hasn't caught up with the typing."""
+    try:
+        return max(1, int(os.environ.get("FZF_POS", "1")))
+    except ValueError:
+        return 1
+
+
 def _nth_match(fzf_path: str, rows: list[str], query: str, pos: int) -> str:
     """The first field of the pos-th row fzf matches `query` to, or ""."""
     if not query:
         matched = rows
     else:
         done = subprocess.run(
-            [fzf_path, f"--filter={query}", "--ansi", "--tiebreak=index", "--delimiter=\t", "--with-nth=2"],
+            [fzf_path, f"--filter={query}", *MATCHING],
             input="".join(r + "\n" for r in rows),
             capture_output=True,
             text=True,

@@ -118,7 +118,7 @@ def _ui(run: Path, action: str, args: list[str]) -> int:
     if action == "change":
         out = picker.on_change(arg)
     elif action == "tab":
-        out = picker.on_tab()
+        out = picker.on_tab(arg)
     elif action == "shift-tab":
         out = picker.on_shift_tab(arg)
     elif action == "dismiss":

@@ -78,9 +78,13 @@ def plain(rows):
     return [strip_ansi(r) for r in rows]
 
 
+def _not_config(row):
+    return not row.split("\t", 1)[0].endswith("/.claude")  # the fake home's Claude config
+
+
 def displayed(rows):
-    """The second field: what fzf shows."""
-    return [r.split("\t", 1)[1].rstrip() for r in plain(rows)]
+    """What fzf shows: the fields after the first, a tab shown as a space (--tabstop=1)."""
+    return [r.split("\t", 1)[1].replace("\t", " ").rstrip() for r in plain(rows) if _not_config(r)]
 
 
 def start(env, cols=100):
@@ -111,38 +115,226 @@ class TestProjects:
         p, _ = start(env)
         assert displayed(p.rows())[1].split() == ["~", "2m", "ago"]
 
-    def test_typed_path_not_listed(self, env):
-        new = env.tmp / "new"
-        new.mkdir()
-        p, _ = start(env)
-        rows = p.rows(query=str(new))
-        assert rows[1].split("\t")[0] == str(new)
-        assert displayed(rows)[1].split() == [str(new), "typed", "path"]
-
-    def test_typed_path_listed_moves_up(self, env):
-        a = project(env, "a", NOW - 600)
-        project(env, "b", NOW - 60)
-        p, _ = start(env)
-        rows = p.rows(query=str(a))
-        keys = [r.split("\t")[0] for r in rows[1:]]
-        assert keys[0] == str(a) and keys.count(str(a)) == 1
-        assert displayed(rows)[1].endswith("10m ago")
-
-    def test_typed_tilde_path(self, env):
-        (env.home / "code").mkdir()
-        p, _ = start(env)
-        assert p.rows(query="~/code")[1].split("\t")[0] == str(env.home / "code")
-
-    def test_typed_path_that_doesnt_exist(self, env):
-        p, _ = start(env)
-        assert [r.split("\t")[0] for r in p.rows(query="/nope/nope")[1:]] == [str(env.home)]
-
     def test_rows_file_and_options(self, env):
         p, opts = start(env)
         assert (env.run / "rows").read_text().splitlines()[1].startswith(str(env.home) + "\t")
-        assert "--header-lines=1" in opts and "--with-nth=2" in opts
+        assert "--header-lines=1" in opts and "--with-nth=2.." in opts and "--nth=1" in opts
         assert any(o.startswith("--bind=enter:execute-silent(") for o in opts)
         assert any(o.startswith(f"--listen={env.run}/fzf.sock") for o in opts)
+
+    def test_notes_dont_match(self, env):
+        project(env, "a", NOW - 600)
+        start(env)
+        env.picker().on_accept(str(env.home))
+        assert env.picker().pick("ago") == "Nothing matches: ago"
+
+
+def keys(rows):
+    return [r.split("\t")[0] for r in rows[1:] if _not_config(r)]
+
+
+def listed(rows):
+    """What fzf shows, without the header row."""
+    return displayed(rows)[1:]
+
+
+def folders(env, *names):
+    for name in names:
+        (env.home / name).mkdir(parents=True)
+
+
+class TestPathMode:
+    def test_folder_then_its_folders(self, env):
+        folders(env, "b", "a", "c/deep")
+        (env.home / "file").write_text("")
+        p, _ = start(env)
+        rows = p.rows(query="~/")
+        assert keys(rows) == [str(env.home), *(str(env.home / n) for n in ("a", "b", "c"))]
+        shown = listed(rows)
+        assert shown[0].split() == ["~/", "this", "folder"]
+        assert shown[1:] == ["~/a", "~/b", "~/c"]
+
+    def test_this_folder_only_until_a_name_is_started(self, env):
+        folders(env, "git/x")
+        p, _ = start(env)
+        assert keys(p.rows(query="~/g")) == [str(env.home / "git")]
+
+    def test_tilde_alone_is_home(self, env):
+        folders(env, "a")
+        p, _ = start(env)
+        assert listed(p.rows(query="~"))[1] == "~/a"
+        assert keys(p.rows(query="~")) == keys(p.rows(query="~/"))
+
+    def test_absolute_form_kept(self, env):
+        folders(env, "a")
+        p, _ = start(env)
+        rows = p.rows(query=f"{env.home}/")
+        assert listed(rows)[1] == f"{env.home}/a"
+        assert keys(rows)[1] == str(env.home / "a")
+
+    def test_a_to_z_ignoring_case_hidden_last(self, env):
+        folders(env, ".cache", "Zed", "apple", "Banana", ".aaa")
+        p, _ = start(env)
+        assert listed(p.rows(query="~/"))[1:] == ["~/apple", "~/Banana", "~/Zed", "~/.aaa", "~/.cache"]
+
+    def test_history_first_with_own_age_or_whats_inside(self, env):
+        folders(env, "aaa", "used", "parent/git/proj", "zzz")
+        env.log(env.home / "used", conversation("x", env.home / "used"), mtime=NOW - 7200)
+        env.log(env.home / "parent/git/proj", conversation("x", env.home / "parent/git/proj"), mtime=NOW - 60)
+        p, _ = start(env)
+        rows = p.rows(query="~/")
+        shown = listed(rows)
+        assert [r.split()[0] for r in shown[1:]] == ["~/parent", "~/used", "~/aaa", "~/zzz"]
+        assert shown[1].split(None, 1)[1] == "→ git/proj, 1m ago"
+        assert shown[2].split(None, 1)[1] == "2h ago"
+        assert shown[3] == "~/aaa"
+
+    def test_own_age_ordered_by_newest_inside(self, env):
+        folders(env, "a/inner", "b")
+        env.log(env.home / "a", conversation("x", env.home / "a"), mtime=NOW - 9000)
+        env.log(env.home / "a/inner", conversation("x", env.home / "a/inner"), mtime=NOW - 60)
+        env.log(env.home / "b", conversation("x", env.home / "b"), mtime=NOW - 600)
+        p, _ = start(env)
+        shown = listed(p.rows(query="~/"))
+        assert shown[1].split() == ["~/a", "2h", "ago"]
+        assert shown[2].split()[0] == "~/b"
+
+    def test_long_inside_path_cut_from_the_left(self, env):
+        deep = "x/" + "/".join(["directory"] * 10)
+        folders(env, deep)
+        env.log(env.home / deep, conversation("x", env.home / deep), mtime=NOW - 60)
+        p, _ = start(env)
+        note = listed(p.rows(query="~/"))[1].split(None, 1)[1]
+        assert note.startswith("→ …") and note.endswith("directory/directory, 1m ago")
+        assert width(note) <= 100 - 50
+
+    def test_exact_name_first(self, env):
+        folders(env, "proj-new", "proj")
+        env.log(env.home / "proj-new", conversation("x", env.home / "proj-new"), mtime=NOW - 60)
+        p, _ = start(env)
+        assert keys(p.rows(query="~/proj")) == [str(env.home / "proj"), str(env.home / "proj-new")]
+
+    def test_symlinked_folder_counts(self, env):
+        folders(env, "real")
+        (env.home / "link").symlink_to(env.home / "real")
+        (env.home / "broken").symlink_to(env.home / "nowhere")
+        p, _ = start(env)
+        assert listed(p.rows(query="~/"))[1:] == ["~/link", "~/real"]
+
+    def test_odd_names_left_out(self, env):
+        folders(env, "ok", "bad\nname", "esc\x1b[31m")
+        p, _ = start(env)
+        assert listed(p.rows(query="~/"))[1:] == ["~/ok"]
+
+    def test_missing_folder(self, env):
+        p, _ = start(env)
+        p.on_change("~/nope/x")
+        assert p.rows() == p.rows()[:1]
+        assert strip_ansi(p.make_header()).startswith("No folder: ~/nope ")
+
+    def test_unknown_user(self, env):
+        p, _ = start(env)
+        p.on_change("~no-such-user-here")
+        assert len(p.rows()) == 1
+        assert strip_ansi(p.make_header()).startswith("No folder: ~no-such-user-here")
+
+    def test_unreadable_folder(self, env):
+        folders(env, "locked/inner")
+        (env.home / "locked").chmod(0)
+        try:
+            p, _ = start(env)
+            assert keys(p.rows(query="~/locked/")) == [str(env.home / "locked")]
+            assert len(p.rows(query="~/locked/i")) == 1
+        finally:
+            (env.home / "locked").chmod(0o755)
+
+    def test_hints(self, env):
+        p, _ = start(env, cols=110)
+        p.on_change("~/")
+        top = strip_ansi(p.make_header().split("\n")[0])
+        assert "tab complete" in top and top.endswith("esc back")
+        p.on_change("abc")
+        assert "tab sessions" in strip_ansi(p.make_header())
+
+
+class TestPathKeys:
+    def test_tab_completes(self, env, monkeypatch):
+        folders(env, "git/claude-launcher", "git/command-center")
+        monkeypatch.setenv("FZF_POS", "1")
+        p, _ = start(env)
+        p.on_change("~/git/cl")
+        assert p.on_tab("~/git/cl") == "change-query:~/git/claude-launcher/"
+
+    def test_tab_takes_the_row_at_the_cursor(self, env, monkeypatch):
+        folders(env, "git/aa", "git/ab", "git/b")
+        monkeypatch.setenv("FZF_POS", "2")
+        p, _ = start(env)
+        assert p.on_tab("~/git/a") == "change-query:~/git/ab/"
+
+    def test_tab_before_the_list_caught_up(self, env, monkeypatch):
+        folders(env, "git/claude-launcher", "git/command-center")
+        monkeypatch.setenv("FZF_POS", "0")  # fzf was still loading the rows
+        p, _ = start(env)
+        assert p.on_tab("~/git/cl") == "change-query:~/git/claude-launcher/"
+
+    def test_tab_on_this_folder_or_nothing_does_nothing(self, env, monkeypatch):
+        folders(env, "git")
+        monkeypatch.setenv("FZF_POS", "1")
+        p, _ = start(env)
+        assert p.on_tab("~/git/") == ""  # the cursor is on "this folder"
+        assert p.on_tab("~/git/zzz") == ""  # no rows
+        assert p.on_tab("~/nope/") == ""
+
+    def test_tab_outside_path_mode_switches_views(self, env):
+        p, _ = start(env)
+        assert "No Claude sessions yet" in p.on_tab("abc")
+
+    @pytest.mark.parametrize(
+        ("query", "up"),
+        [
+            ("~/git/cla", "~/git/"),
+            ("~/git/", "~/"),
+            ("~/", ""),
+            ("~", ""),
+            ("~mason", ""),
+            ("/usr/lib/", "/usr/"),
+            ("/usr/", "/"),
+            ("/us", "/"),
+            ("/", ""),
+        ],
+    )
+    def test_esc_backs_up(self, env, query, up):
+        start(env)
+        out = env.picker().on_key("esc", query)
+        assert out == (f"change-query:{up}" if up else "clear-query")
+
+    def test_esc_out_of_a_path_never_quits(self, env):
+        start(env)
+        assert env.picker().on_key("esc", "~/") == "clear-query"
+        env.picker().on_change("")
+        env.clock.t += 0.2
+        assert "esc again" in strip_ansi(env.picker().on_key("esc", ""))  # only now does it ask
+
+    def test_enter_opens_the_highlighted_folder(self, env, monkeypatch):
+        folders(env, "git/claude-launcher", "git/other")
+        start(env)
+        monkeypatch.setenv("FZF_POS", "1")
+        env.picker().on_accept(str(env.home / "git/claude-launcher"))
+        assert env.picker().pick("~/git/cla") == Pick(str(env.home / "git/claude-launcher"))
+
+    def test_enter_on_this_folder(self, env, monkeypatch):
+        folders(env, "git/x")
+        start(env)
+        monkeypatch.setenv("FZF_POS", "1")
+        env.picker().on_accept(str(env.home / "git"))
+        assert env.picker().pick("~/git/") == Pick(str(env.home / "git"))
+
+    def test_a_path_no_folder_matches_opens_nothing(self, env, monkeypatch):
+        folders(env, "git/command-center")
+        project(env, "command-center", NOW - 60)  # history no longer matches a typed path
+        start(env)
+        (env.run / "accept").unlink(missing_ok=True)
+        assert env.picker().pick("~/git/cmdx") == "Not a directory: ~/git/cmdx"
 
 
 class TestHeader:

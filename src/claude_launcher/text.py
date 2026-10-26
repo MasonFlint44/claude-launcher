@@ -62,6 +62,22 @@ def truncate(text: str, columns: int) -> str:
     return "".join(out) + "…"
 
 
+def truncate_left(text: str, columns: int) -> str:
+    """`text` cut from the left to fit in `columns`, starting with "…" if it was cut."""
+    if width(text) <= columns:
+        return text
+    if columns <= 0:
+        return ""
+    out, used = [], 0
+    for ch in reversed(text):
+        w = _char_width(ch)
+        if used + w > columns - 1:
+            break
+        out.append(ch)
+        used += w
+    return "…" + "".join(reversed(out))
+
+
 def pad(text: str, columns: int) -> str:
     """`text` followed by spaces to fill `columns` (nothing if it's wider)."""
     return text + " " * max(0, columns - width(text))
