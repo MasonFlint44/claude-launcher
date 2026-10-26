@@ -24,6 +24,17 @@ def strip_ansi(text: str) -> str:
     return _ANSI.sub("", text)
 
 
+# Escape sequences (CSI, OSC, and two-character ones), then any other control character.
+_CONTROLS = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)?|[@-Z\\-_])|[\x00-\x1f\x7f-\x9f]")
+
+
+def printable(text: str) -> str:
+    """`text` without escape sequences or control characters, for text from
+    logs and paths: pasted terminal output keeps its color codes, and fzf
+    would show them."""
+    return _CONTROLS.sub("", text)
+
+
 def _char_width(ch: str) -> int:
     if unicodedata.combining(ch) or ch in "‍️":
         return 0

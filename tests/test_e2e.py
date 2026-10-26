@@ -149,6 +149,30 @@ def test_resume_on_the_command_line(launch, claude_home, tmp_path):
     assert launch.calls() == [(str(proj), f"--resume {sid}")]
 
 
+def test_resume_on_the_command_line_uses_the_colors(launch, claude_home, tmp_path):
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    sid = claude_home.log(proj, conversation("x", proj))
+    t = launch("--resume", sid)
+    assert t.wait_exit() == 0
+    raw = bytes(t.raw)
+    assert 0 <= raw.find(b"\x1b]11;#1f1e1d") < raw.find(b"fake claude in") < raw.rfind(b"\x1b]111\x1b\\")
+
+
+def test_resume_into_a_directory_it_cant_enter(launch, claude_home, tmp_path):
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    sid = claude_home.log(proj, conversation("x", proj))
+    proj.chmod(0o000)
+    try:
+        t = launch("--resume", sid)
+        assert t.wait_exit() == 1
+    finally:
+        proj.chmod(0o755)
+    assert launch.calls() == []
+    assert "Select a project directory" not in t.text()
+
+
 def test_resume_unknown_session_on_the_command_line(launch):
     t = launch("-r", "0b2f0000-0000-0000-0000-000000000000")
     t.wait_for("No session with ID")

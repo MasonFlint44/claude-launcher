@@ -104,11 +104,13 @@ def remove_hook(settings_path: Path) -> bool:
 
 
 def _desktop_quote(arg: str) -> str:
-    """One argument for a desktop entry's Exec line."""
-    if not any(c in arg for c in " \t\n\"'\\><~|&;$*?#()`%"):
-        return arg
-    escaped = "".join("\\" + c if c in '"`$\\' else c for c in arg).replace("%", "%%")
-    return f'"{escaped}"'
+    """One argument for a desktop entry's Exec line. Readers undo two layers:
+    the string escapes every desktop-entry value has (so a backslash is
+    written twice), then the Exec line's own quoting."""
+    if any(c in arg for c in " \t\n\"'\\><~|&;$*?#()`%"):
+        arg = '"' + "".join("\\" + c if c in '"`$\\' else c for c in arg) + '"'
+    arg = arg.replace("%", "%%")
+    return arg.replace("\\", "\\\\").replace("\n", "\\n").replace("\t", "\\t").replace("\r", "\\r")
 
 
 def desktop_entry(term: Terminal, ctx: Context, primary: bool) -> str:
@@ -153,41 +155,67 @@ def saved_terminals(ctx: Context) -> list[str] | None:
 
 def install_terminals(ctx: Context, names: list[str] | None) -> list[str]:
     """Set up the desktop entries (and any profiles) for `names`, or the ones
-    chosen last time, or the first installed terminal. Returns what it did."""
-    chosen = pick(None) if names == ["auto"] else pick(names or saved_terminals(ctx))
+    chosen last time, or the first installed terminal. Returns what it did.
+    The old entries stay until the new ones are in, so a failed run leaves
+    a working launcher."""
+    saved = saved_terminals(ctx)
+    chosen = pick(None) if names == ["auto"] else pick(names or saved)
     missing = [t.label for t in chosen if not t.installed()]
     if missing:
         raise ValueError(f"not installed: {', '.join(missing)}")
-    done = []
-    remove_terminals(ctx, keep={t.name for t in chosen})
+    profiled = []
+    try:
+        for term in chosen:
+            term.install(ctx)
+            profiled.append(term.name)
+    except BaseException:
+        # Note what has a profile now, so uninstall takes it out.
+        _save_terminals(ctx, list(dict.fromkeys([*(saved or []), *profiled])))
+        raise
+    done, written = [], set()
     for i, term in enumerate(chosen):
-        term.install(ctx)
         path = entry_file(ctx, term, primary=i == 0)
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(path.name + ".tmp")
         tmp.write_text(desktop_entry(term, ctx, primary=i == 0))
         os.replace(tmp, path)
+        written.add(path)
         how = {"profile": " (with a Claude Code profile)", "drop-down": " (a new tab in it)"}.get(term.how, "")
         done.append(f"{path.name}: opens {term.label}{how}")
-    state = _state_file(ctx)
-    state.parent.mkdir(parents=True, exist_ok=True)
-    state.write_text(json.dumps([t.name for t in chosen]) + "\n")
+    _remove_entries(ctx, keep=written)
+    _remove_profiles(saved or [], ctx, keep={t.name for t in chosen})
+    _save_terminals(ctx, [t.name for t in chosen])
     _refresh_desktop(ctx)
     return done
 
 
-def remove_terminals(ctx: Context, keep: set[str] = frozenset()) -> list[str]:
-    """Take out the desktop entries, and the profiles of terminals not in `keep`."""
+def _save_terminals(ctx: Context, names: list[str]) -> None:
+    state = _state_file(ctx)
+    state.parent.mkdir(parents=True, exist_ok=True)
+    state.write_text(json.dumps(names) + "\n")
+
+
+def _remove_entries(ctx: Context, keep: set[Path] = frozenset()) -> list[str]:
     removed = []
     for path in sorted((ctx.data_home / "applications").glob(f"{APP_ID}*.desktop")):
-        path.unlink()
-        removed.append(str(path))
-    for name in saved_terminals(ctx) or []:
+        if path not in keep:
+            path.unlink()
+            removed.append(str(path))
+    return removed
+
+
+def _remove_profiles(names: list[str], ctx: Context, keep: set[str] = frozenset()) -> None:
+    for name in names:
         if name not in keep:
             with contextlib.suppress(OSError, RuntimeError, subprocess.SubprocessError):
                 TERMINALS[name].uninstall(ctx)
-    if not keep:
-        _state_file(ctx).unlink(missing_ok=True)
+
+
+def remove_terminals(ctx: Context) -> list[str]:
+    """Take out the desktop entries and the profiles."""
+    removed = _remove_entries(ctx)
+    _remove_profiles(saved_terminals(ctx) or [], ctx)
+    _state_file(ctx).unlink(missing_ok=True)
     _refresh_desktop(ctx)
     return removed
 
@@ -201,10 +229,8 @@ ICON_SIZES = (48, 64, 128, 256, 512)
 
 
 def _icon_targets(ctx: Context) -> list[Path]:
-    theme = ctx.data_home / "icons" / "hicolor"
-    return [theme / "scalable" / "apps" / f"{APP_ID}.svg"] + [
-        theme / f"{s}x{s}" / "apps" / f"{APP_ID}.png" for s in (*ICON_SIZES, 16, 22, 24, 32, 96, 192, 384)
-    ]
+    """The app icon, at every size it's in (a PNG of yours goes in by its size)."""
+    return sorted((ctx.data_home / "icons" / "hicolor").glob(f"*/apps/{APP_ID}.*"))
 
 
 def _png_size(path: Path) -> int | None:

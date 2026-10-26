@@ -1,7 +1,7 @@
 """The sessions that were closed by a restart or a logout, to offer back.
 
-claude-session-hook leaves a record in state/open/<pid> for each interactive
-Claude. An exit you chose (/exit, /clear, switching with /resume) deletes it;
+claude-session-hook leaves a record in state/open/<boot id>_<pid> for each
+interactive Claude. An exit you chose (/exit, /clear, switching with /resume) deletes it;
 any other end (closing the tab, or the desktop closing every window) keeps it,
 with the time it ended.
 
@@ -15,8 +15,10 @@ with a start and an end, from the systemd journal:
   graphical-session.target, just before the windows close), or logind's
   "logged out" for a desktop session of yours or for the login session Claude
   itself ran in (an SSH session, say), to logind removing that session.
-- Without logind's shutdown message (the system journal can't be read), the
-  last desktop session to end in an earlier boot stands in for its restart.
+- Without logind's shutdown message (after a crash, or when only your own
+  journal can be read), a restart starts at the boot's last journal entry.
+  With only your own journal, that's often your desktop session ending, so
+  a logout followed later by a restart may be counted as the restart.
 
 A Claude that ended between LEAD seconds before an event started and TAIL
 seconds after it ended was closed by it; a restart wins over a logout. One
@@ -35,6 +37,7 @@ import fcntl
 import json
 import os
 import pwd
+import re
 import time
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
@@ -44,6 +47,7 @@ from pathlib import Path
 from .journal import Journal, normalize_boot_id
 from .paths import Paths
 
+_RECORD_NAME = re.compile(r"[0-9a-f-]{32,36}_[0-9]+")
 KEEP = 7 * 86400  # how long closed sessions stay in the group
 # How close to a restart or logout a Claude has to have ended to count.
 #
@@ -233,8 +237,8 @@ class RestartState:
         now = self._now()
         this_boot = normalize_boot_id(self._boot_id())
         for path in sorted(self.paths.open_records.iterdir()):
-            if not path.name.isdigit():
-                continue
+            if not _RECORD_NAME.fullmatch(path.name):
+                continue  # a record being written
             record = _Record.load(path)
             if record is None:
                 _remove(path)
@@ -290,15 +294,11 @@ class RestartState:
             for e in logouts
             if e.graphical or (record.login_session and e.session_id == record.login_session)
         ]
-        desktop_ends = self.journal.desktop_ends(record.boot_id)
-        events += [_Event(t, t, "logout") for t in desktop_ends]
+        events += [_Event(t, t, "logout") for t in self.journal.desktop_ends(record.boot_id)]
         if not same_boot:
             restart = self.journal.restart_time(record.boot_id)
             if restart is not None:
                 events.append(_Event(restart, self.journal.last_entry(record.boot_id) or restart, "restart"))
-            elif desktop_ends:
-                last = desktop_ends[-1]
-                events.append(_Event(last, self.journal.last_entry(record.boot_id) or last, "restart"))
         return events
 
     def drop(self, session_ids: Iterable[str]) -> Group:

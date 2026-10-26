@@ -90,6 +90,12 @@ def start(env, cols=100):
 
 
 class TestProjects:
+    def test_directory_name_with_an_escape(self, env):
+        odd = project(env, "a\x1b[31mb", NOW - 600)
+        p, _ = start(env)
+        [row] = [r for r in p.rows() if r.startswith(str(odd) + "\t")]
+        assert "\x1b[31m" not in row.split("\t", 1)[1] and "/ab" in row
+
     def test_home_first_then_most_recent(self, env):
         a = project(env, "a", NOW - 600)
         b = project(env, "b", NOW - 7200)

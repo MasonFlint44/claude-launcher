@@ -16,6 +16,11 @@ def only_session(claude_home):
 
 
 class TestTitle:
+    def test_pasted_terminal_output_loses_its_codes(self, claude_home):
+        pasted = "why is \x1b[31mERROR\x1b[0m here\x1b]0;x\x07?\x07"
+        claude_home.log("/tmp", conversation("first", "/tmp") + [{"type": "last-prompt", "lastPrompt": pasted}])
+        assert titles(claude_home) == ["why is ERROR here?"]
+
     def test_first_prompt(self, claude_home):
         claude_home.log("/tmp", conversation("fix the flaky test", "/tmp"))
         assert titles(claude_home) == ["fix the flaky test"]
@@ -212,6 +217,21 @@ class TestRecentProjects:
         odd.mkdir()
         claude_home.log(odd, conversation("x", odd), mtime=5.0)
         assert logs.recent_projects(claude_home.paths) == [(5.0, str(odd))]
+
+    def test_newest_log_without_a_cwd(self, claude_home, tmp_path):
+        # Only metadata near its ends, and too big to read whole: an older log says where.
+        claude_home.log(tmp_path, conversation("x", tmp_path), mtime=5.0)
+        padding = [{"type": "mode", "mode": "normal", "pad": "x" * 1000}] * 200
+        claude_home.log(tmp_path, padding, mtime=9.0)
+        assert logs.recent_projects(claude_home.paths) == [(5.0, str(tmp_path))]
+
+    def test_moved_session_counts_where_it_went(self, claude_home, tmp_path):
+        here, there = tmp_path / "here", tmp_path / "there"
+        here.mkdir(), there.mkdir()
+        claude_home.log(here, conversation("x", here), mtime=5.0)
+        moved = conversation("y", here) + [{"type": "relocated", "relocatedCwd": str(there)}]
+        claude_home.log(here, moved, mtime=9.0)
+        assert logs.recent_projects(claude_home.paths) == [(9.0, str(there)), (5.0, str(here))]
 
 
 def test_long_path_log_dirs(claude_home):

@@ -219,7 +219,7 @@ class Picker:
         if typed:
             age = next((a for d, a in projects if d == typed), None)
             rows.append(self._project_row(typed, query, "typed path" if age is None else age))
-        rows += [self._project_row(d, self.paths.tilde(d), a) for d, a in projects if d != typed]
+        rows += [self._project_row(d, text.printable(self.paths.tilde(d)), a) for d, a in projects if d != typed]
         return rows
 
     def _build_sessions(self, log_dirs: list[Path]) -> bool:
@@ -251,7 +251,7 @@ class Picker:
         out = ["\t" + self._dim("  " + pad("Last active", 11) + " " + pad("Directory", 24) + " Session")]
         for r in self._sessions():
             cwd = r["cwd"]
-            short = "~" if cwd == home else (os.path.basename(cwd.rstrip("/")) or cwd)
+            short = "~" if cwd == home else text.printable(os.path.basename(cwd.rstrip("/")) or cwd)
             missing = not os.path.isdir(cwd)
             note = " (missing)" if missing else ""
             directory = truncate(short, 24 - len(note)) + note

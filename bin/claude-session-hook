@@ -5,7 +5,9 @@
 # and `... end`.
 #
 # It keeps one small record per running Claude, in
-# ${CLAUDE_CONFIG_DIR:-~/.claude}/state/claude-launcher/open/<pid>. Start
+# ${CLAUDE_CONFIG_DIR:-~/.claude}/state/claude-launcher/open/<boot id>_<pid>
+# (pids start over each boot, so the boot keeps a new Claude from taking over
+# the record of one a restart closed). Start
 # writes the record. An end you chose (/exit, /clear, switching with /resume,
 # Claude's /logout) deletes it. Any other end, like closing the tab or the desktop
 # closing every window for a restart or logout, keeps it with the time it
@@ -14,6 +16,7 @@
 # Runs on every session start and end, so it's plain bash, quick, and always
 # exits 0.
 
+LC_ALL=C  # $EPOCHREALTIME has a comma for a decimal point in some locales
 input=$(cat)
 # Only interactive terminal sessions: not `claude -p`, the SDK or an editor panel.
 [[ ${CLAUDE_CODE_ENTRYPOINT:-} == cli ]] || exit 0
@@ -55,7 +58,7 @@ read -r login_session < "/proc/$pid/sessionid" 2>/dev/null
 
 dir=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/state/claude-launcher/open
 [[ -d $dir ]] || mkdir -p "$dir" || exit 0
-record=$dir/$pid
+record=$dir/${boot_id}_$pid
 fields=$(printf '"session_id":"%s","pid":%d,"boot_id":"%s","login_session":"%s"' \
   "$session_id" "$pid" "$boot_id" "${login_session//[^0-9a-z]/}")
 
@@ -72,7 +75,8 @@ case ${1:-} in
       *)
         old=
         [[ -f $record ]] && read -r old < "$record"
-        [[ $old == '{'*'}' ]] || old="{$fields,\"started_at\":$EPOCHREALTIME}"
+        # Another session's record (no start was seen for this one): start afresh.
+        [[ $old == '{'*'}' && $old == *"\"session_id\":\"$session_id\""* ]] || old="{$fields,\"started_at\":$EPOCHREALTIME}"
         write "${old%\}},\"end_reason\":\"$reason\",\"ended_at\":$EPOCHREALTIME}" ;;
     esac ;;
 esac

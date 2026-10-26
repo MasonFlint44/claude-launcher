@@ -90,8 +90,9 @@ class Journal:
 
     def restart_time(self, boot_id: str) -> float | None:
         """When the restart that ended boot `boot_id` began: logind's shutdown
-        message, else (after a crash or power cut) the boot's last journal
-        entry. None if the journal doesn't have that boot."""
+        message, else the boot's last journal entry (after a crash or power
+        cut, or when only your own journal can be read). None if the journal
+        doesn't have that boot."""
         boot_id = normalize_boot_id(boot_id)
         if boot_id in self._restarts:
             return self._restarts[boot_id]

@@ -18,6 +18,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .paths import Paths
+from .text import printable
 
 BUF = 65536  # how much of each end of a log is read
 _MESSAGES_SCAN = 16 * 1024 * 1024  # how far into a log to look for a first message
@@ -277,7 +278,7 @@ class _Log:
         if prompt:  # without tagged blocks such as <command-name>...</command-name>
             prompt = _TAG_BLOCK.sub("", prompt).strip() or self.session_id[:8]
         title = custom or ai_title or summary or prompt or "(session)"
-        return " ".join(title.split())
+        return printable(" ".join(title.split())) or "(session)"
 
     def _first_prompt(self) -> str:
         command = [""]
@@ -369,36 +370,31 @@ def session_dir(paths: Paths, session_id: str) -> str | None:
         return None
 
 
-def _first_cwd(path: Path) -> str | None:
-    """The first cwd in a log. It's usually near the top, but read on if not."""
-    pattern = re.compile(r'"cwd": ?"((?:[^"\\]|\\.)*)"')
-    with open(path, encoding="utf-8", errors="replace") as f:
-        for line in f:
-            m = pattern.search(line)
-            if m:
-                return _unescape(m.group(1))
-    return None
+PROJECT_LOGS_READ = 20  # at most this many logs per project folder, newest first
 
 
 def recent_projects(paths: Paths) -> list[tuple[float, str]]:
     """(last used, directory) for each directory Claude has been used in that
-    still exists, most recent first. Each project's newest log says both."""
+    still exists, most recent first. Logs are read newest first (only their
+    ends), until one gives the folder's own directory; a session moved
+    elsewhere counts for where it went."""
     found: dict[str, float] = {}
     for log_dir in paths.all_log_dirs():
-        newest, newest_mtime = None, -1.0
+        logs = []
         for path in _session_logs(log_dir):
             try:
-                mtime = path.stat().st_mtime
+                logs.append((path.stat().st_mtime, path))
             except OSError:
                 continue
-            if mtime > newest_mtime:
-                newest, newest_mtime = path, mtime
-        if newest is None:
-            continue
-        try:
-            cwd = _first_cwd(newest)
-        except OSError:
-            continue
-        if cwd and os.path.isdir(cwd) and newest_mtime > found.get(cwd, -1.0):
-            found[cwd] = newest_mtime
+        for mtime, path in sorted(logs, reverse=True)[:PROJECT_LOGS_READ]:
+            try:
+                log = _Log.read(path)
+            except OSError:
+                continue
+            moved = _last_of_type(log.tail, "relocated", "relocatedCwd")
+            cwd = moved or _first_field(log.head, "cwd")
+            if cwd and os.path.isdir(cwd) and mtime > found.get(cwd, -1.0):
+                found[cwd] = mtime
+            if cwd and not moved:
+                break
     return sorted(((t, d) for d, t in found.items()), reverse=True)

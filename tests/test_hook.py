@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import subprocess
 from pathlib import Path
@@ -36,6 +37,7 @@ def run_hook(tmp_path):
             "HOME": str(tmp_path),
             "CLAUDE_CONFIG_DIR": str(config),
             "CLAUDE_CODE_ENTRYPOINT": entrypoint,
+            **{k: v for k, v in os.environ.items() if k == "LC_ALL"},
         }
         argv = [str(claude), "-c", script]
         if as_ is not None:
@@ -62,7 +64,7 @@ def run_hook(tmp_path):
             )
         if not records.exists():
             return {}
-        pid = (tmp_path / "pid").read_text().strip()
+        pid = f"{boot_id()}_" + (tmp_path / "pid").read_text().strip()
         found = {p.name: json.loads(p.read_text()) for p in records.iterdir()}
         if as_ is not None and not as_[1].endswith(("claude", "cli.js")):
             # Walking up past a non-Claude process can reach a real Claude running these tests.
@@ -94,6 +96,27 @@ def test_closed_tab_keeps_the_record_with_its_end(run_hook):
 @pytest.mark.parametrize("reason", ["prompt_input_exit", "clear", "resume", "logout"])
 def test_chosen_exit_deletes_the_record(run_hook, reason):
     assert run_hook(("start", {"session_id": SID}), ("end", {"session_id": SID, "reason": reason})) == {}
+
+
+def test_end_of_another_session_doesnt_reuse_its_record(run_hook):
+    # The hook was added while this Claude ran another session, which left no end.
+    other = "9b2f1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b"
+    [record] = run_hook(("start", {"session_id": other}), ("end", {"session_id": SID, "reason": "other"})).values()
+    assert record["session_id"] == SID and "ended_at" in record
+
+
+def test_times_are_json_numbers_in_any_locale(run_hook, monkeypatch):
+    comma = next((loc for loc in ("de_DE.utf8", "en_DK.utf8", "fr_FR.utf8") if loc in _locales()), None)
+    if comma is None:
+        pytest.skip("needs a locale with a comma for the decimal point")
+    monkeypatch.setenv("LC_ALL", comma)
+    [record] = run_hook(("start", {"session_id": SID}), ("end", {"session_id": SID, "reason": "other"})).values()
+    assert isinstance(record["started_at"], float) and isinstance(record["ended_at"], float)
+
+
+def _locales() -> set[str]:
+    out = subprocess.run(["locale", "-a"], capture_output=True, text=True)
+    return set(out.stdout.split())
 
 
 def test_end_without_a_start(run_hook):

@@ -47,19 +47,20 @@ unlink_ours() {
   fi
 }
 
-# Run a Python step, showing its lines as progress; die if it fails.
+# Run a Python step, showing its lines as progress. Fails if the step does;
+# inside `if`/`||`, so set -e leaves that to the caller.
 step() {
   local line
   "$core" "$@" | while IFS= read -r line; do say "$line"; done
-  (( PIPESTATUS[0] == 0 )) || die "could not finish: $*"
 }
 
+# Uninstall goes on past a step that fails, so the rest still comes out.
 uninstall() {
   unlink_ours "$bin_dir/claude-launcher"
   unlink_ours "$bin_dir/claude-session-hook"
   unlink_ours "$themes_dir/claude-dark"
-  step install remove-terminals
-  "$core" install remove-icon
+  step install remove-terminals || warn "could not remove every desktop entry and profile"
+  "$core" install remove-icon || warn "could not remove the app icon"
   if [[ -f $claude_settings ]]; then
     status=0
     "$core" install remove-hook "$claude_settings" || status=$?
@@ -70,8 +71,8 @@ uninstall() {
     esac
   fi
   local own_dir
-  own_dir=$(dirname "$("$core" install fzf-dir)")
-  if [[ -d $own_dir ]]; then
+  own_dir=$(dirname "$("$core" install fzf-dir)") || own_dir=
+  if [[ -n $own_dir && -d $own_dir ]]; then
     rm -rf "$own_dir"
     say "Removed $own_dir (the launcher's own fzf, your icon, and its settings)"
   fi
@@ -119,8 +120,9 @@ install() {
 
   # 5. The app icon, then the "Claude Code" desktop launcher(s), with a
   # Claude Code profile in terminals that use one. See terminals.py.
-  step install icon ${icon:+"$icon"}
-  step install terminals "$bin_dir/claude-launcher" ${terminal:+"$terminal"}
+  step install icon ${icon:+"$icon"} || die "could not install the app icon"
+  step install terminals "$bin_dir/claude-launcher" ${terminal:+"$terminal"} \
+    || die "could not set up the desktop launcher"
 
   say "Done. Open \"Claude Code\" from your apps, or run claude-launcher in any terminal."
 }

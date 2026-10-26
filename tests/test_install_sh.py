@@ -61,3 +61,27 @@ def test_leaves_a_real_file_alone(tmp_path):
     assert done.returncode == 0
     assert "isn't a link; leaving it alone" in done.stderr
     assert (themes / "claude-dark").read_text() == "background = #000000\n"
+
+
+def test_a_failed_step_says_so(tmp_path):
+    home = tmp_path / "home"
+    done = run(home, "--terminal", "no-such-terminal")
+    assert done.returncode != 0
+    assert "could not set up the desktop launcher" in done.stderr
+
+
+def test_uninstall_goes_on_past_a_failed_step(tmp_path):
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    settings = home / ".claude" / "settings.json"
+    settings.write_text("{}")
+    assert run(home).returncode == 0
+    applications = home / ".local" / "share" / "applications"
+    applications.chmod(0o555)  # its desktop entry can't be removed
+    try:
+        done = run(home, "--uninstall")
+    finally:
+        applications.chmod(0o755)
+    assert "could not remove every desktop entry" in done.stderr
+    assert "hooks" not in json.loads(settings.read_text())
+    assert not (home / ".local" / "bin" / "claude-session-hook").exists()

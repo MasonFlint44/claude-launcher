@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 import shlex
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -52,19 +55,76 @@ def ctx(tmp_path):
 
 
 def exec_line(entry: str) -> list[str]:
+    """The Exec line's arguments, read as the Desktop Entry spec says: string
+    escapes first, then the quoting, then %%."""
     line = next(line for line in entry.splitlines() if line.startswith("Exec="))[5:]
-    return shlex.split(line.replace("%%", "%"))
+    escapes = {"s": " ", "n": "\n", "t": "\t", "r": "\r", "\\": "\\"}
+    line = re.sub(r"\\(.)", lambda m: escapes.get(m.group(1), m.group(0)), line)
+    args, arg, quoted, i = [], None, False, 0
+    while i < len(line):
+        c = line[i]
+        if quoted and c == "\\":
+            i += 1
+            arg += line[i]
+        elif c == '"':
+            quoted, arg = not quoted, arg or ""
+        elif c == " " and not quoted:
+            if arg is not None:
+                args.append(arg)
+            arg = None
+        else:
+            arg = (arg or "") + c
+        i += 1
+    assert not quoted
+    if arg is not None:
+        args.append(arg)
+    return [a.replace("%%", "%") for a in args]
 
 
 def test_command(ctx):
     assert ctx.argv == ["bash", "-lc", "/home/me/.local/bin/claude-launcher || exec bash"]
 
 
+ODD_PATH = Path("/home/me/odd dir/it's $HOME, `here` \\ 100%/claude-launcher")
+
+
 @pytest.mark.parametrize("name", list(TERMINALS))
-def test_exec_line_round_trips(ctx, name, tmp_path):
-    ctx.launcher = Path("/home/me/odd dir/it's here/claude-launcher")
+def test_exec_line_round_trips(ctx, name):
+    ctx.launcher = ODD_PATH
     term = TERMINALS[name]
     assert exec_line(install.desktop_entry(term, ctx, primary=True)) == term.exec_argv(ctx)
+
+
+GLIB_EXEC = """
+import sys, gi
+gi.require_version("GLib", "2.0")
+from gi.repository import GLib
+kf = GLib.KeyFile()
+kf.load_from_file(sys.argv[1], GLib.KeyFileFlags.NONE)
+ok, argv = GLib.shell_parse_argv(kf.get_string("Desktop Entry", "Exec"))
+print("\\0".join(a.replace("%%", "%") for a in argv), end="")
+"""
+
+
+def _system_glib() -> bool:
+    return subprocess.run(["/usr/bin/python3", "-c", "import gi"], capture_output=True).returncode == 0
+
+
+@pytest.mark.skipif(not os.path.exists("/usr/bin/python3") or not _system_glib(), reason="needs PyGObject")
+@pytest.mark.parametrize("name", list(TERMINALS))
+def test_glib_reads_the_exec_line(ctx, name, tmp_path):
+    """What GNOME does with the entry: GLib's key file, then its shell parser."""
+    ctx.launcher = ODD_PATH
+    term = TERMINALS[name]
+    entry = tmp_path / "x.desktop"
+    entry.write_text(install.desktop_entry(term, ctx, primary=True))
+    out = subprocess.run(
+        ["/usr/bin/python3", "-I", "-c", GLIB_EXEC, str(entry)], capture_output=True, text=True, check=True
+    )
+    assert out.stdout.split("\0") == term.exec_argv(ctx)
+    if shutil.which("desktop-file-validate"):
+        check = subprocess.run(["desktop-file-validate", str(entry)], capture_output=True, text=True)
+        assert check.returncode == 0, check.stdout + check.stderr
 
 
 class TestOptions:
@@ -252,6 +312,20 @@ class TestInstallTerminals:
         with pytest.raises(ValueError, match="not installed: kitty"):
             install.install_terminals(ctx, ["kitty"])
 
+    def test_failed_profile_keeps_the_old_entries(self, ctx, monkeypatch):
+        install.install_terminals(ctx, ["ghostty"])
+        before = (ctx.data_home / "applications" / f"{APP_ID}.desktop").read_text()
+
+        def no_dconf(self, ctx):
+            raise subprocess.CalledProcessError(1, ["gsettings"])
+
+        monkeypatch.setattr(terminals.Ptyxis, "install", no_dconf)
+        with pytest.raises(subprocess.CalledProcessError):
+            install.install_terminals(ctx, ["ptyxis"])
+        assert self.entries(ctx) == [f"{APP_ID}.desktop"]
+        assert (ctx.data_home / "applications" / f"{APP_ID}.desktop").read_text() == before
+        assert install.saved_terminals(ctx) == ["ghostty"]
+
     def test_remove(self, ctx):
         install.install_terminals(ctx, ["konsole", "guake"])
         install.remove_terminals(ctx)
@@ -289,6 +363,16 @@ class TestIcon:
     def test_your_png_goes_by_its_size(self, ctx):
         install.install_icon(ctx, str(install.ICONS_DIR / "claude-launcher-256.png"))
         assert self.installed(ctx) == [f"256x256/apps/{APP_ID}.png"]
+
+    def test_odd_png_size_comes_out(self, ctx, tmp_path):
+        big = tmp_path / "big.png"
+        big.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\0\0\0\rIHDR" + (1024).to_bytes(4, "big") * 2)
+        install.install_icon(ctx, str(big))
+        assert self.installed(ctx) == [f"1024x1024/apps/{APP_ID}.png"]
+        install.install_icon(ctx, "default")
+        assert f"1024x1024/apps/{APP_ID}.png" not in self.installed(ctx)
+        install.remove_icon(ctx)
+        assert self.installed(ctx) == []
 
     def test_back_to_default(self, ctx, tmp_path):
         mine = tmp_path / "x.svg"

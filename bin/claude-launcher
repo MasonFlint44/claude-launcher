@@ -12,13 +12,11 @@ set -uo pipefail
 repo=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)
 core=$repo/libexec/claude-launcher-core
 
-# `--resume <id>`: straight to that session, in the directory it was started in.
+# `--resume <id>`: straight to that session, in the directory it was started
+# in. Exit 3: not resuming, so show the picker.
 dir=$("$core" resume-dir "$@")
-case $? in
-  0) cd "$dir" && exec claude "$@" ;;
-  3) ;;  # not resuming: show the picker
-  *) exit 1 ;;
-esac
+resume=$?
+(( resume == 0 || resume == 3 )) || exit 1
 
 run=$(mktemp -d "${XDG_RUNTIME_DIR:-/tmp}/claude-launcher.XXXXXX") || exit 1
 hung_up=
@@ -34,6 +32,12 @@ trap 'exit 143' TERM
 
 # Claude Dark for this tab while the launcher runs, Claude included.
 "$core" --run "$run" theme apply
+
+if (( resume == 0 )); then
+  cd "$dir" || exit 1
+  claude "$@"
+  exit
+fi
 
 again=()
 while :; do

@@ -123,7 +123,7 @@ def setup(claude_home):
             user=lambda: USER,
         )
 
-    def record(pid, session_id, boot=LAST_BOOT, started=NOW - 3600, ended=None, login_session="1"):
+    def record(pid, session_id, boot=LAST_BOOT, started=NOW - 3600, ended=None, login_session="1", name=None):
         claude_home.paths.open_records.mkdir(parents=True, exist_ok=True)
         rec = {
             "session_id": session_id,
@@ -134,7 +134,7 @@ def setup(claude_home):
         }
         if ended is not None:
             rec.update(end_reason="other", ended_at=ended)
-        (claude_home.paths.open_records / str(pid)).write_text(json.dumps(rec))
+        (claude_home.paths.open_records / (name or f"{boot}_{pid}")).write_text(json.dumps(rec))
 
     def session():
         return claude_home.log("/tmp", conversation("x", "/tmp"))
@@ -143,7 +143,8 @@ def setup(claude_home):
 
 
 def records(claude_home):
-    return sorted(p.name for p in claude_home.paths.open_records.iterdir())
+    """The pids of the records left."""
+    return sorted(p.name.rsplit("_", 1)[-1] for p in claude_home.paths.open_records.iterdir())
 
 
 def restored_file(claude_home):
@@ -335,6 +336,16 @@ class TestThisBoot:
         make().sort()
         assert records(claude_home) == []
 
+    def test_same_pid_in_two_boots(self, setup, claude_home):
+        # pids start over each boot: a Claude can get the pid of one a restart closed.
+        make, record, session, running = setup
+        closed, new = session(), session()
+        record(100, closed, ended=REBOOT + 0.8)
+        record(100, new, boot=THIS_BOOT, started=NOW - 60)
+        running.add(100)
+        assert list(make().sort().sessions) == [closed]
+        assert records(claude_home) == ["100"]
+
     def test_reopened_session_leaves_the_group(self, setup):
         make, record, session, running = setup
         sid = session()
@@ -417,8 +428,8 @@ class TestGroup:
     def test_bad_records_are_deleted(self, setup, claude_home):
         make, _, _, _ = setup
         claude_home.paths.open_records.mkdir(parents=True)
-        (claude_home.paths.open_records / "5").write_text("{not json")
-        (claude_home.paths.open_records / "6").write_text(json.dumps({"session_id": "x"}))
+        (claude_home.paths.open_records / f"{THIS_BOOT}_5").write_text("{not json")
+        (claude_home.paths.open_records / f"{THIS_BOOT}_6").write_text(json.dumps({"session_id": "x"}))
         make().sort()
         assert records(claude_home) == []
 

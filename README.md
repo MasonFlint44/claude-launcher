@@ -141,7 +141,7 @@ A session that ended in that span, or up to 30 seconds before it began (desktops
 
 Anything else, like a tab you closed yourself, isn't listed. The group is kept in `~/.claude/state/claude-launcher/restored.json`.
 
-This works out of the box on Ubuntu, Debian and Fedora with GNOME or KDE. Logouts come from your own user journal, which you can always read. Restarts are most precise with the system journal, which needs your user in the `adm`, `wheel` or `systemd-journal` group, as the first user on those distros is. Without it (on Arch, say, until you add yourself to one), the end of your desktop session stands in for the restart. It needs systemd, and a journal kept across reboots, as these distros do by default.
+This works out of the box on Ubuntu, Debian and Fedora with GNOME or KDE. Logouts come from your own user journal, which you can always read. Restarts are most precise with the system journal, which needs your user in the `adm`, `wheel` or `systemd-journal` group, as the first user on those distros is. Without it (on Arch, say, until you add yourself to one), the last thing in your own journal, usually your desktop session ending, stands in for the restart. It needs systemd, and a journal kept across reboots, as these distros do by default.
 
 Only interactive Claude sessions in a terminal are recorded: not `claude -p`, SDK runs or an editor's Claude panel.
 
