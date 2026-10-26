@@ -270,7 +270,7 @@ class TestIcon:
         return sorted(str(p.relative_to(theme)) for p in theme.rglob(f"{APP_ID}.*"))
 
     def test_default(self, ctx):
-        assert install.install_icon(ctx, None) == "the default icon"
+        assert install.install_icon(ctx, None) == "Installed the default icon"
         assert self.installed(ctx) == sorted(
             ["scalable/apps/" + APP_ID + ".svg"] + [f"{s}x{s}/apps/{APP_ID}.png" for s in install.ICON_SIZES]
         )

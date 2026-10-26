@@ -241,13 +241,13 @@ def install_icon(ctx: Context, icon: str | None) -> str:
         else:
             size = _png_size(own)
             pairs = [(own, theme / f"{size}x{size}" / "apps" / f"{APP_ID}.png")]
-        what = f"your icon ({own})"
+        what = f"Installed your icon ({own})"
     else:
         pairs = [(ICONS_DIR / "claude-launcher.svg", theme / "scalable" / "apps" / f"{APP_ID}.svg")]
         pairs += [
             (ICONS_DIR / f"claude-launcher-{s}.png", theme / f"{s}x{s}" / "apps" / f"{APP_ID}.png") for s in ICON_SIZES
         ]
-        what = "the default icon"
+        what = "Installed the default icon"
     for src, dest in pairs:
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.symlink_to(src)
