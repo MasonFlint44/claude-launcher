@@ -1,0 +1,25 @@
+# Claude Dark, a Ghostty theme.
+# claude-launcher also reads this file: it switches its tab to these colors
+# while it runs, and uses the cursor color as the picker's accent.
+background = #1f1e1d
+foreground = #edebe5
+cursor-color = #d77757
+cursor-text = #1f1e1d
+selection-background = #264f78
+selection-foreground = #faf9f5
+palette = 0=#3a3936
+palette = 1=#f2545b
+palette = 2=#8fd16a
+palette = 3=#f5c542
+palette = 4=#5aa2f0
+palette = 5=#c77ddb
+palette = 6=#3fc7b0
+palette = 7=#e2e1da
+palette = 8=#8a887f
+palette = 9=#ff7a80
+palette = 10=#a8e58a
+palette = 11=#ffd966
+palette = 12=#7db8ff
+palette = 13=#da9bea
+palette = 14=#6be0cb
+palette = 15=#faf9f5

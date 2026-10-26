@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# Claude Code SessionStart/SessionEnd hook: notes which sessions are open, so
+# after a restart or logout claude-launcher can list the ones that were.
+# install.sh adds it to Claude's settings.json as `claude-session-hook start`
+# and `... end`.
+#
+# It keeps one small record per running Claude, in
+# ${CLAUDE_CONFIG_DIR:-~/.claude}/state/claude-launcher/open/<pid>. Start
+# writes the record. An end you chose (/exit, /clear, switching with /resume,
+# Claude's /logout) deletes it. Any other end, like closing the tab or the desktop
+# closing every window for a restart or logout, keeps it with the time it
+# ended: the launcher decides later, from the journal, which it was.
+#
+# Runs on every session start and end, so it's plain bash, quick, and always
+# exits 0.
+
+input=$(cat)
+# Only interactive terminal sessions: not `claude -p`, the SDK or an editor panel.
+[[ ${CLAUDE_CODE_ENTRYPOINT:-} == cli ]] || exit 0
+
+# Whether process $1 is Claude: the native `claude` binary, or the npm package
+# run by node (whose process name is just "MainThread", so check the command line).
+is_claude() {
+  local argv a
+  mapfile -d '' -t argv < "/proc/$1/cmdline" 2>/dev/null || return 1
+  [[ ${argv[0]:-} == claude || ${argv[0]:-} == */claude ]] && return 0
+  [[ ${argv[0]##*/} == node* ]] || return 1
+  for a in "${argv[@]:1:2}"; do
+    [[ ${a##*/} == claude || $a == */@anthropic-ai/claude-code/* ]] && return 0
+  done
+  return 1
+}
+
+# The hook runs under a shell Claude starts, so walk up to Claude itself.
+pid=$PPID
+while (( pid > 1 )); do
+  is_claude "$pid" && break
+  read -r stat < "/proc/$pid/stat" 2>/dev/null || exit 0
+  stat=${stat##*) }  # the fields after "(comm)"; the second is the parent's pid
+  read -r _ pid _ <<< "$stat"
+done
+(( pid > 1 )) || exit 0
+[[ $(readlink "/proc/$pid/fd/0") == /dev/pts/* ]] || exit 0  # not in a terminal
+
+uuid='[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+[[ $input =~ \"session_id\"[[:space:]]*:[[:space:]]*\"($uuid)\" ]] || exit 0
+session_id=${BASH_REMATCH[1]}
+reason=other
+[[ $input =~ \"reason\"[[:space:]]*:[[:space:]]*\"([a-z_]+)\" ]] && reason=${BASH_REMATCH[1]}
+read -r boot_id < /proc/sys/kernel/random/boot_id
+# The login session Claude runs in: for an SSH session, its end closes Claude.
+login_session=
+read -r login_session < "/proc/$pid/sessionid" 2>/dev/null
+[[ $login_session == 4294967295 ]] && login_session=  # none
+
+dir=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/state/claude-launcher/open
+[[ -d $dir ]] || mkdir -p "$dir" || exit 0
+record=$dir/$pid
+fields=$(printf '"session_id":"%s","pid":%d,"boot_id":"%s","login_session":"%s"' \
+  "$session_id" "$pid" "$boot_id" "${login_session//[^0-9a-z]/}")
+
+write() {  # atomically, so the launcher never reads half a record
+  printf '%s\n' "$1" > "$record.tmp" && mv -f "$record.tmp" "$record"
+}
+
+case ${1:-} in
+  start)
+    write "{$fields,\"started_at\":$EPOCHREALTIME}" ;;
+  end)
+    case $reason in
+      prompt_input_exit|clear|resume|logout) rm -f "$record" ;;
+      *)
+        old=
+        [[ -f $record ]] && read -r old < "$record"
+        [[ $old == '{'*'}' ]] || old="{$fields,\"started_at\":$EPOCHREALTIME}"
+        write "${old%\}},\"end_reason\":\"$reason\",\"ended_at\":$EPOCHREALTIME}" ;;
+    esac ;;
+esac
+exit 0

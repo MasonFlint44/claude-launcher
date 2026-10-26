@@ -1,0 +1,27 @@
+[project]
+name = "claude-launcher"
+version = "0.1.0"
+description = "Pick a project directory or session, then start Claude Code"
+requires-python = ">=3.10"
+dependencies = []  # the launcher itself uses only the standard library
+
+[dependency-groups]
+dev = ["pytest>=8", "pyte>=0.8"]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = ["e2e: drives the real launcher and fzf in a pseudo-terminal"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "UP", "SIM", "I"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["claude_launcher", "conftest", "term"]

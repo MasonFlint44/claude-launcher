@@ -1,0 +1,52 @@
+# claude-launcher
+
+A project and session picker for Claude Code on Linux (Ubuntu, systemd), plus a Claude Dark theme and desktop launcher for Ghostty. README.md is the user-facing description; this file is how the code is put together and the rules for changing it.
+
+## Layout
+
+| Path | Role |
+|---|---|
+| `bin/claude-launcher` | Bash. Sets the tab's colors, runs fzf with the options Python gives it, starts `claude`, loops. Keep it thin: no logic that could live in Python. |
+| `bin/claude-session-hook` | Bash. Claude Code SessionStart/SessionEnd hook. Runs on every session start and end. |
+| `libexec/claude-launcher-core` | Entry script for the Python package. bash, fzf's key bindings and install.sh call it; it isn't on PATH. |
+| `src/claude_launcher/cli.py` | Subcommands for the entry script. Arguments are parsed by hand, because they include fzf's query and claude's own options. |
+| `src/claude_launcher/picker.py` | The picker: rows, headers, what each key does, and what Enter chose. Its state lives in a per-run directory (see the module docstring). |
+| `src/claude_launcher/logs.py` | Reading Claude's session logs: the sessions list, titles, directories. |
+| `src/claude_launcher/restart.py`, `journal.py` | The group of sessions a restart or logout closed. |
+| `src/claude_launcher/theme.py` | Reads `themes/claude-dark`; switches a terminal's colors and puts them back. |
+| `src/claude_launcher/fzf.py` | Which fzf to run, and fetching the pinned one when the system's is too old. |
+| `src/claude_launcher/install.py` | For install.sh: the settings.json hook merge, the desktop entries, and the app icon. |
+| `src/claude_launcher/terminals.py` | The terminals the desktop launcher can open, one class each, and how (options, profile, drop-down, fallback). |
+| `share/icons/`, `scripts/render-icons.sh` | The app icon. Edit the SVG, then run the script to re-render the PNGs. |
+| `tests/` | pytest. `term.py` is a pseudo-terminal driver (pyte) for the end-to-end and hook tests. |
+
+## Commands
+
+```bash
+uv run pytest                    # everything (about 10 s)
+uv run pytest -m "not e2e"       # skip the pseudo-terminal tests
+uvx ruff check src tests libexec/claude-launcher-core
+uvx ruff format src tests libexec/claude-launcher-core
+shellcheck bin/* install.sh
+```
+
+Run all of these before calling a change done. Tests need fzf 0.67+ on PATH. The Ghostty theme check is skipped if Ghostty isn't installed.
+
+## Rules
+
+- **The runtime is the standard library.** The launcher runs on the system `python3` (3.10+) with no installed packages. pytest and pyte are dev-only (`[dependency-groups] dev`).
+- **Each key press runs the entry script once** (about 30 ms). Keep imports light and don't add work on the typing path: `on_change` reloads the list only while the query is a path.
+- **The hook stays bash, quick, and always exits 0.** No Python startup. Its record format is read by `restart.py`; change both together, with tests in `test_hook.py` and `test_restart.py`.
+- **fzf floor is 0.67** (`fzf.MIN_VERSION`): the first release whose `--listen` takes a Unix socket (0.66 and older reject it; before 0.45 there's no `transform`). Ubuntu 24.04 (0.44), Debian 12 (0.38) and Debian 13 (0.60) ship older ones, so install.sh fetches `fzf.PINNED` (checksums in `PINNED_BUILDS`) into `~/.local/share/claude-launcher/bin`, used only by the launcher. `fzf.find()` prefers the system's when it's new enough. To move the pin: update `PINNED` and the checksums from the release's checksums file, and run the tests with that build first on PATH (the e2e tests run whichever fzf is first). Test any new fzf feature against 0.67.
+- **Session-log parsing follows Claude Code's own `/resume` picker** (as of 2.1.310): the 64 KB head/tail reads, the title order, and which sessions are left out. When Claude's log format changes, update `logs.py` and add a test with the new shape to `test_logs.py`. Don't parse whole logs; they get large.
+- **Restart and logout detection is systemd-specific, and has to work beyond one machine.** See the `restart.py` docstring and the comment on `LEAD`/`TAIL`/`SPAN_MAX`. Restarts and logouts are both events with a start and an end, under one rule: a Claude that ended from `LEAD` before the start to `TAIL` after the end was closed by it. Restart: logind's shutdown message (`SHUTDOWN_MESSAGE_ID`) to the boot's last entry. Logout: the user manager stopping `graphical-session.target` (`UNIT_STOPPED_MESSAGE_ID`, user journal, readable without any group; GNOME 3.34+ and Plasma 5.25+ use it). This is the main desktop signal, because logind's session `TYPE` field only exists from systemd 258, so Ubuntu 24.04 (255), Debian 13 and Fedora 42 (257) can't tell desktop sessions apart in logind's messages. logind's "Session N logged out" (`CODE_FUNC=session_stop_scope`) to "Removed session" (capped at `SPAN_MAX`) still counts, for desktop sessions where `TYPE` exists and for the Claude's own login session (SSH). Without the system journal, the last desktop end in an earlier boot stands in for its restart. Keep the margins generous: desktops differ in what they close first (GNOME closes windows ~0.5 s before logout; KDE logs out before rebooting), and a false ↻ row is cheap while a missed session is not. Don't count non-desktop sessions in general: scheduled SSH logins (this machine has one every 30 minutes) would misfile ordinary tab closes. Use the journal's structured fields, not message text.
+- **`settings.json` may be a symlink** (often, into a dotfiles repo). Write through it to the real file, never replace the link. `install.py` does; keep it that way.
+- **`themes/claude-dark` is the one source of the colors.** The desktop launcher loads it, `theme.py` turns it into escapes, and the picker takes its accent and dim colors from it. Don't copy hex values into code.
+- **This repo stays independent.** It doesn't know about, or integrate with, other session tools. It ships no Anthropic artwork (logos, Clawd): the default icon is original, and people who want something else use `install.sh --icon`.
+- **Terminals stay a short table** (`terminals.TERMINALS`). Add one only if it can run the launcher with options, a profile, or a remote control, and check from its source (or by running it) what a new tab inherits before claiming "every tab". Profiles are the only change made to a terminal's settings, and uninstall must take them out. Ptyxis treats the first profile as the default when its default doesn't name one, so a fresh Ptyxis gets a plain default profile before ours. Guake's `-e` types into the current tab and, with `-n`, skips making the tab: two calls. Yakuake was left out: its only show is a toggle. Tested live: Ghostty, Ptyxis, Guake, kitty; WezTerm, GNOME Terminal and Konsole are built from their sources and docs.
+- **Keep the user's terminal intact.** Colors: ask first (queries, then a device-attributes request as the end marker, never a guessed timeout), change only what the terminal reported, and on exit reset, ask again, and set back anything still off (Konsole has no reset for text and background colors). Write colors as `#rrggbb`; Konsole can't read `rgb:`. Don't detect terminals by environment variables: they're inherited (a terminal started from Ghostty has `TERM_PROGRAM=ghostty`). The one exception is GNU screen (`STY`), skipped on purpose: it forwards only the background, to the outer terminal for every window, with no reset. tmux is fine: per-pane colors, tested live with 3.6. Don't add an INT trap to `bin/claude-launcher`: Ctrl-C belongs to fzf and Claude.
+- **Claude may be the native binary or npm's package run by node**, whose process name is "MainThread". Recognize it by its command line (`restart.is_claude`, and `is_claude` in the hook), never by process name.
+
+## Writing style
+
+User-facing text (README, picker messages, comments) is plain and short: say what happens, from the user's side. "Not a directory: ~/x", not "Error: invalid path". In comments, explain why when it isn't obvious; don't narrate the code.

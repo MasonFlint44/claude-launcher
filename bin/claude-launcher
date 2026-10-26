@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# Pick a project directory or a recent session, then start Claude Code there.
+# When Claude exits, the picker comes back. See README.md for the keys.
+#
+#   claude-launcher [claude options]   pick, then run claude with those options
+#   claude-launcher --resume <id>      skip the picker: resume that session in its directory
+#
+# The picker's logic is in Python (src/claude_launcher); this script only runs
+# fzf and claude.
+set -uo pipefail
+
+repo=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)
+core=$repo/libexec/claude-launcher-core
+
+# `--resume <id>`: straight to that session, in the directory it was started in.
+dir=$("$core" resume-dir "$@")
+case $? in
+  0) cd "$dir" && exec claude "$@" ;;
+  3) ;;  # not resuming: show the picker
+  *) exit 1 ;;
+esac
+
+run=$(mktemp -d "${XDG_RUNTIME_DIR:-/tmp}/claude-launcher.XXXXXX") || exit 1
+hung_up=
+on_exit() {
+  [[ -n $hung_up ]] || "$core" --run "$run" theme restore
+  rm -rf "$run"
+}
+trap on_exit EXIT
+# No INT trap: Ctrl-C belongs to fzf and Claude, and bash would run the trap
+# whenever Claude saw one.
+trap 'hung_up=1; exit 129' HUP  # the terminal is gone: nothing to put back
+trap 'exit 143' TERM
+
+# Claude Dark for this tab while the launcher runs, Claude included.
+"$core" --run "$run" theme apply
+
+again=()
+while :; do
+  mapfile -d '' -t opts < <("$core" --run "$run" ui start "$(tput cols 2>/dev/null || echo 80)" "${again[@]}")
+  (( ${#opts[@]} )) || exit 1
+  out=$("${opts[@]}" < "$run/rows")  # the first option is the fzf to run
+  status=$?
+  (( status == 130 )) && exit 0       # quit with Esc, Ctrl-C or Ctrl-D
+  (( status > 1 )) && exit "$status"  # fzf itself failed
+
+  # The query is fzf's first line of output; ui pick works out the rest.
+  if ! pick=$("$core" --run "$run" ui pick "${out%%$'\n'*}"); then
+    sleep 1  # long enough to read why
+    again=(--again)
+    continue
+  fi
+  again=()
+  IFS=$'\t' read -r dir session <<< "$pick"
+  (
+    cd "$dir" || exit
+    if [[ -n $session ]]; then exec claude --resume "$session" "$@"; else exec claude "$@"; fi
+  )
+done
