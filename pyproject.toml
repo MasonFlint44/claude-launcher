@@ -3,6 +3,7 @@ name = "claude-launcher"
 version = "0.1.0"
 description = "Pick a project directory or session, then start Claude Code"
 requires-python = ">=3.10"
+license = "MIT"
 dependencies = []  # the launcher itself uses only the standard library
 
 [dependency-groups]

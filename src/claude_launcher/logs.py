@@ -1,7 +1,7 @@
 """Reading Claude Code's session logs (~/.claude/projects/<project>/<id>.jsonl).
 
-The session list follows Claude Code's own /resume picker (as of 2.1.310): it
-reads only the first and last 64 KB of each log, since Claude keeps re-writing
+The session list matches what Claude Code's /resume picker shows (as of
+2.1.310). It reads only the first and last 64 KB of each log, since Claude re-writes
 a session's title entries near the end, and it leaves out the same sessions:
 subagent and team sessions, `claude -p` and SDK runs, /loop and daemon
 sessions, sessions continued in a newer one, and sessions with no messages.
@@ -19,8 +19,8 @@ from pathlib import Path
 
 from .paths import Paths
 
-BUF = 65536  # Claude's LITE_READ_BUF_SIZE
-_MESSAGES_SCAN = 16 * 1024 * 1024  # how far Claude looks for a first message
+BUF = 65536  # how much of each end of a log is read
+_MESSAGES_SCAN = 16 * 1024 * 1024  # how far into a log to look for a first message
 SDK_ENTRYPOINTS = {"sdk-cli", "sdk-ts", "sdk-py"}
 
 _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
