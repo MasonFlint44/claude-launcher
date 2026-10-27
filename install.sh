@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Set up claude-launcher, its Claude Code hook, the Claude Dark Ghostty theme
-# and the "Claude Code" desktop launcher. Safe to re-run: it updates whatever
-# is already installed, and remembers --terminal and --icon from last time.
+# Set up claude-launcher, its Claude Code hook, and what this platform adds
+# (on Linux: the Claude Dark Ghostty theme and the "Claude Code" desktop
+# launcher). Safe to re-run: it updates whatever is already installed, and
+# remembers --terminal and --icon from last time.
 usage() {
   cat <<'USAGE'
 usage: install.sh [--terminal NAME[,NAME...]] [--icon FILE|default]
@@ -21,7 +22,6 @@ set -euo pipefail
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 core=$repo/libexec/claude-launcher-core
 bin_dir=$HOME/.local/bin
-themes_dir=${XDG_CONFIG_HOME:-$HOME/.config}/ghostty/themes
 claude_settings=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json
 
 say()  { printf '\e[1;38;2;215;119;87m==>\e[0m %s\n' "$*"; }
@@ -47,20 +47,21 @@ unlink_ours() {
   fi
 }
 
-# Run a Python step, showing its lines as progress. Fails if the step does;
-# inside `if`/`||`, so set -e leaves that to the caller.
+# Run a Python step, showing its lines as progress ("warning: ..." lines as
+# warnings). Fails if the step does; inside `if`/`||`, so set -e leaves that
+# to the caller.
 step() {
   local line
-  "$core" "$@" | while IFS= read -r line; do say "$line"; done
+  "$core" "$@" | while IFS= read -r line; do
+    if [[ $line == "warning: "* ]]; then warn "${line#warning: }"; else say "$line"; fi
+  done
 }
 
 # Uninstall goes on past a step that fails, so the rest still comes out.
 uninstall() {
   unlink_ours "$bin_dir/claude-launcher"
   unlink_ours "$bin_dir/claude-session-hook"
-  unlink_ours "$themes_dir/claude-dark"
-  step install remove-terminals || warn "could not remove every desktop entry and profile"
-  "$core" install remove-icon || warn "could not remove the app icon"
+  step install remove-platform || warn "could not remove everything install.sh set up"
   if [[ -f $claude_settings ]]; then
     status=0
     "$core" install remove-hook "$claude_settings" || status=$?
@@ -115,13 +116,10 @@ install() {
     *) warn "could not add the session hook to $claude_settings" ;;
   esac
 
-  # 4. The theme, so any Ghostty window can use it: theme = claude-dark
-  link "$repo/themes/claude-dark" "$themes_dir/claude-dark"
-
-  # 5. The app icon, then the "Claude Code" desktop launcher(s), with a
-  # Claude Code profile in terminals that use one. See terminals.py.
-  step install icon ${icon:+"$icon"} || die "could not install the app icon"
-  step install terminals "$bin_dir/claude-launcher" ${terminal:+"$terminal"} \
+  # 4. What this platform adds. On Linux: the Ghostty theme, the app icon,
+  # and the "Claude Code" desktop launcher(s), with a Claude Code profile in
+  # terminals that use one (src/claude_launcher/platforms/linux/setup.py).
+  step install platform "$bin_dir/claude-launcher" ${terminal:+--terminal "$terminal"} ${icon:+--icon "$icon"} \
     || die "could not set up the desktop launcher"
 
   say "Done. Open \"Claude Code\" from your apps, or run claude-launcher in any terminal."

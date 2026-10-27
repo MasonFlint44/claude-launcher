@@ -7,8 +7,8 @@ import subprocess
 
 import pytest
 
-from claude_launcher.install import APP_ID, ICON_SIZES
 from claude_launcher.paths import REPO_DIR
+from claude_launcher.platforms.linux.desktop import APP_ID, ICON_SIZES
 
 pytestmark = pytest.mark.skipif(not shutil.which("fzf"), reason="needs fzf")
 

@@ -32,7 +32,23 @@ def test_a_forks_platform_comes_first(fresh, monkeypatch):
     name = "claude_launcher.platforms.fork"
     fork = types.ModuleType(name)
     fork.__spec__ = importlib.machinery.ModuleSpec(name, None)
-    mine = platforms.Platform("mine", host=None, events=lambda: None)
+    mine = platforms.Platform("mine", host=None, events=lambda: None, setup=lambda: None)
     fork.platform = lambda: mine
     monkeypatch.setitem(sys.modules, name, fork)
     assert platforms.current() is mine
+
+
+def test_the_core_runs_a_platforms_own_commands(fresh, monkeypatch, capsys):
+    from claude_launcher import cli
+
+    calls = []
+
+    class Setup:
+        commands = {"hello": lambda args: calls.append(args) or 7}
+
+    mine = platforms.Platform("mine", host=None, events=lambda: None, setup=Setup)
+    monkeypatch.setattr(platforms, "_current", mine)
+    assert cli.main(["hello", "a", "b"]) == 7
+    assert calls == [["a", "b"]]
+    assert cli.main(["nope"]) == 2
+    assert "resume-dir" in capsys.readouterr().err  # the usage

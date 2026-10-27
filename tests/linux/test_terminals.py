@@ -12,8 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from claude_launcher import install, terminals
-from claude_launcher.terminals import APP_ID, PROFILE_UUID, TERMINALS, Context
+from claude_launcher.platforms.linux import desktop, terminals
+from claude_launcher.platforms.linux.terminals import APP_ID, PROFILE_UUID, TERMINALS, Context
 from claude_launcher.theme import Theme
 
 
@@ -93,7 +93,7 @@ ODD_PATH = Path("/home/me/odd dir/it's $HOME, `here` \\ 100%/claude-launcher")
 def test_exec_line_round_trips(ctx, name):
     ctx.launcher = ODD_PATH
     term = TERMINALS[name]
-    assert exec_line(install.desktop_entry(term, ctx, primary=True)) == term.exec_argv(ctx)
+    assert exec_line(desktop.desktop_entry(term, ctx, primary=True)) == term.exec_argv(ctx)
 
 
 GLIB_EXEC = """
@@ -118,7 +118,7 @@ def test_glib_reads_the_exec_line(ctx, name, tmp_path):
     ctx.launcher = ODD_PATH
     term = TERMINALS[name]
     entry = tmp_path / "x.desktop"
-    entry.write_text(install.desktop_entry(term, ctx, primary=True))
+    entry.write_text(desktop.desktop_entry(term, ctx, primary=True))
     out = subprocess.run(
         ["/usr/bin/python3", "-I", "-c", GLIB_EXEC, str(entry)], capture_output=True, text=True, check=True
     )
@@ -295,13 +295,13 @@ class TestInstallTerminals:
     @pytest.fixture(autouse=True)
     def everything_installed(self, monkeypatch):
         monkeypatch.setattr(terminals.Terminal, "installed", lambda self: True)
-        monkeypatch.setattr(install.shutil, "which", lambda p: None)  # no desktop-database tools
+        monkeypatch.setattr(desktop.shutil, "which", lambda p: None)  # no desktop-database tools
 
     def entries(self, ctx):
         return sorted(p.name for p in (ctx.data_home / "applications").iterdir())
 
     def test_primary_and_extra_entries(self, ctx):
-        install.install_terminals(ctx, ["ghostty", "guake"])
+        desktop.install_terminals(ctx, ["ghostty", "guake"])
         assert self.entries(ctx) == [f"{APP_ID}.desktop", f"{APP_ID}.guake.desktop"]
         primary = (ctx.data_home / "applications" / f"{APP_ID}.desktop").read_text()
         extra = (ctx.data_home / "applications" / f"{APP_ID}.guake.desktop").read_text()
@@ -310,35 +310,35 @@ class TestInstallTerminals:
         assert "Terminal=false\n" in primary and f"Icon={APP_ID}\n" in extra
 
     def test_fallback_uses_the_default_terminal(self, ctx):
-        install.install_terminals(ctx, ["default"])
+        desktop.install_terminals(ctx, ["default"])
         entry = (ctx.data_home / "applications" / f"{APP_ID}.desktop").read_text()
         assert "Terminal=true\n" in entry and exec_line(entry) == ctx.argv
 
     def test_choice_is_remembered(self, ctx):
-        install.install_terminals(ctx, ["ptyxis"])
-        install.install_terminals(ctx, None)
-        assert install.saved_terminals(ctx) == ["ptyxis"]
+        desktop.install_terminals(ctx, ["ptyxis"])
+        desktop.install_terminals(ctx, None)
+        assert desktop.saved_terminals(ctx) == ["ptyxis"]
         assert "ptyxis" in (ctx.data_home / "applications" / f"{APP_ID}.desktop").read_text()
 
     def test_auto_forgets_the_choice(self, ctx):
-        install.install_terminals(ctx, ["ptyxis"])
-        install.install_terminals(ctx, ["auto"])
-        assert install.saved_terminals(ctx) == ["ghostty"]  # the first in AUTO_ORDER
+        desktop.install_terminals(ctx, ["ptyxis"])
+        desktop.install_terminals(ctx, ["auto"])
+        assert desktop.saved_terminals(ctx) == ["ghostty"]  # the first in AUTO_ORDER
 
     def test_switching_away_removes_the_profile(self, ctx):
-        install.install_terminals(ctx, ["ptyxis"])
+        desktop.install_terminals(ctx, ["ptyxis"])
         assert ("org.gnome.Ptyxis", "profile-uuids") in ctx.run.values
-        install.install_terminals(ctx, ["ghostty"])
+        desktop.install_terminals(ctx, ["ghostty"])
         assert PROFILE_UUID.hex not in ctx.run.values[("org.gnome.Ptyxis", "profile-uuids")]
         assert self.entries(ctx) == [f"{APP_ID}.desktop"]
 
     def test_not_installed(self, ctx, monkeypatch):
         monkeypatch.setattr(terminals.Terminal, "installed", lambda self: False)
         with pytest.raises(ValueError, match="not installed: kitty"):
-            install.install_terminals(ctx, ["kitty"])
+            desktop.install_terminals(ctx, ["kitty"])
 
     def test_failed_profile_keeps_the_old_entries(self, ctx, monkeypatch):
-        install.install_terminals(ctx, ["ghostty"])
+        desktop.install_terminals(ctx, ["ghostty"])
         before = (ctx.data_home / "applications" / f"{APP_ID}.desktop").read_text()
 
         def no_dconf(self, ctx):
@@ -346,75 +346,75 @@ class TestInstallTerminals:
 
         monkeypatch.setattr(terminals.Ptyxis, "install", no_dconf)
         with pytest.raises(subprocess.CalledProcessError):
-            install.install_terminals(ctx, ["ptyxis"])
+            desktop.install_terminals(ctx, ["ptyxis"])
         assert self.entries(ctx) == [f"{APP_ID}.desktop"]
         assert (ctx.data_home / "applications" / f"{APP_ID}.desktop").read_text() == before
-        assert install.saved_terminals(ctx) == ["ghostty"]
+        assert desktop.saved_terminals(ctx) == ["ghostty"]
 
     def test_remove(self, ctx):
-        install.install_terminals(ctx, ["konsole", "guake"])
-        install.remove_terminals(ctx)
+        desktop.install_terminals(ctx, ["konsole", "guake"])
+        desktop.remove_terminals(ctx)
         assert self.entries(ctx) == []
         assert not (ctx.data_home / "konsole" / "ClaudeLauncher.profile").exists()
-        assert install.saved_terminals(ctx) is None
+        assert desktop.saved_terminals(ctx) is None
 
 
 class TestIcon:
     @pytest.fixture(autouse=True)
     def no_cache_tools(self, monkeypatch):
-        monkeypatch.setattr(install.shutil, "which", lambda p: None)
+        monkeypatch.setattr(desktop.shutil, "which", lambda p: None)
 
     def installed(self, ctx):
         theme = ctx.data_home / "icons" / "hicolor"
         return sorted(str(p.relative_to(theme)) for p in theme.rglob(f"{APP_ID}.*"))
 
     def test_default(self, ctx):
-        assert install.install_icon(ctx, None) == "Installed the default icon"
+        assert desktop.install_icon(ctx, None) == "Installed the default icon"
         assert self.installed(ctx) == sorted(
-            ["scalable/apps/" + APP_ID + ".svg"] + [f"{s}x{s}/apps/{APP_ID}.png" for s in install.ICON_SIZES]
+            ["scalable/apps/" + APP_ID + ".svg"] + [f"{s}x{s}/apps/{APP_ID}.png" for s in desktop.ICON_SIZES]
         )
 
     def test_your_svg_replaces_it(self, ctx, tmp_path):
         mine = tmp_path / "clawd.svg"
         mine.write_text("<svg/>")
-        install.install_icon(ctx, None)
-        install.install_icon(ctx, str(mine))
+        desktop.install_icon(ctx, None)
+        desktop.install_icon(ctx, str(mine))
         assert self.installed(ctx) == ["scalable/apps/" + APP_ID + ".svg"]
         assert (ctx.data_home / "icons/hicolor/scalable/apps" / f"{APP_ID}.svg").read_text() == "<svg/>"
         mine.unlink()  # a copy is kept, so the icon survives this
-        install.install_icon(ctx, None)
+        desktop.install_icon(ctx, None)
         assert (ctx.data_home / "icons/hicolor/scalable/apps" / f"{APP_ID}.svg").read_text() == "<svg/>"
 
     def test_your_png_goes_by_its_size(self, ctx):
-        install.install_icon(ctx, str(install.ICONS_DIR / "claude-launcher-256.png"))
+        desktop.install_icon(ctx, str(desktop.ICONS_DIR / "claude-launcher-256.png"))
         assert self.installed(ctx) == [f"256x256/apps/{APP_ID}.png"]
 
     def test_odd_png_size_comes_out(self, ctx, tmp_path):
         big = tmp_path / "big.png"
         big.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\0\0\0\rIHDR" + (1024).to_bytes(4, "big") * 2)
-        install.install_icon(ctx, str(big))
+        desktop.install_icon(ctx, str(big))
         assert self.installed(ctx) == [f"1024x1024/apps/{APP_ID}.png"]
-        install.install_icon(ctx, "default")
+        desktop.install_icon(ctx, "default")
         assert f"1024x1024/apps/{APP_ID}.png" not in self.installed(ctx)
-        install.remove_icon(ctx)
+        desktop.remove_icon(ctx)
         assert self.installed(ctx) == []
 
     def test_back_to_default(self, ctx, tmp_path):
         mine = tmp_path / "x.svg"
         mine.write_text("<svg/>")
-        install.install_icon(ctx, str(mine))
-        install.install_icon(ctx, "default")
-        assert len(self.installed(ctx)) == 1 + len(install.ICON_SIZES)
+        desktop.install_icon(ctx, str(mine))
+        desktop.install_icon(ctx, "default")
+        assert len(self.installed(ctx)) == 1 + len(desktop.ICON_SIZES)
 
     def test_bad_icons(self, ctx, tmp_path):
         (tmp_path / "x.jpg").write_text("")
         with pytest.raises(ValueError, match="svg or .png"):
-            install.install_icon(ctx, str(tmp_path / "x.jpg"))
+            desktop.install_icon(ctx, str(tmp_path / "x.jpg"))
         wide = tmp_path / "wide.png"
         wide.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\0\0\0\rIHDR" + (64).to_bytes(4, "big") + (32).to_bytes(4, "big"))
         with pytest.raises(ValueError, match="square"):
-            install.install_icon(ctx, str(wide))
+            desktop.install_icon(ctx, str(wide))
 
     def test_shipped_pngs_are_the_sizes_installed(self):
-        for size in install.ICON_SIZES:
-            assert install._png_size(install.ICONS_DIR / f"claude-launcher-{size}.png") == size
+        for size in desktop.ICON_SIZES:
+            assert desktop._png_size(desktop.ICONS_DIR / f"claude-launcher-{size}.png") == size

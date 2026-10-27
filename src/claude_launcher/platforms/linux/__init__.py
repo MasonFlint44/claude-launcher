@@ -12,6 +12,12 @@ def _events(host: LinuxHost):
     return JournalEvents(Journal(), host.user)
 
 
+def _setup():
+    from .setup import LinuxSetup
+
+    return LinuxSetup()
+
+
 def platform() -> Platform:
     host = LinuxHost()
-    return Platform(name="linux", host=host, events=lambda: _events(host))
+    return Platform(name="linux", host=host, events=lambda: _events(host), setup=_setup)

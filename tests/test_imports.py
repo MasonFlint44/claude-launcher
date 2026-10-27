@@ -18,7 +18,7 @@ from claude_launcher.cli import main
 main(sys.argv[2:])
 print(json.dumps(sorted(m for m in sys.modules if m.startswith("claude_launcher"))), file=sys.stderr)
 """
-NOT_ON_A_KEY_PRESS = ("claude_launcher.platforms",)
+NOT_ON_A_KEY_PRESS = ("claude_launcher.platforms", "claude_launcher.settings")
 
 
 @pytest.mark.parametrize(

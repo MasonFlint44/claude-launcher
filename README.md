@@ -191,7 +191,7 @@ Only interactive Claude sessions in a terminal are recorded: not `claude -p`, SD
 git -C ~/git/claude-launcher pull
 ```
 
-Changes to the launcher, hook and theme apply right away. If the desktop launcher changed (`src/claude_launcher/install.py`), re-run `install.sh`.
+Changes to the launcher, hook and theme apply right away. If the desktop launcher changed (`src/claude_launcher/platforms/linux/`), re-run `install.sh`.
 
 ## Uninstalling
 

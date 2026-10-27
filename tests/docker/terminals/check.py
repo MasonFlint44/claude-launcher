@@ -34,7 +34,7 @@ from pathlib import Path
 REPO = Path(sys.argv[1])
 sys.path.insert(0, str(REPO / "src"))
 
-from claude_launcher.terminals import APP_ID, PROFILE_UUID, TERMINALS  # noqa: E402
+from claude_launcher.platforms.linux.terminals import APP_ID, PROFILE_UUID, TERMINALS  # noqa: E402
 from claude_launcher.theme import Theme  # noqa: E402
 
 HOME = Path.home()

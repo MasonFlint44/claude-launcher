@@ -9,7 +9,7 @@ uses. tests/contract checks any platform's parts the same way.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from pathlib import Path
@@ -73,6 +73,28 @@ class EventSource(Protocol):
         ...
 
 
+class Setup(Protocol):
+    """What install.sh sets up for this platform beyond the shared steps (fzf,
+    the links in ~/.local/bin, the hook in settings.json): on Linux, the
+    desktop entries, terminal profiles and icon."""
+
+    def install(self, launcher: Path, terminal_names: str | None, icon: str | None) -> Iterator[str]:
+        """Set it up, saying what was done one line at a time ("warning: ..."
+        for a problem that doesn't stop it). Raises if it can't finish.
+        `terminal_names` and `icon` are install.sh's --terminal and --icon."""
+        ...
+
+    def uninstall(self) -> Iterator[str]:
+        """Take out what install() set up, going on past a part that fails."""
+        ...
+
+    @property
+    def commands(self) -> Mapping[str, Callable[[list[str]], int]]:
+        """Commands of the core's own for this platform, by name, such as what
+        a desktop entry runs. Each gets its arguments and returns an exit code."""
+        ...
+
+
 @dataclass(frozen=True)
 class Platform:
     name: str
@@ -80,3 +102,6 @@ class Platform:
     # Made only when needed: reading the event log costs time, and most runs
     # of the core (one per key press) never do.
     events: Callable[[], EventSource]
+    # Made only when needed, like events: only install.sh and the platform's
+    # own commands use it.
+    setup: Callable[[], Setup]

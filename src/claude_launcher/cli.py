@@ -5,20 +5,19 @@ bindings and install.sh call. Not meant to be run by hand.
     --run DIR theme apply|restore   switch this terminal to Claude Dark and save
                              its title, or put both back
     --run DIR ui start ...   the picker (see picker.py)
-    install add-hook|remove-hook|terminals|icon|... (see _install)
-    terminal open guake [LAUNCHER]   what the Guake desktop entry runs
+    install add-hook|remove-hook|platform|remove-platform|fzf-... (see _install)
+    Anything else is one of the platform's own commands (Linux: `terminal
+    open guake [LAUNCHER]`, what the Guake desktop entry runs).
 """
 
 from __future__ import annotations
 
 import os
-import shutil
-import subprocess
 import sys
 from pathlib import Path
 
-from . import fzf, install, logs, terminals, theme, title
-from .paths import CORE, REPO_DIR, Paths
+from . import fzf, logs, theme, title
+from .paths import Paths
 from .picker import FzfTooOld, Pick, Picker, resume_dir
 
 NOT_RESUMING = 3  # resume-dir: the arguments don't ask to resume a session
@@ -133,17 +132,25 @@ def _ui(run: Path, action: str, args: list[str]) -> int:
 
 
 def _install(action: str, args: list[str]) -> int:
-    if action == "add-hook":
-        changed = install.add_hook(Path(args[0]), Path(args[1]))
-    elif action == "remove-hook":
-        changed = install.remove_hook(Path(args[0]))
-    elif action in ("terminals", "remove-terminals", "icon", "remove-icon", "list-terminals"):
-        return _install_desktop(action, args)
-    elif action == "fzf-status":
+    if action in ("add-hook", "remove-hook"):
+        from . import settings
+
+        try:
+            if action == "add-hook":
+                changed = settings.add_hook(Path(args[0]), Path(args[1]))
+            else:
+                changed = settings.remove_hook(Path(args[0]))
+        except (OSError, ValueError) as e:
+            print(e, file=sys.stderr)
+            return 1
+        return 4 if changed else 0  # install.sh says which
+    if action in ("platform", "remove-platform"):
+        return _platform_setup(action, args)
+    if action == "fzf-status":
         path, version = fzf.find()
         print(f"ok {fzf.show(version)} {path}" if path else f"old {fzf.show(version)}")
         return 0
-    elif action == "fetch-fzf":
+    if action == "fetch-fzf":
         try:
             path = fzf.fetch(fzf.private_dir())
         except (OSError, RuntimeError, KeyError) as e:
@@ -151,51 +158,32 @@ def _install(action: str, args: list[str]) -> int:
             return 1
         print(path)
         return 0
-    elif action == "fzf-dir":
+    if action == "fzf-dir":
         print(fzf.private_dir())
         return 0
-    else:
-        print(f"unknown install action: {action}", file=sys.stderr)
-        return 2
-    return 4 if changed else 0  # install.sh says which
+    print(f"unknown install action: {action}", file=sys.stderr)
+    return 2
 
 
-def _context(launcher: str | None = None) -> terminals.Context:
-    path = Path(launcher) if launcher else Path(shutil.which("claude-launcher") or REPO_DIR / "bin" / "claude-launcher")
-    return terminals.Context.from_env(launcher=path, core=CORE)
+def _platform_setup(action: str, args: list[str]) -> int:
+    """install platform LAUNCHER [--terminal NAMES] [--icon FILE] | remove-platform:
+    what install.sh sets up beyond the shared steps, one line per thing done."""
+    import subprocess
 
+    from .platforms import current
 
-def _install_desktop(action: str, args: list[str]) -> int:
-    """install terminals LAUNCHER [NAME,...] | remove-terminals | icon [FILE|default] | remove-icon | list-terminals"""
+    setup = current().setup()
+    opts = dict(zip(args[1::2], args[2::2], strict=False))
     try:
-        if action == "terminals":
-            names = [n for n in args[1].split(",") if n] if len(args) > 1 else None
-            for line in install.install_terminals(_context(args[0]), names):
-                print(line)
-        elif action == "remove-terminals":
-            for path in install.remove_terminals(_context()):
-                print(f"Removed {path}")
-        elif action == "icon":
-            print(install.install_icon(_context(), args[0] if args else None))
-        elif action == "remove-icon":
-            install.remove_icon(_context())
+        if action == "platform":
+            lines = setup.install(Path(args[0]), opts.get("--terminal") or None, opts.get("--icon") or None)
         else:
-            for t in terminals.TERMINALS.values():
-                state = "installed" if t.installed() and t.how != "fallback" else ""
-                print(f"{t.name:15} {t.how:10} {state}")
+            lines = setup.uninstall()
+        for line in lines:
+            print(line, flush=True)
     except (ValueError, RuntimeError, OSError, subprocess.SubprocessError) as e:
         print(e, file=sys.stderr)
         return 1
-    return 0
-
-
-def _terminal(action: str, args: list[str]) -> int:
-    """terminal open NAME [LAUNCHER]: what a drop-down terminal's desktop entry runs."""
-    term = terminals.TERMINALS.get(args[0]) if args else None
-    if action != "open" or not isinstance(term, terminals.Guake):
-        print(f"can't open {' '.join(args)}", file=sys.stderr)
-        return 2
-    term.open(_context(args[1] if len(args) > 1 else None))
     return 0
 
 
@@ -212,8 +200,6 @@ def main(argv: list[str] | None = None) -> int:
     command, rest = (argv[0], argv[1:]) if argv else ("", [])
     if command == "resume-dir":
         return _resume_dir(rest)
-    if command == "terminal" and rest:
-        return _terminal(rest[0], rest[1:])
     if command in ("theme", "install", "ui") and rest:
         if command == "theme" and run is not None:
             return _theme(run, rest[0])
@@ -221,5 +207,11 @@ def main(argv: list[str] | None = None) -> int:
             return _install(rest[0], rest[1:])
         if run is not None:
             return _ui(run, rest[0], rest[1:])
+    if command and command not in ("theme", "install", "ui"):
+        from .platforms import current
+
+        platform_command = current().setup().commands.get(command)
+        if platform_command is not None:
+            return platform_command(rest)
     print(USAGE, file=sys.stderr)
     return 2

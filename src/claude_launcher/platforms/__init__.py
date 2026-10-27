@@ -13,9 +13,9 @@ import importlib
 import importlib.util
 import sys
 
-from .base import Event, EventSource, Host, Platform
+from .base import Event, EventSource, Host, Platform, Setup
 
-__all__ = ["Event", "EventSource", "Host", "Platform", "Unsupported", "current"]
+__all__ = ["Event", "EventSource", "Host", "Platform", "Setup", "Unsupported", "current"]
 
 _current: Platform | None = None
 
