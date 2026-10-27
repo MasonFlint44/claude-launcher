@@ -9,7 +9,8 @@ Per terminal (any of terminals.TERMINALS, plus xterm for "any tab"):
   tab to Claude Dark and, on exit, puts the colors back exactly as they were.
 - install: install.sh --terminal NAME works, the desktop entry validates, and
   the profile is there (GSettings, or Konsole's profile file).
-- picker: the desktop entry's Exec line opens the picker in Claude Dark.
+- picker: the desktop entry's Exec line opens the picker in Claude Dark, and
+  Ctrl-S reaches it (no terminal takes the key, or freezes on it).
 - new tab: the terminal's new-tab shortcut (Guake: a second "Claude Code")
   does what terminals.py says it does.
 - uninstall: install.sh --uninstall takes the profile out again.
@@ -22,6 +23,7 @@ that ran passed.
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -176,6 +178,17 @@ def pickers() -> int:
     return len(run("pgrep", "-x", "fzf").stdout.split())
 
 
+def picker_view() -> str | None:
+    """The view the picker shows, from its state file."""
+    runtime = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp"))
+    for state in runtime.glob("claude-launcher.*/state.json"):
+        try:
+            return json.loads(state.read_text())["view"]
+        except (OSError, ValueError, KeyError):
+            continue
+    return None
+
+
 def titled(text: str) -> bool:
     return bool(run("xdotool", "search", "--onlyvisible", "--name", text).stdout.strip())
 
@@ -292,6 +305,10 @@ def check_picker(term: str) -> str:
     wait_dark(win)
     if term in SHOWS_TITLE:
         wait("the title Claude Code", lambda: titled("^Claude Code$"), timeout=5)
+    press(win, "ctrl+s")
+    wait("Ctrl-S to show all sessions", lambda: picker_view() == "recent", timeout=5)
+    press(win, "ctrl+s")
+    wait("Ctrl-S to go back", lambda: picker_view() == "projects", timeout=5)
     return "pass" if term in SHOWS_TITLE else "pass (title not shown by this terminal)"
 
 

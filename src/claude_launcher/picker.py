@@ -12,14 +12,20 @@ lives in a per-run directory:
     accept         the cursor position and highlighted row when Enter was pressed
 
 Views: "projects" (the directory list, the start screen), "recent" (sessions
-in every directory) and "directory" (the highlighted directory's sessions).
+in every directory, Ctrl-S) and "directory" (the sessions in a directory and
+anywhere inside it, newest first, under a "+ New session" row). Enter on a
+directory shows its sessions, or opens it straight away when it has none.
+Going back to the directory list puts back the search and cursor it had.
 
 Path mode: while the query in the projects view starts with / or ~, the list
 is the directories in the directory typed so far, like a shell's completion.
-Tab fills in the highlighted one and Esc backs up a level.
+Tab fills in the highlighted one (in the plain list too, which starts path
+mode) and Esc backs up a level.
 
-Rows are "key<TAB>shown<TAB>note": fzf shows the last two and matches only
-the shown text, so a note like "→ git/claude-launcher" can't match a query.
+Rows are "key<TAB>shown<TAB>note" in the directory list and
+"key<TAB>when<TAB>directory and title" in a Sessions view. fzf shows all but
+the key and matches only one field (`NTH`), so a note like
+"→ git/claude-launcher" or an age like "23h ago" can't match a query.
 """
 
 from __future__ import annotations
@@ -49,10 +55,16 @@ DOUBLE_PRESS_MS = 1000
 HINT_GAP = 8  # the least space between the title and the hints beside it
 
 # How fzf reads and matches rows, the same in the picker and in `_nth_match`.
-MATCHING = ["--ansi", "--tiebreak=index", "--delimiter=\t", "--with-nth=2..", "--nth=1"]
+MATCHING = ["--ansi", "--tiebreak=index", "--delimiter=\t", "--with-nth=2.."]
+# The field fzf matches, after the key: the path, or a session's directory and title.
+NTH = {"projects": "1", "sessions": "2"}
 
 PROJECTS_PROMPT = "project> "
 SESSIONS_PROMPT = "session> "
+NEW_SESSION = "+"  # the "+ New session" row's key: this, then the directory
+
+# Brackets fzf takes around an action's argument.
+_BRACKETS = ["()", "[]", "{}", "<>", "~~", "!!", "@@", "##", "$$", "%%", "^^", "&&", "**", ";;", "//", "||"]
 
 
 @dataclass
@@ -67,6 +79,8 @@ class State:
     key: list | None = None  # [key, time in ms] of a first press waiting for its second
     restored: list = field(default_factory=lambda: [0, 0.0, []])  # [count, latest, reasons]
     has_group_rows: bool = False  # the Sessions view shows ↻ rows
+    back: list | None = None  # [query, cursor] the directory list had when left
+    pending_pos: int = 0  # the cursor to put back once the list's rows are in
     fzf: str = "fzf"  # the fzf program the picker runs
 
 
@@ -111,6 +125,7 @@ class Picker:
         self.core = shlex.join([str(core), "--run", str(self.run)])
         self._restore_later = restore_later or _restore_header_later
         self.state = self._load_state()
+        self._scanned: tuple[list[logs.Session], dict[str, str]] | None = None
 
     # --- State ---------------------------------------------------------------
 
@@ -150,22 +165,24 @@ class Picker:
             return [
                 (h("enter", "open"), True),
                 (h("tab", "complete"), True),
-                (h("shift-tab", "dir sessions"), False),
+                (h("ctrl-s", "sessions"), False),
                 (h("esc", "back"), True),
                 (h("ctrl-u", "clear"), False),
             ]
         if self.state.view == "projects":
             return [
                 (h("enter", "open"), True),
-                (h("tab", "sessions"), True),
-                (h("shift-tab", "dir sessions"), False),
+                (h("tab", "complete"), False),
+                (h("ctrl-s", "sessions"), True),
                 (h("esc", "quit"), True),
             ]
         dismiss = [(h("ctrl-x", "dismiss ↻"), True), (h("alt-x", "dismiss all"), False)]
+        all_sessions = [(h("ctrl-s", "all sessions"), False)] if self.state.view == "directory" else []
         return [
             (h("enter", "resume"), True),
             *(dismiss if self.state.has_group_rows else []),
-            (h("tab/esc", "back to projects"), True),
+            *all_sessions,
+            (h("esc", "back"), True),
         ]
 
     def _hint_lines(self, title: str, hints: list[tuple[str, bool]]) -> list[str]:
@@ -217,7 +234,7 @@ class Picker:
                 return ""
             what = "1 session was" if count == 1 else f"{count} sessions were"
             when = text.clock(latest, self.now())
-            return self._accent(f"↻ {what} {self._closed_by()} ({when})") + "   tab " + self._dim("to see them")
+            return self._accent(f"↻ {what} {self._closed_by()} ({when})") + "   ctrl-s " + self._dim("to see them")
         if self.state.has_group_rows:
             return self._accent("↻") + " " + self._dim(self._closed_by())
         return ""
@@ -361,13 +378,24 @@ class Picker:
             rows.append(DirRow(prefix + name, typed + name, self._note(own.get(name, 0.0), inside.get(name, none))))
         return rows
 
-    def _build_sessions(self, log_dirs: list[Path]) -> bool:
-        """Write the Sessions view's rows; False if there are none."""
-        sessions, continued_from = logs.scan_sessions(log_dirs)
+    def _build_sessions(self, within: str | None = None) -> bool:
+        """Write the Sessions view's rows: every session, or those that ran in
+        `within` or anywhere inside it. False if there are none."""
+        sessions, continued_from = self._scan()
+        if within is not None:
+            sessions = [s for s in sessions if s.cwd and is_inside(s.cwd, within)]
         group = self.restart.load()
         rows = [{**asdict(s), "group": _group_key(s.id, group, continued_from)} for s in sessions]
         self._save_sessions(rows)
         return bool(rows)
+
+    def _scan(self) -> tuple[list[logs.Session], dict[str, str]]:
+        """Every session, read once per call into the picker. Claude's log
+        directory names can't be turned back into paths, so this reads where
+        each session ran."""
+        if self._scanned is None:
+            self._scanned = logs.scan_sessions(self.paths.all_log_dirs())
+        return self._scanned
 
     def _save_sessions(self, rows: list[dict]) -> None:
         # Sessions open at the restart first; most recently active first within each.
@@ -386,22 +414,36 @@ class Picker:
         here (deleted, or only inside a devcontainer) has it dimmed and marked."""
         title_width = self.state.width - 42
         now = self.now()
-        home = str(self.paths.home)
         out = ["\t" + self._dim("  " + pad("Last active", 11) + " " + pad("Directory", 24) + " Session")]
+        if self.state.view == "directory":
+            out.append(f"{NEW_SESSION}{self.state.dir}\t \t{self._accent('+ New session')}")
         for r in self._sessions():
             cwd = r["cwd"]
-            short = "~" if cwd == home else text.printable(os.path.basename(cwd.rstrip("/")) or cwd)
             missing = not os.path.isdir(cwd)
             note = " (missing)" if missing else ""
-            directory = truncate(short, 24 - len(note)) + note
+            directory = truncate_left(self._session_dir(cwd), 24 - len(note)) + note
             directory = pad(self._dim(directory) if missing else directory, 24)
             when = pad(text.age(r["active"], now), 11)
             if r["group"]:
                 mark, when = self._accent("↻") + " ", self._accent(when)
             else:
                 mark, when = "  ", self._dim(when)
-            out.append(f"{r['id']}\t{mark}{when} {directory} {truncate(r['title'], title_width)}")
+            out.append(f"{r['id']}\t{mark}{when}\t{directory} {truncate(r['title'], title_width)}")
         return out
+
+    def _session_dir(self, cwd: str) -> str:
+        """A session's directory as its row shows it. In a directory's view,
+        the path from that directory's name down (claude-launcher/tests), or
+        from ~ when that directory is ~ or above it; elsewhere, the name."""
+        home = str(self.paths.home)
+        within = self.state.dir
+        if self.state.view == "directory" and within:
+            if is_inside(home, within):
+                return text.printable(self.paths.tilde(cwd))
+            return text.printable(os.path.relpath(cwd, os.path.dirname(within)))
+        if cwd == home:
+            return "~"
+        return text.printable(os.path.basename(cwd.rstrip("/")) or cwd)
 
     def rows(self, view: str | None = None, query: str | None = None) -> list[str]:
         view = view or self.state.view
@@ -411,23 +453,39 @@ class Picker:
 
     # --- Views ---------------------------------------------------------------
 
-    def _set_view(self, view: str, directory: str = "") -> str:
-        """Switch to a view; the fzf actions that show it."""
-        self.state.view, self.state.dir, self.state.key, self.state.query = view, directory, None, ""
+    def _set_view(self, view: str, directory: str = "", restore: bool = True, cursor: int = 0) -> str:
+        """Switch to a view; the fzf actions that show it. Leaving the
+        directory list saves its search and cursor (`cursor`, or fzf's), and
+        coming back puts them back (unless `restore` is False)."""
+        if self.state.view == "projects" and view != "projects":
+            self.state.back = [self.state.query, cursor or _cursor()]
+        query, pos = "", 0
+        if view == "projects" and restore and self.state.back:
+            query, pos = self.state.back
+        self.state.view, self.state.dir, self.state.key, self.state.query = view, directory, None, query
         self.state.title_path = ""
         prompt = SESSIONS_PROMPT
         if view == "projects":
             self.state.title, prompt = "Select a project directory for Claude", PROJECTS_PROMPT
         elif view == "recent":
-            found = self._build_sessions(self.paths.all_log_dirs())
+            found = self._build_sessions()
             self.state.title = "Recent Claude sessions" if found else "No Claude sessions yet"
         else:
-            found = self._build_sessions(self.paths.log_dirs_for(directory))
+            found = self._build_sessions(within=directory)
             self.state.title = "Claude sessions in " if found else "No Claude sessions in "
             self.state.title_path = self.paths.tilde(directory)
+        # fzf moves the cursor to the top when the rows for the search come in,
+        # so a cursor to put back waits for them (`on_result`).
+        self.state.pending_pos = pos if pos > 1 else 0
         header = self._set_header()
         self._save_state()
-        return f"clear-query+change-prompt({prompt})+reload-sync({self.core} ui menu)+first+change-header:{header}"
+        query_action = _action("change-query", query) if query else "clear-query"
+        wait = "rebind(result)+" if self.state.pending_pos else ""
+        nth = NTH["projects" if view == "projects" else "sessions"]
+        return (
+            f"{wait}{query_action}+change-prompt({prompt})+change-nth({nth})+reload-sync({self.core} ui menu)+first"
+            f"+change-header:{header}"
+        )
 
     def start(self, cols: int, again: bool = False) -> list[str]:
         """Get the projects view ready; the fzf options that show it. `again`
@@ -448,7 +506,7 @@ class Picker:
         self.state.cols = cols
         self.state.width = min(cols, MAX_WIDTH)
         self._file("accept").unlink(missing_ok=True)
-        self._set_view("projects")
+        self._set_view("projects", restore=False)
         self._write("rows", "".join(r + "\n" for r in self.rows()))
         return self.fzf_options()
 
@@ -460,6 +518,7 @@ class Picker:
             "--print-query",
             "--layout=reverse",
             *MATCHING,
+            f"--nth={NTH['projects']}",
             "--tabstop=1",  # the tab before a note shows as one space
             "--header-lines=1",
             "--header-first",
@@ -470,9 +529,11 @@ class Picker:
             f"--listen={self._file('fzf.sock')}",
             "--with-shell=bash -c",
             f"--bind=change:transform:{c} ui change {{q}}",
-            f"--bind=enter:execute-silent({c} ui accept {{1}})+accept",
+            "--bind=start:unbind(result)",  # bound only while a cursor waits to be put back
+            f"--bind=result:transform:{c} ui result {{1}}",
+            f"--bind=enter:transform:{c} ui enter {{1}} {{q}}",
             f"--bind=tab:transform:{c} ui tab {{q}}",
-            f"--bind=btab:transform:{c} ui shift-tab {{1}}",
+            f"--bind=ctrl-s:transform:{c} ui sessions",
             f"--bind=ctrl-x:transform:{c} ui dismiss {{1}}",
             *(f"--bind={key}:transform:{c} ui key {key} {{q}}" for key in ("alt-x", "esc", "ctrl-c", "ctrl-d")),
             f"--color=fg:{t.text},fg+:{t.bright},bg+:{t.line},hl:{t.accent},hl+:{t.accent},query:{t.bright}",
@@ -484,33 +545,70 @@ class Picker:
     def on_change(self, query: str) -> str:
         """Typing. In the projects view, a typed path has rows of its own, so reload."""
         was_path = typed_path_like(self.state.query)
+        same = query == self.state.query  # going back to the list put this query back with its rows
         self.state.query, self.state.key = query, None
+        if not same:
+            self.state.pending_pos = 0  # typed before the list was back: the old cursor no longer fits
         self._save_state()
         reload = ""
-        if self.state.view == "projects" and (was_path or typed_path_like(query)):
+        if self.state.view == "projects" and not same and (was_path or typed_path_like(query)):
             reload = f"reload-sync({self.core} ui menu)+"
         return f"{reload}change-header:{self._set_header()}"
 
     def on_tab(self, query: str | None = None) -> str:
-        """Tab: in path mode, fill in the highlighted directory; otherwise switch
-        between the projects and the Sessions view."""
+        """Tab, in the directory list: fill in the highlighted directory, like
+        a shell's completion. From the plain list, that starts path mode."""
         query = self.state.query if query is None else query
-        if self.state.view == "projects" and typed_path_like(query):
-            # Tab right behind the typing reaches fzf while it's still loading
-            # the rows, so take the row at the cursor from what the query
-            # matches, as Enter does.
+        if self.state.view != "projects":
+            return ""
+        # Tab right behind the typing reaches fzf while it's still loading
+        # the rows, so take the row at the cursor from what the query
+        # matches, as Enter does.
+        if typed_path_like(query):
             rows = self.directories(query)
             key = _nth_match(self.state.fzf, [self._dir_row(d) for d in rows], query, _cursor())
             row = next((d for d in rows if d.path == key and not d.is_parent), None)
             return f"change-query:{row.shown}/" if row else ""
-        return self._set_view("recent" if self.state.view == "projects" else "projects")
+        key = _nth_match(self.state.fzf, self.projects_rows(query)[1:], query, _cursor())
+        if not key or not os.path.isdir(key):
+            return ""
+        return f"change-query:{self.paths.tilde(key).rstrip('/')}/"
 
-    def on_shift_tab(self, row: str) -> str:
-        # Keys pressed right behind a switch can reach fzf before the new rows
-        # do, so check the row really is a directory.
-        if self.state.view == "projects" and os.path.isdir(row):
-            return self._set_view("directory", row)
-        return ""
+    def on_sessions(self) -> str:
+        """Ctrl-S: every session; from there, back to the directory list."""
+        return self._set_view("projects" if self.state.view == "recent" else "recent")
+
+    def on_result(self, row: str) -> str:
+        """The rows for the search are in: put back the directory list's
+        cursor, once they're the list's and not a Sessions view's still."""
+        if not self.state.pending_pos:
+            return "unbind(result)"
+        if not row or is_session_id(row) or row.startswith(NEW_SESSION):
+            return ""  # a filter of the old rows, or nothing to put the cursor on
+        pos, self.state.pending_pos = self.state.pending_pos, 0
+        self._save_state()
+        return f"pos({pos})+unbind(result)"
+
+    def on_enter(self, row: str, query: str) -> str:
+        """Enter. On a directory with sessions (in it or anywhere inside),
+        show them; otherwise accept, and pick() works out what was chosen."""
+        pos = _cursor()
+        if self.state.view == "projects" and (is_session_id(row) or row.startswith(NEW_SESSION)):
+            # Enter right behind going back: fzf still had a Sessions view's
+            # rows. The cursor goes where it was in the directory list.
+            pos, row = (self.state.back[1] if self.state.back else 1), ""
+        self._write("accept", f"{pos}\n{row}\n")
+        if self.state.view != "projects" or is_session_id(query):
+            return "accept"
+        # As in pick(): take the row at the cursor from what the query matches.
+        choice = _nth_match(self.state.fzf, self.projects_rows(query)[1:], query, pos)
+        if not choice or not os.path.isdir(choice) or not self._has_sessions(choice):
+            return "accept"
+        self.state.query = query
+        return self._set_view("directory", choice, cursor=pos)
+
+    def _has_sessions(self, directory: str) -> bool:
+        return any(s.cwd and is_inside(s.cwd, directory) for s in self._scan()[0])
 
     def on_dismiss(self, row: str) -> str:
         """Ctrl-X: take the highlighted ↻ session out of the group."""
@@ -542,7 +640,7 @@ class Picker:
         hints are. Esc with text clears it on the second press; Ctrl-C clears
         it straight away and Ctrl-D deletes a character. In path mode Esc backs
         up a directory, back to the start screen from ~/ or /, so it never quits.
-        In a Sessions view Esc goes straight back to the projects, and Alt-X
+        In a Sessions view Esc goes straight back to the directory list, and Alt-X
         twice dismisses every ↻ session the view shows.
         """
         if key == "esc" and self.state.view != "projects":
@@ -586,10 +684,6 @@ class Picker:
             return None
         return self._file("header").read_text()
 
-    def on_accept(self, row: str) -> None:
-        """Enter: note the cursor position and highlighted row for pick()."""
-        self._write("accept", f"{_cursor()}\n{row}\n")
-
     # --- After fzf exits -------------------------------------------------------
 
     def pick(self, query: str) -> Pick | str:
@@ -601,9 +695,13 @@ class Picker:
             row = lines[1]
         except (OSError, ValueError, IndexError):
             pass
-        # The view on screen: Enter right behind Tab can beat the new rows to fzf.
-        if is_session_id(row):
+        # The view on screen: Enter right behind a switch can beat the new rows to fzf.
+        if is_session_id(row) or row.startswith(NEW_SESSION):
             view = "sessions"
+        elif row and self.state.view == "directory" and not is_session_id(query):
+            # The directory row Enter was just pressed on: the second Enter of
+            # a quick double press starts a new session there.
+            return Pick(self.state.dir)
         elif row:
             view = "projects"
         else:
@@ -611,12 +709,15 @@ class Picker:
         # If Enter arrives right behind the typing (a paste ending in a
         # newline), fzf can return a row from before it caught up. So take the
         # row at the cursor's position from what the final query matches.
-        rows = self.rows("projects" if view == "projects" else "sessions", query)[1:]
-        choice = _nth_match(self.state.fzf, rows, query, pos)
+        kind = "projects" if view == "projects" else "sessions"
+        choice = _nth_match(self.state.fzf, self.rows(kind, query)[1:], query, pos, NTH[kind])
 
         session_id = ""
         if is_session_id(query):
             session_id = query
+        elif choice.startswith(NEW_SESSION):
+            directory = choice[len(NEW_SESSION) :]
+            return Pick(directory) if os.path.isdir(directory) else f"Not a directory: {self.paths.tilde(directory)}"
         elif view != "projects":
             session_id = choice
         if session_id:
@@ -638,6 +739,20 @@ class Picker:
 def _restored(group: Group) -> list:
     latest = group.latest
     return [len(group), latest.at if latest else 0.0, sorted(group.reasons)]
+
+
+def is_inside(path: str, directory: str) -> bool:
+    """`path` is `directory` or somewhere inside it."""
+    path, directory = os.path.normpath(path), os.path.normpath(directory)
+    return path == directory or path.startswith(directory.rstrip("/") + "/")
+
+
+def _action(name: str, arg: str) -> str:
+    """An fzf action with an argument, in brackets the argument doesn't close."""
+    for o, c in _BRACKETS:
+        if c not in arg:
+            return f"{name}{o}{arg}{c}"
+    raise ValueError(f"no brackets for {arg!r}")
 
 
 def typed_path_like(query: str) -> bool:
@@ -711,13 +826,13 @@ def _cursor() -> int:
         return 1
 
 
-def _nth_match(fzf_path: str, rows: list[str], query: str, pos: int) -> str:
+def _nth_match(fzf_path: str, rows: list[str], query: str, pos: int, nth: str = NTH["projects"]) -> str:
     """The first field of the pos-th row fzf matches `query` to, or ""."""
     if not query:
         matched = rows
     else:
         done = subprocess.run(
-            [fzf_path, f"--filter={query}", *MATCHING],
+            [fzf_path, f"--filter={query}", *MATCHING, f"--nth={nth}"],
             input="".join(r + "\n" for r in rows),
             capture_output=True,
             text=True,

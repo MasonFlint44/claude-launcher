@@ -112,15 +112,16 @@ def _ui(run: Path, action: str, args: list[str]) -> int:
             return 0
         print(result, file=sys.stderr)
         return 1
-    if action == "accept":
-        picker.on_accept(arg)
-        return 0
     if action == "change":
         out = picker.on_change(arg)
+    elif action == "enter":
+        out = picker.on_enter(arg, args[1] if len(args) > 1 else "")
     elif action == "tab":
         out = picker.on_tab(arg)
-    elif action == "shift-tab":
-        out = picker.on_shift_tab(arg)
+    elif action == "sessions":
+        out = picker.on_sessions()
+    elif action == "result":
+        out = picker.on_result(arg)
     elif action == "dismiss":
         out = picker.on_dismiss(arg)
     elif action == "key":

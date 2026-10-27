@@ -23,6 +23,7 @@ KEYS = {
     "up": b"\x1b[A",
     "ctrl-c": b"\x03",
     "ctrl-d": b"\x04",
+    "ctrl-s": b"\x13",
     "ctrl-u": b"\x15",
     "ctrl-x": b"\x18",
     "alt-x": b"\x1bx",

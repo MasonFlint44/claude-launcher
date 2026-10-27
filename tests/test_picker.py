@@ -119,13 +119,15 @@ class TestProjects:
         p, opts = start(env)
         assert (env.run / "rows").read_text().splitlines()[1].startswith(str(env.home) + "\t")
         assert "--header-lines=1" in opts and "--with-nth=2.." in opts and "--nth=1" in opts
-        assert any(o.startswith("--bind=enter:execute-silent(") for o in opts)
+        assert any(o.startswith("--bind=enter:transform:") for o in opts)
+        assert any(o.startswith("--bind=ctrl-s:transform:") for o in opts)
+        assert not any(o.startswith("--bind=btab") for o in opts)
         assert any(o.startswith(f"--listen={env.run}/fzf.sock") for o in opts)
 
     def test_notes_dont_match(self, env):
         project(env, "a", NOW - 600)
         start(env)
-        env.picker().on_accept(str(env.home))
+        assert env.picker().on_enter(str(env.home), "ago") == "accept"
         assert env.picker().pick("ago") == "Nothing matches: ago"
 
 
@@ -283,10 +285,11 @@ class TestPathMode:
         p, _ = start(env, cols=110)
         p.on_change("~/git/claude-launcher/")
         lines = strip_ansi(p.make_header()).split("\n")
-        assert lines[0].endswith("enter open   tab complete   shift-tab dir sessions   esc back")
+        assert lines[0].endswith("enter open   tab complete   ctrl-s sessions   esc back")
         assert lines[1].endswith("ctrl-u clear") and width(lines[1]) == 107
         p.on_change("abc")
-        assert "tab sessions" in strip_ansi(p.make_header())
+        assert "ctrl-s sessions   esc quit" in strip_ansi(p.make_header())
+        assert "shift-tab" not in strip_ansi(p.make_header())
 
 
 class TestPathKeys:
@@ -317,9 +320,22 @@ class TestPathKeys:
         assert p.on_tab("~/git/zzz") == ""  # no rows
         assert p.on_tab("~/nope/") == ""
 
-    def test_tab_outside_path_mode_switches_views(self, env):
+    def test_tab_in_the_plain_list_completes_the_highlighted_directory(self, env, monkeypatch):
+        make_dirs(env, "git/proj")
+        env.log(env.home / "git/proj", conversation("x", env.home / "git/proj"), mtime=NOW - 60)
         p, _ = start(env)
-        assert "No Claude sessions yet" in p.on_tab("abc")
+        monkeypatch.setenv("FZF_POS", "2")
+        assert p.on_tab("") == "change-query:~/git/proj/"
+        assert p.on_tab("pro") == ""  # the second row of what "pro" matches: none
+        monkeypatch.setenv("FZF_POS", "1")
+        assert p.on_tab("") == "change-query:~/"
+        assert p.on_tab("pro") == "change-query:~/git/proj/"
+
+    def test_tab_in_a_sessions_view_does_nothing(self, env):
+        env.log("/tmp", conversation("hello", "/tmp"))
+        p, _ = start(env)
+        p.on_sessions()
+        assert env.picker().on_tab("") == ""
 
     @pytest.mark.parametrize(
         ("query", "up"),
@@ -351,14 +367,14 @@ class TestPathKeys:
         make_dirs(env, "git/claude-launcher", "git/other")
         start(env)
         monkeypatch.setenv("FZF_POS", "1")
-        env.picker().on_accept(str(env.home / "git/claude-launcher"))
+        assert env.picker().on_enter(str(env.home / "git/claude-launcher"), "~/git/cla") == "accept"
         assert env.picker().pick("~/git/cla") == Pick(str(env.home / "git/claude-launcher"))
 
     def test_enter_on_the_typed_directory(self, env, monkeypatch):
         make_dirs(env, "git/x")
         start(env)
         monkeypatch.setenv("FZF_POS", "1")
-        env.picker().on_accept(str(env.home / "git"))
+        assert env.picker().on_enter(str(env.home / "git"), "~/git/") == "accept"
         assert env.picker().pick("~/git/") == Pick(str(env.home / "git"))
 
     def test_a_path_no_directory_matches_opens_nothing(self, env, monkeypatch):
@@ -374,14 +390,14 @@ class TestHeader:
         p, _ = start(env, cols=110)
         lines = strip_ansi(p.make_header()).split("\n")
         assert lines[0].startswith("Select a project directory for Claude")
-        assert lines[0].endswith("enter open   tab sessions   shift-tab dir sessions   esc quit")
+        assert lines[0].endswith("enter open   tab complete   ctrl-s sessions   esc quit")
         assert width(lines[0]) == 107 and lines[1] == " "
 
     def test_narrow_window_moves_extra_hints_under(self, env):
         p, _ = start(env, cols=90)
         lines = strip_ansi(p.make_header()).split("\n")
-        assert lines[0].endswith("enter open   tab sessions   esc quit")
-        assert lines[1] == " " * (87 - len("shift-tab dir sessions")) + "shift-tab dir sessions"
+        assert lines[0].endswith("enter open   ctrl-s sessions   esc quit")
+        assert lines[1] == " " * (87 - len("tab complete")) + "tab complete"
 
     def test_hints_keep_their_distance_from_the_title(self, env):
         make_dirs(env, "git/claude-launcher")
@@ -397,22 +413,32 @@ class TestHeader:
         p.on_change("~/git/claude-launcher/")
         lines = strip_ansi(p.make_header()).split("\n")
         assert lines[0].endswith("enter open   tab complete   esc back")
-        assert lines[1].endswith("shift-tab dir sessions   ctrl-u clear")
+        assert lines[1].endswith("ctrl-s sessions   ctrl-u clear")
 
     def test_very_narrow_window_puts_all_hints_under(self, env):
         p, _ = start(env, cols=40)
         lines = strip_ansi(p.make_header()).split("\n")
         assert lines[0] == "Select a project directory for Claude"
         assert [line.strip() for line in lines[1:3]] == [
-            "enter open   tab sessions",
-            "shift-tab dir sessions   esc quit",
+            "enter open   tab complete",
+            "ctrl-s sessions   esc quit",
         ]
         assert all(width(line) <= 37 for line in lines)
 
     def test_sessions_hints(self, env):
         p, _ = start(env, cols=100)
-        p.on_tab()
-        assert strip_ansi(p.make_header()).split("\n")[0].endswith("enter resume   tab/esc back to projects")
+        p.on_sessions()
+        assert strip_ansi(p.make_header()).split("\n")[0].endswith("enter resume   esc back")
+
+    def test_directory_sessions_hints(self, env, monkeypatch):
+        d = project(env, "proj", NOW - 60)
+        env.paths.state.mkdir(parents=True)
+        env.paths.restored.write_text(json.dumps({sid_in(env, d): closed(NOW - 300)}))
+        p, _ = start(env, cols=120)
+        monkeypatch.setenv("FZF_POS", "2")
+        p.on_enter(str(d), "")
+        hints = "   ".join(line.strip() for line in strip_ansi(p.make_header()).split("\n")[1:2])
+        assert hints == "enter resume   ctrl-x dismiss ↻   alt-x dismiss all   ctrl-s all sessions   esc back"
 
     def test_press_again_keeps_the_header_height(self, env):
         p, _ = start(env, cols=90)
@@ -431,9 +457,9 @@ class TestHeader:
         env.paths.restored.write_text(json.dumps({sid: closed(NOW - 300)}))
         p, _ = start(env)
         lines = strip_ansi(p.make_header()).split("\n")
-        assert lines[1].strip() == "shift-tab dir sessions"
+        assert lines[1].strip() == "tab complete"
         assert "1 session was open when your computer restarted" in lines[2]
-        assert lines[2].endswith("tab to see them")
+        assert lines[2].endswith("ctrl-s to see them")
 
     def test_logout_nudge(self, env):
         a = env.log("/tmp", conversation("a", "/tmp"))
@@ -442,7 +468,7 @@ class TestHeader:
         env.paths.restored.write_text(json.dumps({a: closed(NOW - 300, "logout"), b: closed(NOW - 600, "logout")}))
         p, _ = start(env)
         assert "2 sessions were open when your session ended" in strip_ansi(p.make_header())
-        p.on_tab()
+        p.on_sessions()
         assert "↻ open when your session ended" in strip_ansi(p.make_header())
 
     def test_mixed_nudge(self, env):
@@ -455,23 +481,23 @@ class TestHeader:
 
 
 class TestSessions:
-    def test_tab_toggles(self, env):
+    def test_ctrl_s_toggles(self, env):
         env.log("/tmp", conversation("hello", "/tmp"))
         p, _ = start(env)
-        out = p.on_tab()
-        assert out.startswith("clear-query+change-prompt(session> )+reload-sync(")
+        out = p.on_sessions()
+        assert out.startswith("clear-query+change-prompt(session> )+change-nth(2)+reload-sync(")
         assert "Recent Claude sessions" in out
         assert displayed(p.rows())[1].split()[-1] == "hello"
-        assert "Select a project directory" in env.picker().on_tab()
+        assert "Select a project directory" in env.picker().on_sessions()
 
     def test_no_sessions(self, env):
         p, _ = start(env)
-        assert "No Claude sessions yet" in p.on_tab()
+        assert "No Claude sessions yet" in p.on_sessions()
 
     def test_missing_directory_marked(self, env):
         env.log("/gone/proj", conversation("hello", "/gone/proj"))
         p, _ = start(env)
-        p.on_tab()
+        p.on_sessions()
         assert "proj (missing)" in displayed(p.rows())[1]
 
     def test_restart_group_first_and_marked(self, env):
@@ -480,32 +506,275 @@ class TestSessions:
         env.paths.state.mkdir(parents=True)
         env.paths.restored.write_text(json.dumps({older: closed(NOW - 300)}))
         p, _ = start(env)
-        p.on_tab()
+        p.on_sessions()
         shown = displayed(p.rows())
         assert shown[1].startswith("↻ ") and shown[1].endswith("open at restart")
         assert not shown[2].startswith("↻")
         assert shown[2].endswith("recent")
         assert "ctrl-x dismiss ↻" in strip_ansi(p.make_header())
 
-    def test_shift_tab_lists_one_directory(self, env):
-        a = project(env, "a", NOW - 60)
-        project(env, "b", NOW - 120)
+    def test_ages_and_marks_dont_match(self, env, monkeypatch):
+        d = project(env, "proj", NOW - 60)
+        sid = sid_in(env, d)
+        env.paths.state.mkdir(parents=True)
+        env.paths.restored.write_text(json.dumps({sid: closed(NOW - 300)}))
         p, _ = start(env)
-        assert "Claude sessions in" in p.on_shift_tab(str(a))
-        assert displayed(p.rows())[1].endswith("in a")
-        assert len(p.rows()) == 2
+        p.on_sessions()
+        for query in ("ago", "↻"):
+            assert env.picker().pick(query) == f"Nothing matches: {query}"
+        assert env.picker().pick("proj") == Pick(str(d), sid)  # the directory
+        assert env.picker().pick("in proj") == Pick(str(d), sid)  # the title
 
-    def test_long_directory_in_the_title_cut_from_the_left(self, env):
+    def test_new_session_row_matches_its_name(self, env, monkeypatch):
+        d = project(env, "proj", NOW - 60)
+        start(env)
+        monkeypatch.setenv("FZF_POS", "2")
+        env.picker().on_enter(str(d), "")
+        (env.run / "accept").write_text("1\n\n")  # Enter on what "new" matched
+        assert env.picker().pick("new") == Pick(str(d))
+        assert env.picker().pick("ago") == "Nothing matches: ago"
+
+    def test_each_view_tells_fzf_what_to_match(self, env):
+        p, opts = start(env)
+        assert "--nth=1" in opts
+        assert "+change-nth(2)+" in p.on_sessions()
+        assert "+change-nth(1)+" in env.picker().on_sessions()
+
+    def test_long_directory_in_the_title_cut_from_the_left(self, env, monkeypatch):
         d = project(env, "/".join(["directory"] * 12), NOW - 60)
         p, _ = start(env, cols=60)
-        p.on_shift_tab(str(d))
+        monkeypatch.setenv("FZF_POS", "2")
+        p.on_enter(str(d), "")
         title = strip_ansi(p.make_header()).split("\n")[0]
         assert title.startswith("Claude sessions in …") and title.endswith("directory/directory")
         assert width(title) == 57
 
-    def test_shift_tab_ignores_a_session_row(self, env):
+
+def sid_in(env, d):
+    return next(p.stem for p in env.paths.log_dirs_for(str(d))[0].glob("*.jsonl"))
+
+
+# Before the test logs' message timestamps, so a log's mtime is when it was last active.
+EARLY = 1_700_000_000.0
+
+
+class TestDirectorySessions:
+    """Enter on a directory: its sessions, and those anywhere inside it."""
+
+    def enter(self, env, monkeypatch, row, query="", pos=1):
+        monkeypatch.setenv("FZF_POS", str(pos))
+        return env.picker().on_enter(str(row), query)
+
+    def test_enter_shows_a_directorys_sessions(self, env, monkeypatch):
+        a = project(env, "a", NOW - 60)
+        project(env, "b", NOW - 120)
+        start(env)
+        out = self.enter(env, monkeypatch, a, pos=2)
+        assert "Claude sessions in" in out
+        rows = env.picker().rows()
+        assert displayed(rows)[1] == "  + New session"
+        assert displayed(rows)[2].split()[2:] == ["a", "in", "a"]
+        assert keys(rows) == [f"+{a}", sid_in(env, a)]
+
+    def test_enter_takes_the_row_at_the_cursor_from_the_final_query(self, env, monkeypatch):
+        a = project(env, "alpha", NOW - 60)
+        project(env, "beta", NOW - 120)
+        start(env)
+        # fzf hadn't caught up with the paste: it reported home as highlighted.
+        assert "Claude sessions in" in self.enter(env, monkeypatch, env.home, "alpha")
+        assert env.picker().state.dir == str(a)
+
+    def test_enter_opens_a_directory_without_sessions(self, env, monkeypatch):
+        make_dirs(env, "new")
+        start(env)
+        assert self.enter(env, monkeypatch, env.home / "new", "~/new") == "accept"
+        assert env.picker().pick("~/new") == Pick(str(env.home / "new"))
+
+    def test_sessions_the_picker_leaves_out_dont_count(self, env, monkeypatch):
+        make_dirs(env, "quiet")
+        env.log(env.home / "quiet", [{"type": "mode", "mode": "normal"}])  # no messages
+        start(env)
+        assert self.enter(env, monkeypatch, env.home / "quiet", "~/quiet") == "accept"
+
+    def test_sessions_only_in_a_subdirectory_count(self, env, monkeypatch):
+        make_dirs(env, "proj/sub")
+        env.log(env.home / "proj/sub", conversation("deeper", env.home / "proj/sub"), mtime=EARLY - 60)
+        start(env)
+        assert "Claude sessions in" in self.enter(env, monkeypatch, env.home / "proj", "~/proj")
+        assert displayed(env.picker().rows())[2].split()[2:] == ["proj/sub", "deeper"]
+
+    def test_any_depth_and_nothing_outside(self, env, monkeypatch):
+        make_dirs(env, "proj/a/b", "project-other")
+        here = env.log(env.home / "proj", conversation("here", env.home / "proj"), mtime=EARLY - 600)
+        deep = env.log(env.home / "proj/a/b", conversation("deep", env.home / "proj/a/b"), mtime=EARLY - 60)
+        env.log(env.home / "project-other", conversation("sibling", env.home / "project-other"), mtime=EARLY - 30)
+        start(env)
+        self.enter(env, monkeypatch, env.home / "proj", "~/proj")
+        assert keys(env.picker().rows()) == [f"+{env.home / 'proj'}", deep, here]
+
+    def test_restart_group_first_then_newest_first(self, env, monkeypatch):
+        make_dirs(env, "proj/sub")
+        old = env.log(env.home / "proj", conversation("old", env.home / "proj"), mtime=EARLY - 9000)
+        mid = env.log(env.home / "proj", conversation("mid", env.home / "proj"), mtime=EARLY - 600)
+        new = env.log(env.home / "proj/sub", conversation("new", env.home / "proj/sub"), mtime=EARLY - 60)
+        group = env.log(env.home / "proj/sub", conversation("open", env.home / "proj/sub"), mtime=EARLY - 99000)
+        env.paths.state.mkdir(parents=True)
+        env.paths.restored.write_text(json.dumps({group: closed(NOW - 300)}))
+        start(env)
+        self.enter(env, monkeypatch, env.home / "proj", "~/proj")
+        assert keys(env.picker().rows())[1:] == [group, new, mid, old]
+
+    def test_home_follows_the_same_rule(self, env, monkeypatch):
+        make_dirs(env, "x")
+        at_home = env.log(env.home, conversation("at home", env.home), mtime=EARLY - 600)
+        inside = env.log(env.home / "x", conversation("inside", env.home / "x"), mtime=EARLY - 60)
+        env.log("/tmp", conversation("elsewhere", "/tmp"), mtime=EARLY - 30)
+        start(env)
+        self.enter(env, monkeypatch, env.home)
+        rows = env.picker().rows()
+        assert keys(rows) == [f"+{env.home}", inside, at_home]
+        assert [r.split()[2] for r in displayed(rows)[2:]] == ["~/x", "~"]
+
+    def test_root_holds_everything(self, env, monkeypatch):
+        env.log("/tmp", conversation("elsewhere", "/tmp"), mtime=EARLY - 30)
+        env.log(env.home, conversation("at home", env.home), mtime=EARLY - 60)
+        start(env)
+        self.enter(env, monkeypatch, "/", "/")
+        rows = env.picker().rows()
+        assert [r.split()[2] for r in displayed(rows)[2:]] == ["/tmp", "~"]
+
+    def test_directory_column_starts_at_the_directorys_name(self, env, monkeypatch):
+        make_dirs(env, "git/proj/tests")
+        env.log(env.home / "git/proj", conversation("a", env.home / "git/proj"), mtime=EARLY - 600)
+        env.log(env.home / "git/proj/tests", conversation("b", env.home / "git/proj/tests"), mtime=EARLY - 60)
+        start(env)
+        self.enter(env, monkeypatch, env.home / "git/proj", "~/git/proj")
+        assert [r.split()[2] for r in displayed(env.picker().rows())[2:]] == ["proj/tests", "proj"]
+
+    def test_a_pasted_session_id_resumes(self, env, monkeypatch):
+        d = project(env, "proj", NOW - 60)
+        sid = sid_in(env, d)
+        start(env)
+        assert self.enter(env, monkeypatch, "", sid) == "accept"
+        assert env.picker().pick(sid) == Pick(str(d), sid)
+
+    def test_a_session_row_is_accepted(self, env, monkeypatch):
+        start(env)
+        assert self.enter(env, monkeypatch, "0b2f0000-0000-0000-0000-000000000000") == "accept"
+
+    def test_new_session_row_starts_a_new_session(self, env, monkeypatch):
+        d = project(env, "proj", NOW - 60)
+        start(env)
+        self.enter(env, monkeypatch, d, pos=2)
+        assert self.enter(env, monkeypatch, f"+{d}") == "accept"
+        assert env.picker().pick("") == Pick(str(d))
+
+    def test_a_session_resumes_in_its_own_directory(self, env, monkeypatch):
+        make_dirs(env, "proj/sub")
+        sid = env.log(env.home / "proj/sub", conversation("x", env.home / "proj/sub"), mtime=EARLY - 60)
+        start(env)
+        self.enter(env, monkeypatch, env.home / "proj", "~/proj")
+        self.enter(env, monkeypatch, sid, pos=2)
+        assert env.picker().pick("") == Pick(str(env.home / "proj/sub"), sid)
+
+    def test_second_enter_ahead_of_the_rows_starts_a_new_session(self, env, monkeypatch):
+        d = project(env, "proj", NOW - 60)
+        start(env)
+        self.enter(env, monkeypatch, d, pos=2)
+        # fzf still showed the directory row when the second Enter came.
+        assert self.enter(env, monkeypatch, d, pos=2) == "accept"
+        assert env.picker().pick("") == Pick(str(d))
+
+    def test_new_session_row_can_be_filtered_out(self, env, monkeypatch):
+        d = project(env, "proj", NOW - 60)
+        start(env)
+        self.enter(env, monkeypatch, d, pos=2)
+        (env.run / "accept").unlink()
+        assert env.picker().pick("zzzz") == "Nothing matches: zzzz"
+
+    def test_going_back_puts_the_search_and_cursor_back(self, env, monkeypatch):
+        project(env, "proj-a", NOW - 60)
+        b = project(env, "proj-b", NOW - 120)
+        start(env)
+        self.enter(env, monkeypatch, b, "proj", pos=2)
+        out = env.picker().on_key("esc", "")
+        assert out.startswith("rebind(result)+change-query(proj)+change-prompt(project> )+change-nth(1)+reload-sync(")
+        assert env.picker().state.query == "proj"
+        # The cursor goes back once the list's rows are in, not a Sessions view's.
+        assert env.picker().on_result(sid_in(env, b)) == ""
+        assert env.picker().on_result("") == ""  # the old rows, filtered with the list's search
+        assert env.picker().on_result(str(b)) == "pos(2)+unbind(result)"
+        assert env.picker().on_result(str(b)) == "unbind(result)"
+
+    def test_going_back_from_all_sessions_too(self, env, monkeypatch):
+        project(env, "proj-b", EARLY - 120)
+        project(env, "proj-a", EARLY - 60)
+        start(env)
+        monkeypatch.setenv("FZF_POS", "3")
+        env.picker().on_change("proj")
+        env.picker().on_sessions()
+        out = env.picker().on_sessions()
+        assert out.startswith("rebind(result)+change-query(proj)+")
+        assert env.picker().on_result("x") == "pos(3)+unbind(result)"
+
+    def test_enter_right_behind_going_back(self, env, monkeypatch):
+        a = project(env, "proj-a", EARLY - 120)
+        b = project(env, "proj-b", EARLY - 60)
+        start(env)
+        self.enter(env, monkeypatch, a, "proj", pos=2)
+        env.picker().on_key("esc", "")
+        # fzf still showed the Sessions view's rows, with the cursor on the first session.
+        out = self.enter(env, monkeypatch, sid_in(env, b), "proj", pos=2)
+        assert "Claude sessions in" in out and env.picker().state.dir == str(a)
+        assert env.picker().state.back == ["proj", 2]
+
+    def test_typing_before_the_list_is_back_drops_the_old_cursor(self, env, monkeypatch):
+        a = project(env, "proj-a", EARLY - 120)
+        project(env, "proj-b", EARLY - 60)
+        start(env)
+        self.enter(env, monkeypatch, a, "proj", pos=2)
+        env.picker().on_key("esc", "")
+        env.picker().on_change("proj-")
+        assert env.picker().on_result(str(a)) == "unbind(result)"
+
+    def test_a_pasted_session_id_beats_a_late_row(self, env, monkeypatch):
+        d = project(env, "proj", EARLY - 60)
+        sid = sid_in(env, d)
+        start(env)
+        self.enter(env, monkeypatch, d, pos=2)
+        (env.run / "accept").write_text(f"1\n{d}\n")  # fzf still showed the directory row
+        assert env.picker().pick(sid) == Pick(str(d), sid)
+
+    def test_a_query_with_brackets_goes_back_intact(self, env, monkeypatch):
+        d = project(env, "a(b)", NOW - 60)
+        start(env)
+        self.enter(env, monkeypatch, d, "a(b)")
+        assert env.picker().on_key("esc", "").startswith("change-query[a(b)]+")
+
+    def test_typing_the_restored_query_doesnt_reload_again(self, env, monkeypatch):
+        make_dirs(env, "git/proj")
+        env.log(env.home / "git/proj", conversation("x", env.home / "git/proj"), mtime=EARLY - 60)
+        start(env)
+        env.picker().on_change("~/git/p")
+        self.enter(env, monkeypatch, env.home / "git/proj", "~/git/p")
+        env.picker().on_key("esc", "")
+        assert env.picker().on_change("~/git/p").startswith("change-header:")
+
+    def test_ctrl_s_from_a_directorys_sessions_shows_all(self, env, monkeypatch):
+        d = project(env, "proj", NOW - 60)
+        env.log("/tmp", conversation("elsewhere", "/tmp"), mtime=EARLY - 30)
+        start(env)
+        self.enter(env, monkeypatch, d, pos=2)
+        assert "Recent Claude sessions" in env.picker().on_sessions()
+        assert len(keys(env.picker().rows())) == 2
+
+    def test_a_failed_pick_starts_the_list_fresh(self, env, monkeypatch):
+        d = project(env, "proj", NOW - 60)
         p, _ = start(env)
-        assert p.on_shift_tab("0b2f0000-0000-0000-0000-000000000000") == ""
+        self.enter(env, monkeypatch, d, "proj")
+        p = env.picker()
+        p.start(100, again=True)
+        assert p.state.query == ""
 
 
 class TestKeys:
@@ -542,7 +811,7 @@ class TestKeys:
 
     def test_esc_in_sessions_goes_back(self, env):
         p, _ = start(env)
-        p.on_tab()
+        p.on_sessions()
         assert "Select a project directory" in env.picker().on_key("esc", "x")
 
     def test_change_reloads_only_for_paths(self, env):
@@ -558,7 +827,7 @@ class TestKeys:
         env.paths.state.mkdir(parents=True)
         env.paths.restored.write_text(json.dumps({a: closed(NOW - 300), b: closed(NOW - 300)}))
         p, _ = start(env)
-        p.on_tab()
+        p.on_sessions()
         env.picker().on_key("alt-x", "")
         out = env.picker().on_key("alt-x", "")
         assert out.startswith("reload-sync(")
@@ -575,15 +844,15 @@ class TestKeys:
         env.paths.state.mkdir(parents=True)
         env.paths.restored.write_text(json.dumps({a: closed(NOW - 300), b: closed(NOW - 300)}))
         p, _ = start(env)
-        p.on_tab()
+        p.on_sessions()
         assert env.picker().on_dismiss(a).startswith("reload-sync(")
         assert list(json.loads(env.paths.restored.read_text())) == [b]
 
 
 class TestPick:
     def accept(self, env, row, pos=1, monkeypatch=None):
-        monkeypatch.setenv("FZF_POS", str(pos))
-        env.picker().on_accept(row)
+        """What Enter leaves for pick() when fzf exits."""
+        (env.run / "accept").write_text(f"{pos}\n{row}\n")
 
     def test_enter_on_home(self, env, monkeypatch):
         start(env)
@@ -614,18 +883,18 @@ class TestPick:
 
     def test_resume_a_session_row(self, env, monkeypatch):
         d = project(env, "proj", NOW - 60)
-        sid = next(p.stem for p in env.paths.log_dirs_for(str(d))[0].glob("*.jsonl"))
+        sid = sid_in(env, d)
         env.paths.state.mkdir(parents=True, exist_ok=True)
         env.paths.restored.write_text(json.dumps({sid: closed(NOW - 300)}))
         p, _ = start(env)
-        p.on_tab()
+        p.on_sessions()
         self.accept(env, sid, monkeypatch=monkeypatch)
         assert env.picker().pick("") == Pick(str(d), sid)
         assert json.loads(env.paths.restored.read_text()) == {}  # resuming takes it out of the group
 
     def test_pasted_session_id(self, env, monkeypatch):
         d = project(env, "proj", NOW - 60)
-        sid = next(p.stem for p in env.paths.log_dirs_for(str(d))[0].glob("*.jsonl"))
+        sid = sid_in(env, d)
         start(env)
         self.accept(env, "", monkeypatch=monkeypatch)
         assert env.picker().pick(sid) == Pick(str(d), sid)
@@ -639,7 +908,7 @@ class TestPick:
         monkeypatch.setattr("time.sleep", lambda s: None)
         sid = env.log("/gone/proj", conversation("x", "/gone/proj"))
         p, _ = start(env)
-        p.on_tab()
+        p.on_sessions()
         self.accept(env, sid, monkeypatch=monkeypatch)
         assert env.picker().pick("") == Pick(str(env.home), sid)
         assert "not found, so resuming from ~" in capsys.readouterr().err
@@ -655,7 +924,7 @@ class TestPick:
 
     def test_no_sessions_to_resume(self, env):
         p, _ = start(env)
-        p.on_tab()
+        p.on_sessions()
         assert env.picker().pick("") == "No sessions to resume"
 
 

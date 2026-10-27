@@ -78,6 +78,15 @@ def launch(claude_home, tmp_path):
         t.close()
 
 
+def quit_with_esc(t: Term) -> None:
+    # Wait for the first press to show before the second: two Escs that reach
+    # fzf together count as one press, and a busy machine can delay the first.
+    t.send("esc")
+    t.wait_for("esc again to quit")
+    t.send("esc")
+    assert t.wait_exit() == 0
+
+
 def test_enter_opens_home_then_comes_back(launch, claude_home):
     t = launch()
     t.wait_for("Select a project directory for Claude")
@@ -211,21 +220,121 @@ def test_resume_from_the_sessions_view(launch, claude_home, tmp_path):
     sid = claude_home.log(proj, conversation("the session to resume", proj))
     t = launch()
     t.wait_for("Select a project directory for Claude")
-    t.send("tab")
+    t.send("ctrl-s")
     t.wait_for("the session to resume")
     t.send("enter")
     t.wait_for("fake claude in")
     assert launch.calls() == [(str(proj), f"--resume {sid}")]
 
 
-def test_tab_and_esc_go_back(launch, claude_home):
+def test_ctrl_s_and_esc_go_back(launch, claude_home):
     claude_home.log("/tmp", conversation("hello", "/tmp"))
     t = launch()
     t.wait_for("Select a project directory for Claude")
-    t.send("tab")
+    t.send("ctrl-s")
+    t.wait_for("Recent Claude sessions")
+    t.send("ctrl-s")
+    t.wait_for("Select a project directory for Claude")
+    t.send("ctrl-s")
     t.wait_for("Recent Claude sessions")
     t.send("esc")
     t.wait_for("Select a project directory for Claude")
+
+
+def project_with_a_session(claude_home, path, title="an earlier session"):
+    path.mkdir(parents=True, exist_ok=True)
+    return claude_home.log(path, conversation(title, path))
+
+
+def test_enter_shows_a_directorys_sessions_and_enter_again_starts_a_new_one(launch, claude_home, tmp_path):
+    proj = tmp_path / "proj"
+    project_with_a_session(claude_home, proj)
+    t = launch()
+    t.wait_for("Select a project directory for Claude")
+    t.type("proj")
+    t.send("enter")
+    t.wait_for("Claude sessions in")
+    t.wait_for("+ New session")
+    t.wait_for("an earlier session")
+    t.send("enter")
+    t.wait_for("Select a project directory for Claude")
+    assert launch.calls() == [(str(proj), "")]
+
+
+def test_two_enters_at_once_start_a_new_session(launch, claude_home, tmp_path):
+    proj = tmp_path / "proj"
+    project_with_a_session(claude_home, proj)
+    t = launch()
+    t.wait_for("Select a project directory for Claude")
+    t.type("proj")
+    os.write(t.fd, b"\r\r")  # quicker than anyone presses Enter twice
+    t.wait_for("fake claude in")
+    assert launch.calls() == [(str(proj), "")]
+
+
+def test_enter_on_a_directory_without_sessions_opens_it(launch, claude_home):
+    (claude_home.home / "fresh").mkdir()
+    t = launch()
+    t.wait_for("Select a project directory for Claude")
+    t.type("~/fresh")
+    t.send("enter")
+    t.wait_for("fake claude in")
+    assert launch.calls() == [(str(claude_home.home / "fresh"), "")]
+
+
+def test_resume_from_a_directorys_sessions(launch, claude_home, tmp_path):
+    proj = tmp_path / "proj"
+    sid = project_with_a_session(claude_home, proj)
+    t = launch()
+    t.wait_for("Select a project directory for Claude")
+    t.type("proj")
+    t.send("enter")
+    t.wait_for("an earlier session")
+    t.send("down", "enter")
+    t.wait_for("Select a project directory for Claude")
+    assert launch.calls() == [(str(proj), f"--resume {sid}")]
+
+
+def test_a_subdirectorys_session_resumes_there(launch, claude_home):
+    sub = claude_home.home / "proj" / "sub"
+    sid = project_with_a_session(claude_home, sub, "in the subdirectory")
+    t = launch()
+    t.wait_for("Select a project directory for Claude")
+    t.type("~/proj")
+    t.send("enter")
+    t.wait_for("Claude sessions in ~/proj")
+    t.wait_for("proj/sub")
+    t.send("down", "enter")
+    t.wait_for("fake claude in")
+    assert launch.calls() == [(str(sub), f"--resume {sid}")]
+
+
+def test_esc_goes_back_to_the_same_row_and_search(launch, claude_home, tmp_path):
+    for name in ("proj-a", "proj-b"):  # proj-b is newer, so it's first
+        project_with_a_session(claude_home, tmp_path / name)
+    t = launch()
+    t.wait_for("Select a project directory for Claude")
+    t.type("proj")
+    t.send("down", "enter")
+    t.wait_for("Claude sessions in")
+    assert "proj-a" in t.text().splitlines()[0]
+    t.send("esc")
+    t.wait_for("Select a project directory for Claude")
+    t.wait_for("proj-b")
+    t.send("enter")  # on the same row again: proj-a, not the first row
+    t.wait_for("Claude sessions in")
+    assert "proj-a" in t.text().splitlines()[0]
+
+
+def test_tab_completes_from_the_plain_list(launch, claude_home):
+    project_with_a_session(claude_home, claude_home.home / "git" / "proj")
+    (claude_home.home / "git" / "proj" / "src").mkdir()
+    t = launch()
+    t.wait_for("Select a project directory for Claude")
+    t.type("proj")
+    t.send("tab")
+    t.wait_for("> ~/git/proj/")
+    t.wait_for("~/git/proj/src")
 
 
 def test_options_pass_through(launch, claude_home):
@@ -279,8 +388,7 @@ def test_resume_unknown_session_on_the_command_line(launch):
 def test_colors_switched_and_restored(launch):
     t = launch()
     t.wait_for("Select a project directory for Claude")
-    t.send("esc", "esc")
-    t.wait_exit()
+    quit_with_esc(t)
     raw = bytes(t.raw)
     asked = raw.find(b"\x1b]11;?")
     applied = raw.find(b"\x1b]11;#1f1e1d")
@@ -293,8 +401,7 @@ def test_cleans_up_its_run_directory(launch):
     t = launch()
     t.wait_for("Select a project directory for Claude")
     assert list(launch.runtime.iterdir())
-    t.send("esc", "esc")
-    t.wait_exit()
+    quit_with_esc(t)
     assert list(launch.runtime.iterdir()) == []
 
 
