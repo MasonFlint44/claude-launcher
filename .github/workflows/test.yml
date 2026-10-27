@@ -14,9 +14,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
-      - run: uvx ruff check src tests libexec/claude-launcher-core
-      - run: uvx ruff format --check src tests libexec/claude-launcher-core
-      - run: shellcheck bin/* install.sh tests/docker/run.sh tests/docker/*/*.sh
+      - run: uvx ruff check src tests bin/claude-launcher libexec/claude-launcher-core
+      - run: uvx ruff format --check src tests bin/claude-launcher libexec/claude-launcher-core
+      - run: shellcheck bin/claude-session-hook install.sh tests/docker/run.sh tests/docker/*/*.sh
 
   distro:
     runs-on: ubuntu-latest

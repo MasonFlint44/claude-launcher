@@ -6,9 +6,10 @@ A project and session picker for Claude Code on Linux (Ubuntu, systemd), plus a 
 
 | Path | Role |
 |---|---|
-| `bin/claude-launcher` | Bash. Sets the tab's colors and title, runs fzf with the options Python gives it, starts `claude`, loops. Keep it thin: no logic that could live in Python. |
+| `bin/claude-launcher` | Python. Runs `launcher.main()`; nothing else. |
 | `bin/claude-session-hook` | Bash. Claude Code SessionStart/SessionEnd hook. Runs on every session start and end. |
-| `libexec/claude-launcher-core` | Entry script for the Python package. bash, fzf's key bindings and install.sh call it; it isn't on PATH. |
+| `libexec/claude-launcher-core` | Entry script for the Python package. fzf's key bindings and install.sh call it; it isn't on PATH. |
+| `src/claude_launcher/launcher.py` | The loop: sets the tab's colors and title, runs fzf with the options the picker gives it, starts `claude`, comes back. Signals: see its docstring. |
 | `src/claude_launcher/cli.py` | Subcommands for the entry script. Arguments are parsed by hand, because they include fzf's query and claude's own options. |
 | `src/claude_launcher/picker.py` | The picker: rows, headers, what each key does, and what Enter chose. Its state lives in a per-run directory (see the module docstring). |
 | `src/claude_launcher/logs.py` | Reading Claude's session logs: the sessions list, titles, directories. |
@@ -27,9 +28,9 @@ A project and session picker for Claude Code on Linux (Ubuntu, systemd), plus a 
 ```bash
 uv run pytest                    # everything (about 20 s)
 uv run pytest -m "not e2e"       # skip the pseudo-terminal tests
-uvx ruff check src tests libexec/claude-launcher-core
-uvx ruff format src tests libexec/claude-launcher-core
-shellcheck bin/* install.sh tests/docker/run.sh tests/docker/*/*.sh
+uvx ruff check src tests bin/claude-launcher libexec/claude-launcher-core
+uvx ruff format src tests bin/claude-launcher libexec/claude-launcher-core
+shellcheck bin/claude-session-hook install.sh tests/docker/run.sh tests/docker/*/*.sh
 tests/docker/run.sh distro       # in Docker: 8 distros (about 5 min)
 tests/docker/run.sh terminals    # every terminal, live (about 1 min)
 tests/docker/run.sh systemd      # logout and restart, systemd 249 to 262 (about 3 min)
@@ -51,7 +52,7 @@ Run the first five before calling a change done; run the Docker layer a change t
 - **`themes/claude-dark` is the one source of the colors.** The desktop launcher loads it, `theme.py` turns it into escapes, and the picker takes its accent and dim colors from it. Don't copy hex values into code.
 - **This repo stays independent.** It doesn't know about, or integrate with, other session tools. It ships no Anthropic artwork (logos, Clawd): the default icon is original, and people who want something else use `install.sh --icon`.
 - **Terminals stay a short table** (`TERMINALS` in `platforms/linux/terminals.py`). Add one only if it can run the launcher with options, a profile, or a remote control, and check from its source (or by running it) what a new tab inherits before claiming "every tab". Profiles are the only change made to a terminal's settings, and uninstall must take them out. Ptyxis treats the first profile as the default when its default doesn't name one, so a fresh Ptyxis gets a plain default profile before ours. Ptyxis paints its own background and ignores OSC 11 (it accepts it, but never shows it), so our Ptyxis profile also gets a Claude Dark palette, written from `themes/claude-dark` into Ptyxis's palettes directory; in other Ptyxis tabs only the text colors change. Guake's `-e` types into the current tab and, with `-n`, skips making the tab: two calls. Yakuake was left out: its only show is a toggle. All seven are tested live in `tests/docker/terminals`; Ghostty, Ptyxis, Guake and kitty also on a real GNOME desktop.
-- **Keep the user's terminal intact.** Colors: ask first (queries, then a device-attributes request as the end marker, never a guessed timeout), change only what the terminal reported, and on exit reset, ask again, and set back anything still off (Konsole has no reset for text and background colors). Write colors as `#rrggbb`; Konsole can't read `rgb:`. Don't detect terminals by environment variables: they're inherited (a terminal started from Ghostty has `TERM_PROGRAM=ghostty`). The one exception is GNU screen (`STY`), skipped on purpose: it forwards only the background, to the outer terminal for every window, with no reset. tmux is fine: per-pane colors, tested live with 3.6. Don't add an INT trap to `bin/claude-launcher`: Ctrl-C belongs to fzf and Claude.
+- **Keep the user's terminal intact.** Colors: ask first (queries, then a device-attributes request as the end marker, never a guessed timeout), change only what the terminal reported, and on exit reset, ask again, and set back anything still off (Konsole has no reset for text and background colors). Write colors as `#rrggbb`; Konsole can't read `rgb:`. Don't detect terminals by environment variables: they're inherited (a terminal started from Ghostty has `TERM_PROGRAM=ghostty`). The one exception is GNU screen (`STY`), skipped on purpose: it forwards only the background, to the outer terminal for every window, with no reset. tmux is fine: per-pane colors, tested live with 3.6. Ctrl-C belongs to fzf and Claude: the launcher ignores it while either runs, with a handler rather than `SIG_IGN` (an ignored signal stays ignored in the child). A hang-up or TERM is acted on once fzf or Claude exits, as a shell does, so Claude is never left running on its own; after a hang-up nothing is put back, since the terminal is gone.
 - **Claude may be the native binary or npm's package run by node**, whose process name is "MainThread". Recognize it by its command line (`is_claude` in `platforms/linux/host.py`, and in the hook), never by process name.
 
 ## Writing style

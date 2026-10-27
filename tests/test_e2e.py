@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import signal
 
 import pytest
 
@@ -22,6 +23,10 @@ HOOK = REPO_DIR / "bin" / "claude-session-hook"
 FAKE_CLAUDE = """#!/usr/bin/env bash
 printf '%s\\t%s\\n' "$PWD" "$*" >> "$CLAUDE_CALLS"
 echo "fake claude in $PWD"
+if [[ -n ${CLAUDE_HOLD:-} ]]; then  # stay until that file exists, like a Claude in use
+  trap 'echo "claude got ctrl-c"' INT
+  until [[ -e $CLAUDE_HOLD ]]; do sleep 0.05; done
+fi
 sleep 0.3
 """
 
@@ -54,8 +59,8 @@ def launch(claude_home, tmp_path):
     }
     terms = []
 
-    def start(*args: str) -> Term:
-        t = Term([str(LAUNCHER), *args], env, cwd=str(claude_home.home))
+    def start(*args: str, **more_env: str) -> Term:
+        t = Term([str(LAUNCHER), *args], {**env, **more_env}, cwd=str(claude_home.home))
         terms.append(t)
         return t
 
@@ -421,3 +426,48 @@ def test_tab_titled_while_picking_and_put_back(launch):
     first = raw.find(named)
     again = raw.find(named, raw.find(b"fake claude in"))
     assert 0 <= pushed < first < again < popped
+
+
+def test_ctrl_c_belongs_to_claude(launch, tmp_path):
+    hold = tmp_path / "hold"
+    t = launch(CLAUDE_HOLD=str(hold))
+    t.wait_for("Select a project directory for Claude")
+    t.send("enter")
+    t.wait_for("fake claude in")
+    t.send("ctrl-c")
+    t.wait_for("claude got ctrl-c")
+    hold.touch()
+    t.wait_for("Select a project directory for Claude")  # the launcher is still there
+    quit_with_esc(t)
+
+
+def test_hang_up_leaves_the_terminal_alone(launch):
+    t = launch()
+    t.wait_for("Select a project directory for Claude")
+    os.killpg(t.pid, signal.SIGHUP)  # as the kernel does when the terminal goes: fzf too
+    assert t.wait_exit() == 129
+    assert b"\x1b]111" not in bytes(t.raw)  # no colors put back
+    assert list(launch.runtime.iterdir()) == []
+
+
+def test_hang_up_while_claude_runs_waits_for_claude(launch, tmp_path):
+    hold = tmp_path / "hold"
+    t = launch(CLAUDE_HOLD=str(hold))
+    t.wait_for("Select a project directory for Claude")
+    t.send("enter")
+    t.wait_for("fake claude in")
+    os.kill(t.pid, signal.SIGHUP)  # the launcher alone: its Claude is still running
+    t.settle(0.5)
+    assert t.status is None
+    hold.touch()
+    assert t.wait_exit() == 129
+
+
+def test_term_puts_the_colors_back(launch):
+    t = launch()
+    t.wait_for("Select a project directory for Claude")
+    os.killpg(t.pid, signal.SIGTERM)
+    assert t.wait_exit() == 143
+    raw = bytes(t.raw)
+    assert 0 <= raw.find(b"\x1b]11;#1f1e1d") < raw.rfind(b"\x1b]111\x1b\\")
+    assert list(launch.runtime.iterdir()) == []

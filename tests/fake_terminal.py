@@ -84,3 +84,6 @@ class FakeTerminal:
         for fd in (self.slave, self.master):
             with contextlib.suppress(OSError):
                 os.close(fd)
+        # Wait for the reader to stop: a test that forks a pty next would
+        # otherwise fork a process with a thread still running.
+        self._thread.join(timeout=2)
