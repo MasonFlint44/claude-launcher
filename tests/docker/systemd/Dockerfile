@@ -6,14 +6,19 @@ COPY packages.sh /tmp/packages.sh
 RUN sh /tmp/packages.sh && rm /tmp/packages.sh
 # Whether the distro keeps the journal across boots on its own (a directory
 # /var/log/journal), noted before the one below is made.
+# Fedora's /etc/shadow has no permission bits (0000), so only root's
+# DAC_OVERRIDE capability reads it, and on GitHub's runners that fails
+# (EACCES), so the user manager's PAM account check can't find tester.
+# Owner-read lets root read it as on Debian (0640) and Arch (0600).
 RUN if [ -d /var/log/journal ]; then echo yes; else echo no; fi > /etc/journal-dir-from-package \
  && mkdir -p /var/log/journal \
  && { old=$(getent passwd 1000 | cut -d: -f1); [ -z "$old" ] || userdel -r "$old"; } \
  && useradd -m -u 1000 -s /bin/bash tester \
+ && if [ "$(stat -c %a /etc/shadow)" = 0 ]; then chmod 0400 /etc/shadow; fi \
  && rm -f /etc/machine-id && systemd-machine-id-setup \
  && ln -sf "$(readlink -f /usr/bin/python3)" /usr/local/bin/claude \
- && systemctl mask systemd-firstboot.service systemd-resolved.service systemd-timesyncd.service \
-      systemd-networkd.service console-getty.service getty@tty1.service systemd-homed.service 2>/dev/null || true
+ && { systemctl mask systemd-firstboot.service systemd-resolved.service systemd-timesyncd.service \
+      systemd-networkd.service console-getty.service getty@tty1.service systemd-homed.service 2>/dev/null || true; }
 # A login session's PAM stack: logind's pam_systemd plus pam_loginuid, which
 # gives the session its audit ID (what the hook reads from /proc/<pid>/sessionid).
 COPY pam-claude-test /etc/pam.d/claude-test
