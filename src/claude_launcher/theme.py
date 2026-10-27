@@ -13,17 +13,17 @@ rgb:rr/gg/bb).
 
 from __future__ import annotations
 
-import contextlib
 import json
 import os
 import re
-import select
-import termios
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from .paths import THEME_FILE
+
+if TYPE_CHECKING:
+    from .platforms import Host
 
 _HEX = re.compile(r"^#?([0-9a-fA-F]{6})$")
 _ST = "\x1b\\"  # string terminator
@@ -144,37 +144,17 @@ def normalize(value: str) -> str | None:
     return "#" + "".join(f"{c:02x}" for c in channels)
 
 
-@contextlib.contextmanager
-def _quiet(fd: int):
-    """The terminal without echo or line buffering, so its replies can be read
-    as they come and aren't shown."""
-    old = termios.tcgetattr(fd)
-    new = list(old)
-    new[3] &= ~(termios.ECHO | termios.ICANON)
-    new[6] = list(new[6])
-    new[6][termios.VMIN], new[6][termios.VTIME] = 0, 0
-    termios.tcsetattr(fd, termios.TCSANOW, new)
-    try:
-        yield
-    finally:
-        termios.tcsetattr(fd, termios.TCSANOW, old)
-
-
-def ask(fd: int, slots) -> dict[str, str] | None:
+def ask(fd: int, slots, host: Host | None = None) -> dict[str, str] | None:
     """The terminal's current colors for `slots`, as {slot: #rrggbb}, leaving
     out any it didn't report. None if it didn't answer at all."""
-    with _quiet(fd):
-        os.write(fd, b"".join(_osc(f"{slot};?") for slot in slots) + b"\x1b[c")
-        buf = b""
-        end = time.monotonic() + REPLY_TIMEOUT
-        while not _DA1_REPLY.search(buf):
-            left = end - time.monotonic()
-            if left <= 0 or not select.select([fd], [], [], left)[0]:
-                return None
-            chunk = os.read(fd, 4096)
-            if not chunk:
-                return None
-            buf += chunk
+    if host is None:
+        from .platforms import current
+
+        host = current().host
+    query = b"".join(_osc(f"{slot};?") for slot in slots) + b"\x1b[c"
+    buf = host.terminal_reply(fd, query, _DA1_REPLY, REPLY_TIMEOUT)
+    if buf is None:
+        return None
     found = {}
     for slot, value in _REPLY.findall(buf):
         color = normalize(value.decode(errors="replace"))

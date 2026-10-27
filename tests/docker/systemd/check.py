@@ -109,9 +109,9 @@ def sort(group: bool) -> dict[str, list] | None:
 JOURNAL_PROBE = """
 import json, sys
 sys.path.insert(0, "/src/src")
-from claude_launcher.journal import Journal
+from claude_launcher.platforms.linux.journal import Journal
+from claude_launcher.restart import normalize_boot_id
 j = Journal()
-from claude_launcher.journal import normalize_boot_id
 boot = normalize_boot_id(sys.argv[1])
 logouts = j.logouts(boot, "tester")
 print(json.dumps({

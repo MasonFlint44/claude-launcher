@@ -150,3 +150,20 @@ def test_npm_install(run_hook, as_):
 
 def test_some_other_node_program(run_hook):
     assert run_hook(("start", {"session_id": SID}), as_=("node", "some-app/index.js")) == {}
+
+
+def test_records_are_what_the_launcher_reads(run_hook, tmp_path):
+    """The hook's half of the record format: restart.Record loads what it
+    writes, with this boot's ID as the platform's Host reports it."""
+    from claude_launcher.platforms import current
+    from claude_launcher.restart import Record, normalize_boot_id
+
+    records = run_hook(("start", {"session_id": SID}), ("end", {"session_id": SID, "reason": "other"}))
+    (name,) = records
+    path = tmp_path / "record.json"
+    path.write_text(json.dumps(records[name]))
+    record = Record.load(path)
+    assert record is not None
+    assert record.session_id == SID
+    assert record.boot_id == normalize_boot_id(current().host.boot_id())
+    assert record.ended is not None and record.started <= record.ended

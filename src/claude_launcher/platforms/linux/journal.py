@@ -8,6 +8,9 @@ import subprocess
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
+from ...restart import normalize_boot_id
+from ..base import Event
+
 # logind's "System is rebooting." / "System is powering down." message. It's
 # logged before GNOME closes the windows, so it marks when the restart began.
 SHUTDOWN_MESSAGE_ID = "98268866d1d54a499c4e98921d93bc40"
@@ -50,11 +53,6 @@ class Logout:
     removed: float  # when logind removed it (at, if the journal doesn't say)
     session_id: str
     graphical: bool  # a desktop session, whose end closes every terminal window
-
-
-def normalize_boot_id(boot_id: str) -> str:
-    """Boot IDs as the journal writes them: /proc has dashes, journalctl doesn't."""
-    return boot_id.replace("-", "").lower()
 
 
 class Journal:
@@ -208,3 +206,46 @@ class Journal:
             except (ValueError, KeyError, TypeError):
                 continue
         return min(times) if times else None
+
+
+# A session's processes can linger long after it logs out, so logind's
+# "Removed session" can come much later; past this, the logout is treated as
+# over. See restart.LEAD and TAIL for the margins on either side.
+SPAN_MAX = 30
+
+
+class JournalEvents:
+    """The restarts and logouts that close terminals, from the systemd journal:
+
+    - Restart: from logind's shutdown message (or, after a crash or power
+      cut, the boot's last journal entry) to the end of that boot.
+    - Logout: your desktop session ending (your systemd user manager stopping
+      graphical-session.target, just before the windows close), or logind's
+      "logged out" for a desktop session of yours or for the login session
+      Claude itself ran in (an SSH session, say), to logind removing that
+      session.
+    - Without logind's shutdown message (after a crash, or when only your own
+      journal can be read), a restart starts at the boot's last journal entry.
+      With only your own journal, that's often your desktop session ending, so
+      a logout followed later by a restart may be counted as the restart.
+    """
+
+    def __init__(self, journal: Journal, user: Callable[[], str]):
+        self.journal = journal
+        self._user = user
+
+    def events(self, record, same_boot: bool) -> list[Event] | None:
+        logouts = self.journal.logouts(record.boot_id, self._user())
+        if logouts is None:
+            return None
+        events = [
+            Event(e.at, min(e.removed, e.at + SPAN_MAX), "logout")
+            for e in logouts
+            if e.graphical or (record.login_session and e.session_id == record.login_session)
+        ]
+        events += [Event(t, t, "logout") for t in self.journal.desktop_ends(record.boot_id)]
+        if not same_boot:
+            restart = self.journal.restart_time(record.boot_id)
+            if restart is not None:
+                events.append(Event(restart, self.journal.last_entry(record.boot_id) or restart, "restart"))
+        return events

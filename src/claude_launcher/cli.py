@@ -39,10 +39,9 @@ def _resume_dir(args: list[str]) -> int:
 
 
 def _tty() -> int | None:
-    try:
-        return os.open("/dev/tty", os.O_RDWR | os.O_NOCTTY)
-    except OSError:
-        return None
+    from .platforms import current
+
+    return current().host.open_tty()
 
 
 def _theme(run: Path, action: str) -> int:

@@ -2,12 +2,11 @@ import json
 
 import pytest
 
-from claude_launcher.journal import Journal
 from claude_launcher.picker import Pick, Picker
 from claude_launcher.restart import RestartState
 from claude_launcher.text import strip_ansi, width
 from claude_launcher.theme import Theme
-from conftest import conversation
+from conftest import FakeEvents, FakeHost, conversation
 
 NOW = 1_800_000_000.0
 
@@ -32,11 +31,9 @@ def env(claude_home, tmp_path):
     run.mkdir()
     restart = RestartState(
         claude_home.paths,
-        Journal(lambda args: None),
+        FakeEvents(),
+        FakeHost(),
         now=clock,
-        boot_id=lambda: "b",
-        boot_start=lambda now: now - 60,
-        running=lambda pid: False,
     )
     restored = []
 

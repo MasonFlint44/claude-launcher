@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import uuid
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
@@ -81,3 +83,45 @@ def claude_home(tmp_path: Path, monkeypatch) -> ClaudeHome:
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(paths.config))
     return ClaudeHome(paths)
+
+
+@dataclass
+class FakeHost:
+    """A platform Host with the machine's facts set by the test."""
+
+    boot: str = "b"
+    started: Callable[[float], float] = lambda now: now - 60
+    running: set = field(default_factory=set)
+    name: str = "me"
+
+    def boot_id(self) -> str:
+        return self.boot
+
+    def boot_start(self, now: float) -> float:
+        return self.started(now)
+
+    def claude_running(self, pid: object) -> bool:
+        return pid in self.running
+
+    def user(self) -> str:
+        return self.name
+
+    def lock(self, path: Path):
+        return contextlib.nullcontext()
+
+    def open_tty(self):
+        return None
+
+    def terminal_reply(self, fd, query, done, timeout):
+        return None
+
+
+@dataclass
+class FakeEvents:
+    """A platform EventSource: the same events for every record, or None for
+    a system that can't be asked."""
+
+    found: list | None = None
+
+    def events(self, record, same_boot):
+        return None if self.found is None else list(self.found)
