@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import shlex
+
+from ...paths import CORE
 from ..base import Platform
 from .host import LinuxHost
 
@@ -20,4 +23,12 @@ def _setup():
 
 def platform() -> Platform:
     host = LinuxHost()
-    return Platform(name="linux", host=host, events=lambda: _events(host), setup=_setup)
+    return Platform(
+        name="linux",
+        host=host,
+        events=lambda: _events(host),
+        setup=_setup,
+        fzf_os="linux",
+        fzf_shell="bash -c",
+        core_command=lambda args: shlex.join([str(CORE), *args]),
+    )

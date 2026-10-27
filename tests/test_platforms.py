@@ -11,6 +11,21 @@ import pytest
 from claude_launcher import platforms
 
 
+def platform(name, **parts):
+    return platforms.Platform(
+        **{
+            "name": name,
+            "host": None,
+            "events": lambda: None,
+            "setup": lambda: None,
+            "fzf_os": "x",
+            "fzf_shell": "sh -c",
+            "core_command": " ".join,
+            **parts,
+        }
+    )
+
+
 @pytest.fixture
 def fresh(monkeypatch):
     monkeypatch.setattr(platforms, "_current", None)
@@ -32,7 +47,7 @@ def test_a_forks_platform_comes_first(fresh, monkeypatch):
     name = "claude_launcher.platforms.fork"
     fork = types.ModuleType(name)
     fork.__spec__ = importlib.machinery.ModuleSpec(name, None)
-    mine = platforms.Platform("mine", host=None, events=lambda: None, setup=lambda: None)
+    mine = platform("mine", setup=lambda: None)
     fork.platform = lambda: mine
     monkeypatch.setitem(sys.modules, name, fork)
     assert platforms.current() is mine
@@ -46,7 +61,7 @@ def test_the_core_runs_a_platforms_own_commands(fresh, monkeypatch, capsys):
     class Setup:
         commands = {"hello": lambda args: calls.append(args) or 7}
 
-    mine = platforms.Platform("mine", host=None, events=lambda: None, setup=Setup)
+    mine = platform("mine", setup=Setup)
     monkeypatch.setattr(platforms, "_current", mine)
     assert cli.main(["hello", "a", "b"]) == 7
     assert calls == [["a", "b"]]

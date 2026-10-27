@@ -105,3 +105,11 @@ class Platform:
     # Made only when needed, like events: only install.sh and the platform's
     # own commands use it.
     setup: Callable[[], Setup]
+    # fzf's name for this OS in its release files ("linux"), for the build
+    # install.sh fetches when the system's fzf is too old.
+    fzf_os: str
+    # The shell fzf runs key bindings with (its --with-shell), and the core's
+    # command line with these arguments, quoted for that shell. Key presses
+    # read both from the picker's state, so they never load the platform.
+    fzf_shell: str
+    core_command: Callable[[list[str]], str]

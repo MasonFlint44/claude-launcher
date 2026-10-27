@@ -65,7 +65,9 @@ def _install(action: str, args: list[str]) -> int:
         return 0
     if action == "fetch-fzf":
         try:
-            path = fzf.fetch(fzf.private_dir())
+            from .platforms import current
+
+            path = fzf.fetch(fzf.private_dir(), system=current().fzf_os)
         except (OSError, RuntimeError, KeyError) as e:
             print(e, file=sys.stderr)
             return 1

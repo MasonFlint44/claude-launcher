@@ -61,14 +61,17 @@ def tarball(content=b"#!/bin/sh\necho '0.74.5 (pinned)'\n", name="fzf"):
 
 
 class TestFetch:
+    NAME = f"fzf-{fzf.PINNED}-linux_amd64.tar.gz"
+
+    def pin(self, monkeypatch, data):
+        monkeypatch.setattr(fzf, "checksums", lambda path=None: {self.NAME: hashlib.sha256(data).hexdigest()})
+
     def test_verified_and_installed(self, tmp_path, monkeypatch):
         data = tarball()
-        monkeypatch.setitem(fzf.PINNED_BUILDS, "x86_64", ("linux_amd64", hashlib.sha256(data).hexdigest()))
+        self.pin(monkeypatch, data)
         urls = []
         path = fzf.fetch(tmp_path / "bin", machine="x86_64", download=lambda url: urls.append(url) or data)
-        assert urls == [
-            f"https://github.com/junegunn/fzf/releases/download/v{fzf.PINNED}/fzf-{fzf.PINNED}-linux_amd64.tar.gz"
-        ]
+        assert urls == [f"https://github.com/junegunn/fzf/releases/download/v{fzf.PINNED}/{self.NAME}"]
         assert fzf.version(str(path)) == (0, 74, 5)
         assert [p.name for p in (tmp_path / "bin").iterdir()] == ["fzf"]
 
@@ -77,16 +80,31 @@ class TestFetch:
             fzf.fetch(tmp_path / "bin", machine="x86_64", download=lambda url: tarball())
         assert not (tmp_path / "bin" / "fzf").exists()
 
-    def test_no_build_for_this_machine(self, tmp_path):
+    @pytest.mark.parametrize(("system", "machine"), [("linux", "sparc64"), ("plan9", "x86_64")])
+    def test_no_build_for_this_machine(self, tmp_path, system, machine):
         with pytest.raises(RuntimeError, match="no fzf"):
-            fzf.fetch(tmp_path / "bin", machine="riscv64", download=lambda url: b"")
+            fzf.fetch(tmp_path / "bin", system=system, machine=machine, download=lambda url: b"")
 
     def test_tarball_without_fzf(self, tmp_path, monkeypatch):
         data = tarball(name="README")
-        monkeypatch.setitem(fzf.PINNED_BUILDS, "x86_64", ("linux_amd64", hashlib.sha256(data).hexdigest()))
+        self.pin(monkeypatch, data)
         with pytest.raises(KeyError):
             fzf.fetch(tmp_path / "bin", machine="x86_64", download=lambda url: data)
 
-    def test_pinned_checksums_look_right(self):
-        for build, sha256 in fzf.PINNED_BUILDS.values():
-            assert build.startswith("linux_") and len(sha256) == 64
+
+class TestPinnedRelease:
+    def test_the_checksums_file_is_the_pinned_release(self):
+        sums = fzf.checksums()
+        assert sums and all(fzf.PINNED in name and len(sha) == 64 for name, sha in sums.items())
+
+    @pytest.mark.parametrize(
+        ("machine", "build"),
+        [
+            ("x86_64", "linux_amd64"),
+            ("aarch64", "linux_arm64"),
+            ("armv7l", "linux_armv7"),
+            ("riscv64", "linux_riscv64"),
+        ],
+    )
+    def test_linux_builds(self, machine, build):
+        assert fzf.build_name("linux", machine) == f"fzf-{fzf.PINNED}-{build}.tar.gz"

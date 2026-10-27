@@ -33,7 +33,6 @@ from __future__ import annotations
 import contextlib
 import json
 import os
-import shlex
 import socket
 import subprocess
 import sys
@@ -41,9 +40,10 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from . import fzf, logs, text
+from . import fzf, logs, pathtext, text
 from .logs import is_session_id
-from .paths import CORE, Paths
+from .paths import Paths
+from .pathtext import expand, first_part, is_inside, split_path, typed_path_like, up_a_level, with_sep, without_sep
 from .restart import Group, RestartState
 from .text import color, pad, truncate, truncate_left
 from .text import width as text_width
@@ -82,6 +82,9 @@ class State:
     back: list | None = None  # [query, cursor] the directory list had when left
     pending_pos: int = 0  # the cursor to put back once the list's rows are in
     fzf: str = "fzf"  # the fzf program the picker runs
+    # How key bindings run the core, from the platform when the picker starts.
+    shell: str = ""  # fzf's --with-shell
+    core: str = ""  # the core's command line, with --run DIR
 
 
 @dataclass
@@ -114,7 +117,6 @@ class Picker:
         theme: Theme | None = None,
         restart: RestartState | None = None,
         now=time.time,
-        core: Path = CORE,
         restore_later=None,
     ):
         self.run = Path(run_dir)
@@ -122,10 +124,23 @@ class Picker:
         self.theme = theme or Theme.load()
         self.restart = restart or RestartState(self.paths)
         self.now = now
-        self.core = shlex.join([str(core), "--run", str(self.run)])
         self._restore_later = restore_later or _restore_header_later
         self.state = self._load_state()
         self._scanned: tuple[list[logs.Session], dict[str, str]] | None = None
+
+    @property
+    def core(self) -> str:
+        """The core's command line, as key bindings run it."""
+        if not self.state.core:  # only before start(), which sets it
+            self._from_platform()
+        return self.state.core
+
+    def _from_platform(self) -> None:
+        from .platforms import current
+
+        platform = current()
+        self.state.shell = platform.fzf_shell
+        self.state.core = platform.core_command(["--run", str(self.run)])
 
     # --- State ---------------------------------------------------------------
 
@@ -265,7 +280,7 @@ class Picker:
             if os.path.isdir(expand(typed) or ""):
                 title, path = "Directories in ", typed
             else:
-                title, path = "No such directory: ", typed.rstrip("/") or "/"
+                title, path = "No such directory: ", without_sep(typed)
         path = text.printable(path)
         return title + truncate_left(path, max(10, self.state.width - 3 - text_width(title))) if path else title
 
@@ -340,7 +355,7 @@ class Picker:
         parent_own, parent_inside = 0.0, none
         own: dict[str, float] = {}  # name: when Claude last ran in it
         inside: dict[str, tuple[float, str]] = {}  # name: (when, where) for the latest project inside it
-        prefix = parent.rstrip("/") + "/"
+        prefix = with_sep(parent)
         for directory, used in self._projects():
             directory = os.path.normpath(directory)
             if not used:
@@ -352,7 +367,7 @@ class Picker:
             rest = directory[len(prefix) :]
             if used > parent_inside[0]:
                 parent_inside = (used, rest)
-            name, _, deeper = rest.partition("/")
+            name, deeper = first_part(rest)
             if not deeper:
                 own[name] = max(own.get(name, 0.0), used)
             elif used > inside.get(name, none)[0]:
@@ -443,7 +458,7 @@ class Picker:
             return text.printable(os.path.relpath(cwd, os.path.dirname(within)))
         if cwd == home:
             return "~"
-        return text.printable(os.path.basename(cwd.rstrip("/")) or cwd)
+        return text.printable(pathtext.name(cwd))
 
     def rows(self, view: str | None = None, query: str | None = None) -> list[str]:
         view = view or self.state.view
@@ -502,6 +517,7 @@ class Picker:
                 self._file(name).unlink(missing_ok=True)
             group = self.restart.sort()
             self.state = State(restored=_restored(group), fzf=path)
+            self._from_platform()
             self._build_projects()
         self.state.cols = cols
         self.state.width = min(cols, MAX_WIDTH)
@@ -527,7 +543,7 @@ class Picker:
             "--info=inline-right",
             f"--margin=0,{self.state.cols - self.state.width},0,0",
             f"--listen={self._file('fzf.sock')}",
-            "--with-shell=bash -c",
+            f"--with-shell={self.state.shell}",
             f"--bind=change:transform:{c} ui change {{q}}",
             "--bind=start:unbind(result)",  # bound only while a cursor waits to be put back
             f"--bind=result:transform:{c} ui result {{1}}",
@@ -568,11 +584,11 @@ class Picker:
             rows = self.directories(query)
             key = _nth_match(self.state.fzf, [self._dir_row(d) for d in rows], query, _cursor())
             row = next((d for d in rows if d.path == key and not d.is_parent), None)
-            return f"change-query:{row.shown}/" if row else ""
+            return f"change-query:{with_sep(row.shown)}" if row else ""
         key = _nth_match(self.state.fzf, self.projects_rows(query)[1:], query, _cursor())
         if not key or not os.path.isdir(key):
             return ""
-        return f"change-query:{self.paths.tilde(key).rstrip('/')}/"
+        return f"change-query:{with_sep(self.paths.tilde(key))}"
 
     def on_sessions(self) -> str:
         """Ctrl-S: every session; from there, back to the directory list."""
@@ -741,51 +757,12 @@ def _restored(group: Group) -> list:
     return [len(group), latest.at if latest else 0.0, sorted(group.reasons)]
 
 
-def is_inside(path: str, directory: str) -> bool:
-    """`path` is `directory` or somewhere inside it."""
-    path, directory = os.path.normpath(path), os.path.normpath(directory)
-    return path == directory or path.startswith(directory.rstrip("/") + "/")
-
-
 def _action(name: str, arg: str) -> str:
     """An fzf action with an argument, in brackets the argument doesn't close."""
     for o, c in _BRACKETS:
         if c not in arg:
             return f"{name}{o}{arg}{c}"
     raise ValueError(f"no brackets for {arg!r}")
-
-
-def typed_path_like(query: str) -> bool:
-    return query.startswith(("/", "~"))
-
-
-def split_path(query: str) -> tuple[str, str]:
-    """A typed path split into the directory so far (ending in /) and the
-    start of a name in it. `~` and `~user` on their own are that home."""
-    if query.startswith("~") and "/" not in query:
-        return query + "/", ""
-    head, _, partial = query.rpartition("/")
-    return head + "/", partial
-
-
-def expand(typed: str) -> str | None:
-    """The directory a typed path names, or None for an unknown ~user."""
-    path = os.path.expanduser(typed)
-    return None if path.startswith("~") else os.path.normpath(path)
-
-
-def up_a_level(query: str) -> str:
-    """Esc in path mode: drop a half-typed name, else the last directory.
-    "" once there's nothing left above (~/, / or ~user)."""
-    head, partial = split_path(query)
-    if partial:
-        return head
-    if "/" not in query:  # ~ or ~user
-        return ""
-    above = head.rstrip("/")
-    if not above or above.startswith("~") and "/" not in above:
-        return ""
-    return above.rpartition("/")[0] + "/"
 
 
 def _is_dir(entry: os.DirEntry) -> bool:

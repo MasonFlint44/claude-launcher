@@ -8,6 +8,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import pathtext
+
 # Claude names a project's log directory after its path, with every character
 # other than a letter or digit turned into "-". A name longer than this is cut
 # to this length and given a hash suffix.
@@ -80,9 +82,4 @@ class Paths:
 
     def tilde(self, directory: str) -> str:
         """`directory` with the home directory shown as ~."""
-        home = str(self.home)
-        if directory == home:
-            return "~"
-        if directory.startswith(home + "/"):
-            return "~" + directory[len(home) :]
-        return directory
+        return pathtext.tilde(directory, str(self.home))

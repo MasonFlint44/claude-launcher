@@ -23,13 +23,25 @@ import urllib.request
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
+from .paths import REPO_DIR
+
 MIN_VERSION = (0, 67, 0)
 PINNED = "0.74.5"
-# fzf_0.74.5_checksums.txt from the release, by `uname -m`.
-PINNED_BUILDS = {
-    "x86_64": ("linux_amd64", "d47d7f882972c7d674dbbba998ffa4116e68379616ffac7695d0671e9a722c5f"),
-    "aarch64": ("linux_arm64", "cf058001da21724a469b714a29cf4aab9cbe860d218a0d6c1b5b661efad7784c"),
-    "armv7l": ("linux_armv7", "dbf45f895a6b272725679b0aa46b5fc4683cc869ec89bbbd1c3a661304cecc34"),
+# The release's own checksums file, as it is. To move the pin, add the new
+# release's file and change PINNED.
+CHECKSUMS = REPO_DIR / "share" / "fzf" / f"fzf_{PINNED}_checksums.txt"
+# fzf's names for processors, by what platform.machine() says on each OS.
+ARCHES = {
+    "x86_64": "amd64",
+    "amd64": "amd64",
+    "aarch64": "arm64",
+    "arm64": "arm64",
+    "armv7l": "armv7",
+    "armv6l": "armv6",
+    "ppc64le": "ppc64le",
+    "riscv64": "riscv64",
+    "s390x": "s390x",
+    "loongarch64": "loong64",
 }
 _RELEASES = "https://github.com/junegunn/fzf/releases/download"
 
@@ -72,20 +84,38 @@ def find(env: Mapping[str, str] = os.environ) -> tuple[str | None, tuple[int, ..
     return None, newest
 
 
+def checksums(path: Path | None = None) -> dict[str, str]:
+    """{file name: sha256} from the pinned release's checksums file."""
+    found = {}
+    for line in (path or CHECKSUMS).read_text().splitlines():
+        parts = line.split()
+        if len(parts) == 2 and len(parts[0]) == 64:
+            found[parts[1]] = parts[0]
+    return found
+
+
+def build_name(system: str, machine: str) -> str | None:
+    """The release's file for this OS (fzf's name for it, like "linux") and
+    processor, or None if there's no build for it."""
+    arch = ARCHES.get(machine.lower())
+    name = f"fzf-{PINNED}-{system}_{arch}.tar.gz"
+    return name if arch and name in checksums() else None
+
+
 def fetch(
     dest: Path,
+    system: str = "linux",
     machine: str | None = None,
     download: Callable[[str], bytes] | None = None,
 ) -> Path:
     """Download the pinned fzf for this machine into `dest`, checking it
     against the release's checksum before it's used. Returns its path."""
     machine = machine or platform.machine()
-    if machine not in PINNED_BUILDS:
-        raise RuntimeError(f"no fzf {PINNED} build for {machine}; install fzf 0.67 or newer yourself")
-    build, sha256 = PINNED_BUILDS[machine]
-    name = f"fzf-{PINNED}-{build}.tar.gz"
+    name = build_name(system, machine)
+    if name is None:
+        raise RuntimeError(f"no fzf {PINNED} build for {system} on {machine}; install fzf 0.67 or newer yourself")
     data = (download or _download)(f"{_RELEASES}/v{PINNED}/{name}")
-    if hashlib.sha256(data).hexdigest() != sha256:
+    if hashlib.sha256(data).hexdigest() != checksums()[name]:
         raise RuntimeError(f"{name} didn't match its checksum; not using it")
     with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
         member = tar.getmember("fzf")
