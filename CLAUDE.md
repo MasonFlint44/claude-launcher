@@ -25,7 +25,7 @@ A project and session picker for Claude Code on Linux (Ubuntu, systemd), plus a 
 ## Commands
 
 ```bash
-uv run pytest                    # everything (about 10 s)
+uv run pytest                    # everything (about 20 s)
 uv run pytest -m "not e2e"       # skip the pseudo-terminal tests
 uvx ruff check src tests libexec/claude-launcher-core
 uvx ruff format src tests libexec/claude-launcher-core
@@ -40,7 +40,7 @@ Run the first five before calling a change done; run the Docker layer a change t
 ## Rules
 
 - **The runtime is the standard library.** The launcher runs on the system `python3` (3.10+) with no installed packages. pytest and pyte are dev-only (`[dependency-groups] dev`).
-- **Each key press runs the entry script once** (about 30 ms). Keep imports light and don't add work on the typing path: `on_change` reloads the list only while the query is a path.
+- **Each key press runs the entry script once** (about 30 ms). Keep imports light and don't add work on the typing path: `on_change` reloads the list only while the query is a path. In path mode a key runs it twice (about 45 ms), quicker than anyone types, so there's no debounce. fzf takes a paste (terminals send it in bracketed-paste markers) as one edit: one run, not one per character. In tests, `Term.type` types at a fast typist's pace and `Term.paste` pastes; writing a whole string at once would be typing thousands of keys a second.
 - **Path mode** (query starts with `/` or `~`): the title is "Directories in <typed>" and the rows are that directory, then its direct children (`Picker.directories`), one `scandir` per key press and no cap (14 ms for `/usr/bin`). Rows are `key<TAB>shown<TAB>note` and fzf matches only `shown` (`--with-nth=2.. --nth=1`, `--tabstop=1`), so notes never match a query. Say "directory", never "folder", in anything shown. Keep `MATCHING` the same in the picker and `_nth_match`. Tab and Esc only `change-query`; fzf's `change` event then reloads. Tab can reach fzf while it's still loading the rows (`{1}` is empty then), so Tab, like Enter, takes the row at `FZF_POS` from what the query matches.
 - **The hook stays bash, quick, and always exits 0.** No Python startup. Its record format is read by `restart.py`; change both together, with tests in `test_hook.py` and `test_restart.py`.
 - **fzf floor is 0.67** (`fzf.MIN_VERSION`): the first release whose `--listen` takes a Unix socket (0.66 and older reject it; before 0.45 there's no `transform`). Ubuntu 24.04 (0.44), Debian 12 (0.38) and Debian 13 (0.60) ship older ones, so install.sh fetches `fzf.PINNED` (checksums in `PINNED_BUILDS`) into `~/.local/share/claude-launcher/bin`, used only by the launcher. `fzf.find()` prefers the system's when it's new enough. To move the pin: update `PINNED` and the checksums from the release's checksums file, and run the tests with that build first on PATH (the e2e tests run whichever fzf is first). Test any new fzf feature against 0.67.

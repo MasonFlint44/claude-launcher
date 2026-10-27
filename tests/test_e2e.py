@@ -34,6 +34,12 @@ def launch(claude_home, tmp_path):
     fake = bin_dir / "claude"
     fake.write_text(FAKE_CLAUDE)
     fake.chmod(0o755)
+    # The launcher's Python runs through `env python3`; log each run.
+    core_calls = tmp_path / "core-calls"
+    system_python = shutil.which("python3", path="/usr/local/bin:/usr/bin:/bin")
+    python = bin_dir / "python3"
+    python.write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{core_calls}"\nexec {system_python} "$@"\n')
+    python.chmod(0o755)
     calls = tmp_path / "calls"
     runtime = tmp_path / "runtime"
     runtime.mkdir(mode=0o700)
@@ -58,7 +64,14 @@ def launch(claude_home, tmp_path):
             return []
         return [tuple(line.split("\t", 1)) for line in calls.read_text().splitlines()]
 
+    def core_runs(action: str) -> int:
+        """How many times the launcher's Python ran `ui <action>`."""
+        if not core_calls.exists():
+            return 0
+        return sum(f" ui {action}" in line for line in core_calls.read_text().splitlines())
+
     start.calls = claude_calls
+    start.core_runs = core_runs
     start.runtime = runtime
     yield start
     for t in terms:
@@ -86,18 +99,34 @@ def test_hint_comes_back_after_a_second(launch):
     t.wait_for("enter open", timeout=3)  # put back through fzf's --listen socket
 
 
-def test_typed_path(launch, tmp_path):
-    target = tmp_path / "some project"
+def test_typed_path(launch, claude_home):
+    target = claude_home.home / "some project"
     target.mkdir()
     t = launch()
     t.wait_for("Select a project directory for Claude")
-    t.type(str(target))
-    # Each character typed in a path runs the launcher twice (the title, then
-    # the list), so a long path pasted at once takes seconds on a slow machine.
-    t.wait_for("> " + str(target), timeout=20)
-    t.settle(0.5)
+    t.type("~/some project")
+    # Each key typed in a path runs the launcher twice (the title, then the
+    # list), about 45 ms in all: quicker than anyone types.
+    t.wait_for("> ~/some project")
     t.send("enter")
     t.wait_for("fake claude in")
+    assert launch.calls() == [(str(target), "")]
+
+
+def test_pasted_path_runs_the_launcher_once(launch, tmp_path):
+    target = tmp_path / "a long directory name to paste"
+    target.mkdir()
+    t = launch()
+    t.wait_for("Select a project directory for Claude")
+    before = launch.core_runs("change")
+    t.paste(str(target))
+    t.wait_for("> " + str(target))
+    t.wait_for("Directories in")
+    assert launch.core_runs("change") - before == 1
+    t.send("enter")
+    # Not "fake claude in": the test terminal has no alternate screen, so
+    # claude's line starts where fzf left the cursor, after the long query, and wraps.
+    t.wait_for("Select a project directory for Claude")
     assert launch.calls() == [(str(target), "")]
 
 

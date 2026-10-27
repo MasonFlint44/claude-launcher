@@ -97,8 +97,19 @@ class Term:
             os.write(self.fd, KEYS.get(key, key.encode()))
             self.settle(0.15)
 
-    def type(self, text: str) -> None:
-        os.write(self.fd, text.encode())
+    def type(self, text: str, gap: float = 0.05) -> None:
+        """Type one key at a time, a fast typist's pace. Writing the text in one
+        go would be typing at thousands of keys a second: fzf would handle each
+        key in turn, with the screen far behind."""
+        for ch in text:
+            os.write(self.fd, ch.encode())
+            self.settle(gap)
+        self.settle(0.3)
+
+    def paste(self, text: str) -> None:
+        """Paste the way terminals do, in bracketed-paste markers. fzf takes the
+        whole paste as one edit."""
+        os.write(self.fd, b"\x1b[200~" + text.encode() + b"\x1b[201~")
         self.settle(0.3)
 
     def wait_exit(self, timeout: float = 5.0) -> int:
