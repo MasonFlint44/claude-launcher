@@ -187,7 +187,13 @@ def start_session(name: str, kind: str) -> str:
     )
     if done.returncode != 0:
         print(done.stderr, flush=True)
-    wait(f"{name}'s Claude to start", lambda: sid in records())
+    if not wait(f"{name}'s Claude to start", lambda: sid in records()):
+        # Why: the session's and the user manager's state, for the CI log.
+        for argv in (
+            ("systemctl", "status", "--no-pager", f"login-{name}", f"user@{UID}.service"),
+            ("journalctl", "-b", "--no-pager", "-n", "40", "-u", f"login-{name}", "-u", f"user@{UID}.service"),
+        ):
+            print(sh(*argv).stdout, flush=True)
     return sid
 
 

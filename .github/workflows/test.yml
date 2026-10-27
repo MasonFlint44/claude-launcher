@@ -43,6 +43,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Ubuntu 24.04's AppArmor stops unconfined programs from making user
+      # namespaces; systemd's user manager uses them on some distros.
+      - run: if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0; fi
       - run: tests/docker/run.sh systemd
       - if: failure()
         run: cat tests/docker/.work/systemd-*.log

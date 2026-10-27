@@ -92,7 +92,9 @@ def test_typed_path(launch, tmp_path):
     t = launch()
     t.wait_for("Select a project directory for Claude")
     t.type(str(target))
-    t.wait_for("> " + str(target))
+    # Each character typed in a path runs the launcher twice (the title, then
+    # the list), so a long path pasted at once takes seconds on a slow machine.
+    t.wait_for("> " + str(target), timeout=20)
     t.settle(0.5)
     t.send("enter")
     t.wait_for("fake claude in")
@@ -125,7 +127,9 @@ def test_path_mode_esc_backs_up_to_the_start_screen(launch, claude_home):
     t.type("~/git/x")
     t.wait_for("> ~/git/x")
     t.send("esc")
-    t.wait_for("> ~/git/")
+    # The trailing space: "> ~/git/x" contains "> ~/git/". Two Escs that reach
+    # fzf together count as one, so wait until the first has done its part.
+    t.wait_for("> ~/git/ ")
     t.wait_for("Directories in ~/git/ ")
     t.send("esc")
     t.wait_for("Directories in ~/ ")
