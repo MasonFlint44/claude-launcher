@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import sys
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -125,3 +126,15 @@ class FakeEvents:
 
     def events(self, record, same_boot):
         return None if self.found is None else list(self.found)
+
+
+# tests/<platform>/ holds one platform's own tests; they run only on it.
+PLATFORM_TESTS = {"linux": "linux"}  # directory: sys.platform prefix
+
+
+def pytest_ignore_collect(collection_path, config):
+    tests = Path(__file__).parent
+    for directory, prefix in PLATFORM_TESTS.items():
+        if collection_path.is_relative_to(tests / directory) and not sys.platform.startswith(prefix):
+            return True
+    return None
