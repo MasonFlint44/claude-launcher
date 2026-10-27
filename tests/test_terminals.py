@@ -14,6 +14,7 @@ import pytest
 
 from claude_launcher import install, terminals
 from claude_launcher.terminals import APP_ID, PROFILE_UUID, TERMINALS, Context
+from claude_launcher.theme import Theme
 
 
 class FakeGSettings:
@@ -155,9 +156,33 @@ class TestProfiles:
         assert ctx.run.values[(profile, "label")] == "'Claude Code'"
         assert ctx.run.values[(profile, "use-custom-command")] == "true"
         assert ctx.run.values[(profile, "custom-command")] == terminals._gvariant_string(ctx.command)
+        assert ctx.run.values[(profile, "palette")] == f"'{APP_ID}'"
         assert TERMINALS["ptyxis"].exec_argv(ctx) == [
             "ptyxis", "--new-window", f"--tab-with-profile={PROFILE_UUID.hex}",
         ]  # fmt: skip
+
+    def test_ptyxis_palette_is_claude_dark(self, ctx):
+        # Ptyxis ignores a background set by a program, so the profile brings its own.
+        TERMINALS["ptyxis"].install(ctx)
+        keys = dict(
+            line.split("=", 1) for line in TERMINALS["ptyxis"].palette_file(ctx).read_text().splitlines() if "=" in line
+        )
+        theme = Theme.load(ctx.theme)
+        assert keys["Name"] == "Claude Dark"
+        assert keys["Background"] == theme.colors["background"] and keys["Foreground"] == theme.colors["foreground"]
+        assert keys["Cursor"] == theme.accent
+        assert [keys[f"Color{i}"] for i in range(16)] == [theme.palette[i] for i in range(16)]
+        palettes = ctx.data_home / "org.gnome.Ptyxis" / "palettes"
+        assert TERMINALS["ptyxis"].palette_file(ctx) == palettes / f"{APP_ID}.palette"
+
+    def test_ptyxis_palette_needs_every_color(self):
+        with pytest.raises(RuntimeError, match="Color15"):
+            terminals.ptyxis_palette(Theme.parse("background = #000000\nforeground = #ffffff\ncursor-color = #ff0000"))
+
+    def test_ptyxis_uninstall_removes_the_palette(self, ctx):
+        TERMINALS["ptyxis"].install(ctx)
+        TERMINALS["ptyxis"].uninstall(ctx)
+        assert not TERMINALS["ptyxis"].palette_file(ctx).exists()
 
     def test_ptyxis_keeps_its_default(self, ctx):
         ctx.run.values[("org.gnome.Ptyxis", "profile-uuids")] = "['aaaa', 'bbbb']"

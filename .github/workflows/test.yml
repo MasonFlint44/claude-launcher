@@ -1,0 +1,48 @@
+name: test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uvx ruff check src tests libexec/claude-launcher-core
+      - run: uvx ruff format --check src tests libexec/claude-launcher-core
+      - run: shellcheck bin/* install.sh tests/docker/run.sh tests/docker/*/*.sh
+
+  distro:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [ubuntu:22.04, ubuntu:24.04, ubuntu:26.04, debian:12, debian:13, fedora:42, fedora:43, archlinux:latest]
+    steps:
+      - uses: actions/checkout@v4
+      - run: tests/docker/run.sh distro ${{ matrix.image }}
+
+  terminals:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: tests/docker/run.sh terminals
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: terminals-logs
+          path: tests/docker/.work/
+
+  systemd:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: tests/docker/run.sh systemd
+      - if: failure()
+        run: cat tests/docker/.work/systemd-*.log

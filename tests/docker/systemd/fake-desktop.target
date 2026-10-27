@@ -1,0 +1,4 @@
+[Unit]
+Description=A desktop session, as GNOME and Plasma run theirs
+BindsTo=graphical-session.target
+Before=graphical-session.target

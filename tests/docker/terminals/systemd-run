@@ -1,0 +1,12 @@
+#!/bin/sh
+# Stand-in for `systemd-run --user --scope [options] COMMAND...`: there's no
+# systemd user manager in the container, and Ptyxis starts every tab's
+# command this way when systemd-run is installed. Runs COMMAND as it is.
+while [ $# -gt 0 ]; do
+  case $1 in
+    --) shift; break ;;
+    -*) shift ;;
+    *) break ;;
+  esac
+done
+exec "$@"

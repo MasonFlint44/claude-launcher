@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -28,6 +29,8 @@ SESSION_NEW_MESSAGE_ID = "8d45620c1a4348dbb17410da57c60c66"
 SESSION_REMOVED_MESSAGE_ID = "3354939424b4456d9802ca8333ed424a"
 SESSION_LOGGED_OUT_FUNC = "session_stop_scope"
 GRAPHICAL_TYPES = {"wayland", "x11", "mir"}
+
+_BOOT_ROW = re.compile(r"^\s*-?\d+\s+([0-9a-f]{32})\s", re.MULTILINE)
 
 Runner = Callable[[Sequence[str]], str | None]
 
@@ -62,8 +65,9 @@ class Journal:
         self._logouts: dict[tuple[str, str], list[Logout]] = {}
         self._desktop_ends: dict[str, list[float]] = {}
 
-    def _boots(self) -> dict[str, float] | None:
-        """{boot id: time of its last journal entry}, or None if the journal can't be read."""
+    def _boots(self) -> dict[str, float | None] | None:
+        """{boot id: time of its last journal entry}, or None if the journal
+        can't be read. A time is None until last_entry() looks it up."""
         if self._last_entries is False:
             self._last_entries = None
             out = self._run(["--list-boots", "-o", "json"])
@@ -76,7 +80,11 @@ class Journal:
                         if isinstance(b, dict) and "boot_id" in b and "last_entry" in b
                     }
                 except (ValueError, TypeError, KeyError):
-                    pass
+                    # Before systemd 251, --list-boots ignores -o and prints
+                    # "IDX BOOT_ID FIRST—LAST" in local time. Take the IDs; the
+                    # times come from each boot's last entry when needed.
+                    ids = _BOOT_ROW.findall(out)
+                    self._last_entries = dict.fromkeys(ids) if ids else None
         return self._last_entries  # type: ignore[return-value]
 
     @property
@@ -86,7 +94,16 @@ class Journal:
     def last_entry(self, boot_id: str) -> float | None:
         """When boot `boot_id` last logged anything, or None if the journal doesn't have it."""
         boots = self._boots()
-        return boots.get(normalize_boot_id(boot_id)) if boots else None
+        boot_id = normalize_boot_id(boot_id)
+        if not boots or boot_id not in boots:
+            return None
+        if boots[boot_id] is None:
+            out = self._run(["-b", boot_id, "-n", "1", "-o", "json", "--output-fields=__REALTIME_TIMESTAMP"])
+            try:
+                boots[boot_id] = int(json.loads(out or "")["__REALTIME_TIMESTAMP"]) / 1e6
+            except (ValueError, KeyError, TypeError):
+                return None
+        return boots[boot_id]
 
     def restart_time(self, boot_id: str) -> float | None:
         """When the restart that ended boot `boot_id` began: logind's shutdown
@@ -96,8 +113,7 @@ class Journal:
         boot_id = normalize_boot_id(boot_id)
         if boot_id in self._restarts:
             return self._restarts[boot_id]
-        boots = self._boots()
-        last_entry = boots.get(boot_id) if boots else None
+        last_entry = self.last_entry(boot_id)
         result = None
         if last_entry is not None:
             result = self._shutdown_message_time(boot_id) or last_entry

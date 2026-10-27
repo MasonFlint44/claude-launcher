@@ -28,7 +28,7 @@ project>                                                                        
 
 ## Install
 
-You need Linux with systemd (tested on Ubuntu; written for Ubuntu, Debian, Fedora and Arch), Python 3.10+, and [Claude Code](https://docs.claude.com/en/docs/claude-code), installed natively or with npm.
+You need Linux with systemd (tested on Ubuntu 22.04 to 26.04, Debian 12 and 13, Fedora 42 and 43, and Arch), Python 3.10+, and [Claude Code](https://docs.claude.com/en/docs/claude-code), installed natively or with npm.
 
 ```bash
 git clone https://github.com/MasonFlint44/claude-launcher.git ~/git/claude-launcher
@@ -66,11 +66,11 @@ The installer picks the first of these that's installed, unless you give `--term
 
 In each, quitting the picker closes its tab (except in Guake), and if the launcher fails, the tab drops to a shell instead.
 
-Profiles are the only change made to a terminal's own settings, and `--uninstall` (or switching `--terminal` away) takes them out. A Ghostty Flatpak can't run your `claude` from its sandbox; use Ghostty from your distro or a snap. Under GNOME on Wayland, Guake's own show/hide hotkey doesn't work; set a GNOME keyboard shortcut that runs `guake -t` instead.
+Profiles are the only change made to a terminal's own settings (Ptyxis's also gets a Claude Dark palette, since Ptyxis ignores the background the launcher sets), and `--uninstall` (or switching `--terminal` away) takes them out. A Ghostty Flatpak can't run your `claude` from its sandbox; use Ghostty from your distro or a snap. Under GNOME on Wayland, Guake's own show/hide hotkey doesn't work; set a GNOME keyboard shortcut that runs `guake -t` instead.
 
 ## Colors
 
-**Any terminal tab.** Run `claude-launcher` in a terminal tab and it switches to Claude Dark while the launcher runs, Claude included, then back to your exact colors when it exits. It asks the terminal for its colors first and only changes the ones it reports, so a terminal that can't do this is left alone. Tested in Ghostty, Ptyxis (Ubuntu and Fedora's terminal, built on the same VTE library as GNOME Terminal, GNOME Console and Xfce Terminal), xterm, and tmux, where only that pane changes; Konsole works the same way. GNU screen is left alone, since it would change the colors of every window at once. Set `CLAUDE_LAUNCHER_COLORS=0` to always keep your own colors, or `=1` to switch them inside screen anyway.
+**Any terminal tab.** Run `claude-launcher` in a terminal tab and it switches to Claude Dark while the launcher runs, Claude included, then back to your exact colors when it exits. It asks the terminal for its colors first and only changes the ones it reports, so a terminal that can't do this is left alone. Tested in Ghostty, kitty, WezTerm, GNOME Terminal, Konsole, Guake, xterm, and tmux, where only that pane changes. Ptyxis (Ubuntu and Fedora's terminal) keeps its own background and changes only the text colors, so in its light style the picker is hard to read; the **Claude Code** launcher's Ptyxis profile is Claude Dark throughout. GNU screen is left alone, since it would change the colors of every window at once. Set `CLAUDE_LAUNCHER_COLORS=0` to always keep your own colors, or `=1` to switch them inside screen anyway.
 
 **The theme alone.** `theme = claude-dark` in a Ghostty config uses it anywhere.
 
@@ -163,7 +163,7 @@ A session that ended in that span, or up to 30 seconds before it began (desktops
 
 Anything else, like a tab you closed yourself, isn't listed. The group is kept in `~/.claude/state/claude-launcher/restored.json`.
 
-This works out of the box on Ubuntu, Debian and Fedora with GNOME or KDE. Logouts come from your own user journal, which you can always read. Restarts are most precise with the system journal, which needs your user in the `adm`, `wheel` or `systemd-journal` group, as the first user on those distros is. Without it (on Arch, say, until you add yourself to one), the last thing in your own journal, usually your desktop session ending, stands in for the restart. It needs systemd, and a journal kept across reboots, as these distros do by default.
+This works out of the box on Ubuntu, Debian and Fedora with GNOME or KDE. Desktop logouts come from your own user journal, which you can always read. Restarts are most precise with the system journal, and the end of an SSH login is only in it; reading it needs your user in the `adm`, `wheel` or `systemd-journal` group, as the first user on those distros is. Without it (on Arch, say, until you add yourself to one), the last thing in your own journal, usually your desktop session ending, stands in for the restart. It needs systemd, and a journal kept across reboots, as these distros do by default.
 
 Only interactive Claude sessions in a terminal are recorded: not `claude -p`, SDK runs or an editor's Claude panel.
 

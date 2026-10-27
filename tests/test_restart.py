@@ -39,12 +39,20 @@ class FakeJournal:
     """
 
     def __init__(
-        self, shutdown_message=REBOOT, last_entry=REBOOT + 5, readable=True, sessions=(), desktop=(), system=True
+        self,
+        shutdown_message=REBOOT,
+        last_entry=REBOOT + 5,
+        readable=True,
+        sessions=(),
+        desktop=(),
+        system=True,
+        text_boots=False,
     ):
         self.shutdown_message, self.last_entry, self.readable = shutdown_message, last_entry, readable
         self.sessions = list(sessions)
         self.desktop = list(desktop)  # (boot, when graphical-session.target stopped)
         self.system = system  # False: only the user journal can be read
+        self.text_boots = text_boots  # True: systemd before 251, whose --list-boots ignores -o json
         self.calls = []
 
     def __call__(self, args):
@@ -62,6 +70,11 @@ class FakeJournal:
             return "".join(json.dumps(e) + "\n" for e in lines)
         if not self.system and args[0] != "--list-boots":
             return ""  # the system journal's messages aren't readable
+        if args[0] == "--list-boots" and self.text_boots:
+            return (
+                f"-1 {boot_key(LAST_BOOT)} Mon 2026-10-26 05:59:11 UTC\u2014Mon 2026-10-26 05:59:14 UTC\n"
+                f" 0 {boot_key(THIS_BOOT)} Mon 2026-10-26 05:59:14 UTC\u2014Mon 2026-10-26 06:10:02 UTC\n"
+            )
         if args[0] == "--list-boots":
             boots = [
                 {"boot_id": boot_key(LAST_BOOT), "first_entry": 1, "last_entry": int(self.last_entry * 1e6)},
@@ -69,6 +82,9 @@ class FakeJournal:
             ]
             return json.dumps(boots)
         boot = args[1]
+        if args[2:4] == ["-n", "1"]:  # a boot's last entry
+            last = {boot_key(LAST_BOOT): self.last_entry, boot_key(THIS_BOOT): NOW}.get(boot)
+            return "" if last is None else json.dumps({"__REALTIME_TIMESTAMP": stamp(last)}) + "\n"
         if f"MESSAGE_ID={SHUTDOWN_MESSAGE_ID}" in args:
             if boot != boot_key(LAST_BOOT) or self.shutdown_message is None:
                 return ""
@@ -226,6 +242,34 @@ class TestRestart:
         record(100, session(), boot="33333333-3333-3333-3333-333333333333", ended=NOW - 900)
         assert len(make().sort()) == 0
         assert records(claude_home) == []
+
+
+class TestSystemdBefore251:
+    """--list-boots prints text there (Ubuntu 22.04's systemd 249)."""
+
+    def test_closed_by_the_reboot(self, setup):
+        make, record, session, _ = setup
+        sid = session()
+        record(100, sid, ended=REBOOT + 0.8)
+        assert make(FakeJournal(text_boots=True)).sort().sessions == {sid: Closed(REBOOT, "restart")}
+
+    def test_crash_uses_the_last_journal_entry(self, setup):
+        make, record, session, _ = setup
+        sid = session()
+        record(100, sid, ended=REBOOT + 4)
+        journal = FakeJournal(text_boots=True, shutdown_message=None)
+        assert make(journal).sort().sessions == {sid: Closed(REBOOT + 5, "restart")}
+
+    def test_logout(self, setup):
+        make, record, session, _ = setup
+        sid = session()
+        logout = NOW - 120
+        record(100, sid, boot=THIS_BOOT, ended=logout + 0.2)
+        journal = FakeJournal(text_boots=True, desktop=[(THIS_BOOT, logout)])
+        assert make(journal).sort().sessions == {sid: Closed(logout, "logout")}
+
+    def test_boot_not_in_the_journal(self, setup):
+        assert Journal(FakeJournal(text_boots=True)).last_entry("33333333-3333-3333-3333-333333333333") is None
 
 
 class TestLogout:

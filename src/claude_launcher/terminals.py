@@ -31,6 +31,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .paths import THEME_FILE
+from .theme import Theme
 
 APP_ID = "io.github.masonflint44.ClaudeLauncher"
 PROFILE_NAME = "Claude Code"
@@ -191,14 +192,47 @@ class _GSettingsProfile(Terminal):
         ctx.run(["gsettings", "reset-recursively", self._profile()])
 
 
+def ptyxis_palette(theme: Theme) -> str:
+    """Claude Dark as a Ptyxis palette: keys right under [Palette] serve both
+    the light and dark styles."""
+    keys = {
+        "Foreground": theme.colors.get("foreground"),
+        "Background": theme.colors.get("background"),
+        "Cursor": theme.colors.get("cursor-color"),
+        "CursorForeground": theme.colors.get("cursor-text"),
+        **{f"Color{i}": theme.palette.get(i) for i in range(16)},
+    }
+    missing = [k for k, v in keys.items() if v is None and k != "CursorForeground"]
+    if missing:
+        raise RuntimeError(f"the theme is missing colors for the Ptyxis palette: {', '.join(missing)}")
+    lines = ["[Palette]", "Name=Claude Dark", *(f"{k}={v}" for k, v in keys.items() if v)]
+    return "\n".join(lines) + "\n"
+
+
 class Ptyxis(_GSettingsProfile):
+    """Ptyxis paints its own background and ignores the one a program sets,
+    so the profile gets Claude Dark as a palette of its own."""
+
     name, label, program = "ptyxis", "Ptyxis", "ptyxis"
     list_schema, list_key = "org.gnome.Ptyxis", "profile-uuids"
     profile_schema = "org.gnome.Ptyxis.Profile:/org/gnome/Ptyxis/Profiles/{id}/"
     profile_id = PROFILE_UUID.hex
+    palette_id = APP_ID  # a palette's ID is its file name
+
+    def palette_file(self, ctx: Context) -> Path:
+        return ctx.data_home / "org.gnome.Ptyxis" / "palettes" / f"{self.palette_id}.palette"
 
     def profile_settings(self, ctx: Context) -> dict[str, object]:
-        return {"label": PROFILE_NAME, "use-custom-command": True, "custom-command": ctx.command}
+        return {
+            "label": PROFILE_NAME,
+            "use-custom-command": True,
+            "custom-command": ctx.command,
+            "palette": self.palette_id,
+        }
+
+    def uninstall(self, ctx: Context) -> None:
+        super().uninstall(ctx)
+        self.palette_file(ctx).unlink(missing_ok=True)
 
     def install(self, ctx: Context) -> None:
         # Ptyxis uses the first profile when default-profile-uuid doesn't name
@@ -215,6 +249,9 @@ class Ptyxis(_GSettingsProfile):
             _gsettings_set(ctx, self.list_schema, self.list_key, others)
         if default not in others:
             _gsettings_set(ctx, self.list_schema, "default-profile-uuid", others[0])
+        path = self.palette_file(ctx)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(ptyxis_palette(Theme.load(ctx.theme)))
         super().install(ctx)
 
     def exec_argv(self, ctx: Context) -> list[str]:

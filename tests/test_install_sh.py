@@ -14,7 +14,7 @@ pytestmark = pytest.mark.skipif(not shutil.which("fzf"), reason="needs fzf")
 
 
 def run(home, *args):
-    env = {"HOME": str(home), "PATH": f"{home}/.local/bin:/usr/bin:/bin", "LANG": "C.UTF-8"}
+    env = {"HOME": str(home), "PATH": f"{home}/.local/bin:{home}/stubs:/usr/bin:/bin", "LANG": "C.UTF-8"}
     return subprocess.run([str(REPO_DIR / "install.sh"), *args], env=env, capture_output=True, text=True)
 
 
@@ -25,6 +25,11 @@ def test_install_then_uninstall(tmp_path):
     real_settings = home / "dotfiles" / "settings.json"
     real_settings.write_text(json.dumps({"model": "opus"}))
     (home / ".claude" / "settings.json").symlink_to(real_settings)
+    # A Ghostty to find, so the check below doesn't depend on what this
+    # machine has installed: the first installed terminal gets picked.
+    (home / "stubs").mkdir()
+    (home / "stubs" / "ghostty").write_text("#!/bin/sh\n")
+    (home / "stubs" / "ghostty").chmod(0o755)
 
     done = run(home)
     assert done.returncode == 0, done.stdout + done.stderr
