@@ -39,6 +39,7 @@ import sys
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from . import fzf, logs, pathtext, text
 from .logs import is_session_id
@@ -48,6 +49,9 @@ from .restart import Group, RestartState
 from .text import color, pad, truncate, truncate_left
 from .text import width as text_width
 from .theme import Theme
+
+if TYPE_CHECKING:
+    from .platforms import Platform
 
 MAX_WIDTH = 120  # widest the picker gets, in columns
 DIR_COLUMN = 50  # the directory list's first column
@@ -85,6 +89,7 @@ class State:
     # How key bindings run the core, from the platform when the picker starts.
     shell: str = ""  # fzf's --with-shell
     core: str = ""  # the core's command line, with --run DIR
+    listen: str = ""  # fzf's --listen: a socket path, or localhost:0 for a port
 
 
 @dataclass
@@ -135,12 +140,11 @@ class Picker:
             self._from_platform()
         return self.state.core
 
-    def _from_platform(self) -> None:
-        from .platforms import current
-
-        platform = current()
+    def _from_platform(self, platform: Platform | None = None) -> None:
+        platform = platform or _platform()
         self.state.shell = platform.fzf_shell
         self.state.core = platform.core_command(["--run", str(self.run)])
+        self.state.listen = str(self._file("fzf.sock")) if platform.fzf_listen == "socket" else "localhost:0"
 
     # --- State ---------------------------------------------------------------
 
@@ -507,7 +511,8 @@ class Picker:
         reopens the picker after a pick that didn't work out, without
         re-reading the logs."""
         if not again:
-            path, version = fzf.find()
+            platform = _platform()
+            path, version = fzf.find(fzf.private_dir(platform.data_dir(os.environ)))
             if path is None:
                 raise FzfTooOld(
                     f"claude-launcher needs fzf {fzf.show(fzf.MIN_VERSION)} or newer, and found "
@@ -517,7 +522,7 @@ class Picker:
                 self._file(name).unlink(missing_ok=True)
             group = self.restart.sort()
             self.state = State(restored=_restored(group), fzf=path)
-            self._from_platform()
+            self._from_platform(platform)
             self._build_projects()
         self.state.cols = cols
         self.state.width = min(cols, MAX_WIDTH)
@@ -542,7 +547,7 @@ class Picker:
             f"--prompt={PROJECTS_PROMPT}",
             "--info=inline-right",
             f"--margin=0,{self.state.cols - self.state.width},0,0",
-            f"--listen={self._file('fzf.sock')}",
+            f"--listen={self.state.listen}",
             f"--with-shell={self.state.shell}",
             f"--bind=change:transform:{c} ui change {{q}}",
             "--bind=start:unbind(result)",  # bound only while a cursor waits to be put back
@@ -752,6 +757,12 @@ class Picker:
         return f"Nothing matches: {query}"
 
 
+def _platform() -> Platform:
+    from .platforms import current
+
+    return current()
+
+
 def _restored(group: Group) -> list:
     latest = group.latest
     return [len(group), latest.at if latest else 0.0, sorted(group.reasons)]
@@ -821,8 +832,19 @@ def _nth_match(fzf_path: str, rows: list[str], query: str, pos: int, nth: str = 
 
 
 def _restore_header_later(run: Path, token: list) -> None:
-    """In a second, put the key hints back through fzf's --listen socket,
-    unless another key came first. fzf can't time anything itself."""
+    """In a second, put the key hints back through fzf's --listen address,
+    unless another key came first. fzf can't time anything itself, so this
+    runs on after the key press returns: forked where there's fork, else as a
+    detached core process (Windows)."""
+    if not hasattr(os, "fork"):
+        from .paths import CORE
+
+        flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        args = [sys.executable, str(CORE), "--run", str(run), "ui", "restore-header", json.dumps(token)]
+        subprocess.Popen(
+            args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=flags
+        )
+        return
     if os.fork():
         return
     try:
@@ -830,19 +852,35 @@ def _restore_header_later(run: Path, token: list) -> None:
         devnull = os.open(os.devnull, os.O_RDWR)
         for fd in (0, 1, 2):  # let fzf stop waiting for this command's output
             os.dup2(devnull, fd)
-        time.sleep(DOUBLE_PRESS_MS / 1000)
-        header = Picker(run).restore_header(token)
-        if header is not None:
-            send_action(run / "fzf.sock", f"change-header:{header}")
+        restore_header(run, token)
     finally:
         os._exit(0)
 
 
-def send_action(sock_path: Path, action: str) -> None:
+def restore_header(run: Path, token: list) -> None:
+    time.sleep(DOUBLE_PRESS_MS / 1000)
+    picker = Picker(run)
+    header = picker.restore_header(token)
+    if header is not None:
+        send_action(picker.state.listen or str(run / "fzf.sock"), f"change-header:{header}")
+
+
+def send_action(listen: str, action: str, env: dict[str, str] | os._Environ = os.environ) -> None:
+    """Send fzf an action through its --listen address: a Unix socket, or
+    localhost:0, whose port fzf gives its commands in FZF_PORT."""
     body = action.encode()
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+    key = env.get("FZF_API_KEY", "")
+    request = (
+        b"POST / HTTP/1.1\r\nHost: localhost\r\nx-api-key: %s\r\nContent-Length: %d\r\n\r\n" % (key.encode(), len(body))
+        + body
+    )
+    if listen.startswith("localhost:"):
+        s = socket.create_connection(("127.0.0.1", int(env.get("FZF_PORT", "0"))), timeout=2)
+    else:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         s.settimeout(2)
-        s.connect(str(sock_path))
-        s.sendall(b"POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: %d\r\n\r\n" % len(body) + body)
+        s.connect(listen)
+    with s:
+        s.sendall(request)
         with contextlib.suppress(OSError):
             s.recv(1024)

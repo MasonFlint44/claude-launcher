@@ -11,7 +11,7 @@ Most of the launcher is the same everywhere: the picker (`picker.py`), the sessi
 | `Host` | Boot ID and start, whether a process is a running Claude, the user, a lock between processes, the terminal (opening it, and reading its answers to queries unechoed) | `/proc`, `flock`, `/dev/tty`, `termios` |
 | `EventSource` | The restarts and logouts in a record's boot that could have closed its Claude. Only events: the margins and which one wins are `restart.py`'s | the systemd journal |
 | `Setup` | What install.sh sets up after the shared steps, and undoing it; any core commands of the platform's own | Ghostty theme link, icon, desktop entries, terminal profiles; `terminal open guake` |
-| `Platform` fields | fzf's name for the OS (for the fetched build), the shell fzf runs key bindings with, and the core's command line quoted for it | `linux`, `bash -c`, `shlex` |
+| `Platform` fields | fzf's name for the OS (for the fetched build), the shell fzf runs key bindings with, the core's command line quoted for it, how the picker reaches fzf while it runs (a Unix socket, or a localhost port where Python has no Unix sockets), and where the launcher keeps its own files | `linux`, `bash -c`, `shlex`, socket, `~/.local/share/claude-launcher` |
 | session hook | Writes the record `restart.Record` reads, for each interactive Claude | `bin/claude-session-hook` (bash) |
 | path text | Separators, `~`, what's inside what, path mode's splitting | `pathtext.py` (POSIX for now) |
 

@@ -113,3 +113,10 @@ class Platform:
     # read both from the picker's state, so they never load the platform.
     fzf_shell: str
     core_command: Callable[[list[str]], str]
+    # How the picker talks to fzf while it runs: "socket", a Unix socket in
+    # the run directory, or "port", a localhost port fzf picks (Windows'
+    # Python has no Unix sockets). Either way each request carries the run's
+    # FZF_API_KEY.
+    fzf_listen: str
+    # Where the launcher keeps its own files (the fetched fzf, in bin/).
+    data_dir: Callable[[Mapping[str, str]], Path]

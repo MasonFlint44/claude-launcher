@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.machinery
 import sys
 import types
+from pathlib import Path
 
 import pytest
 
@@ -21,6 +22,8 @@ def platform(name, **parts):
             "fzf_os": "x",
             "fzf_shell": "sh -c",
             "core_command": " ".join,
+            "fzf_listen": "socket",
+            "data_dir": lambda env: Path("/data"),
             **parts,
         }
     )

@@ -59,10 +59,13 @@ def launch(claude_home, tmp_path):
     }
     terms = []
 
-    def start(*args: str, **more_env: str) -> Term:
-        t = Term([str(LAUNCHER), *args], {**env, **more_env}, cwd=str(claude_home.home))
+    def term(argv: list[str], **more_env: str) -> Term:
+        t = Term(argv, {**env, **more_env}, cwd=str(claude_home.home))
         terms.append(t)
         return t
+
+    def start(*args: str, **more_env: str) -> Term:
+        return term([str(LAUNCHER), *args], **more_env)
 
     def claude_calls() -> list[tuple[str, str]]:
         if not calls.exists():
@@ -75,6 +78,7 @@ def launch(claude_home, tmp_path):
             return 0
         return sum(f" ui {action}" in line for line in core_calls.read_text().splitlines())
 
+    start.term = term
     start.calls = claude_calls
     start.core_runs = core_runs
     start.runtime = runtime
@@ -111,6 +115,32 @@ def test_hint_comes_back_after_a_second(launch):
     t.send("esc")
     t.wait_for("esc again to quit")
     t.wait_for("enter open", timeout=3)  # put back through fzf's --listen socket
+
+
+PORT_LAUNCHER = """\
+import dataclasses, sys
+sys.path.insert(0, {src!r})
+from claude_launcher.platforms import linux
+plain = linux.platform
+linux.platform = lambda: dataclasses.replace(plain(), fzf_listen="port")
+from claude_launcher.launcher import main
+sys.exit(main(sys.argv[1:]))
+"""
+
+
+def test_hint_comes_back_through_a_port(launch, tmp_path):
+    # Windows' way: fzf on a localhost port with a key, as Linux's platform.
+    script = tmp_path / "port-launcher"
+    script.write_text(PORT_LAUNCHER.format(src=str(REPO_DIR / "src")))
+    t = launch.term(["python3", str(script)])
+    t.wait_for("Select a project directory for Claude")
+    t.send("esc")
+    t.wait_for("esc again to quit")
+    t.wait_for("enter open", timeout=3)
+    t.send("esc")
+    t.wait_for("esc again to quit")
+    t.send("esc")
+    assert t.wait_exit() == 0
 
 
 def test_typed_path(launch, claude_home):

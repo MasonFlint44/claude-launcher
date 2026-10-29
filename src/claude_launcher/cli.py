@@ -9,6 +9,7 @@ call. Not meant to be run by hand. (bin/claude-launcher itself is launcher.py.)
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -17,6 +18,13 @@ from .picker import Picker
 
 
 def _ui(run: Path, action: str, args: list[str]) -> int:
+    if action == "restore-header":  # the background half of a first press, where there's no fork
+        import json
+
+        from .picker import restore_header
+
+        restore_header(run, json.loads(args[0]) if args else [])
+        return 0
     picker = Picker(run)
     arg = args[0] if args else ""
     out: str | None = None
@@ -59,22 +67,23 @@ def _install(action: str, args: list[str]) -> int:
         return 4 if changed else 0  # install.sh says which
     if action in ("platform", "remove-platform"):
         return _platform_setup(action, args)
-    if action == "fzf-status":
-        path, version = fzf.find()
-        print(f"ok {fzf.show(version)} {path}" if path else f"old {fzf.show(version)}")
-        return 0
-    if action == "fetch-fzf":
-        try:
-            from .platforms import current
+    if action in ("fzf-status", "fetch-fzf", "fzf-dir"):
+        from .platforms import current
 
-            path = fzf.fetch(fzf.private_dir(), system=current().fzf_os)
+        platform = current()
+        own = fzf.private_dir(platform.data_dir(os.environ))
+        if action == "fzf-dir":
+            print(own)
+            return 0
+        if action == "fzf-status":
+            path, version = fzf.find(own)
+            print(f"ok {fzf.show(version)} {path}" if path else f"old {fzf.show(version)}")
+            return 0
+        try:
+            print(fzf.fetch(own, system=platform.fzf_os))
         except (OSError, RuntimeError, KeyError) as e:
             print(e, file=sys.stderr)
             return 1
-        print(path)
-        return 0
-    if action == "fzf-dir":
-        print(fzf.private_dir())
         return 0
     print(f"unknown install action: {action}", file=sys.stderr)
     return 2

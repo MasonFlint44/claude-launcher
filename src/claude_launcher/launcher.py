@@ -15,6 +15,7 @@ exit, as a shell would, so Claude is never left running without the launcher.
 from __future__ import annotations
 
 import os
+import secrets
 import shutil
 import signal
 import subprocess
@@ -45,7 +46,8 @@ class _Signals:
     def __init__(self) -> None:
         self.pending: int | None = None
         self.in_child = False
-        signal.signal(signal.SIGHUP, self._on(HUNG_UP))
+        if hasattr(signal, "SIGHUP"):  # not on Windows, where the console closing is its own event
+            signal.signal(signal.SIGHUP, self._on(HUNG_UP))
         signal.signal(signal.SIGTERM, self._on(TERMINATED))
 
     def _on(self, code: int):
@@ -148,6 +150,8 @@ def _claude(signals: _Signals, directory: str, args: Sequence[str]) -> int | Non
 
 
 def _loop(signals: _Signals, run: Path, args: list[str]) -> int:
+    # Only key bindings run with this key, so nothing else can drive fzf.
+    fzf_env = {**os.environ, "FZF_API_KEY": secrets.token_hex(16)}
     again = False
     while True:
         try:
@@ -157,7 +161,7 @@ def _loop(signals: _Signals, run: Path, args: list[str]) -> int:
             return 1
         _set_title()
         with open(run / "rows", "rb") as rows:
-            done = signals.run(opts, stdin=rows, stdout=subprocess.PIPE)  # opts[0] is the fzf to run
+            done = signals.run(opts, stdin=rows, stdout=subprocess.PIPE, env=fzf_env)  # opts[0] is the fzf to run
         if done.returncode == QUIT:
             return 0
         if done.returncode > 1:  # fzf itself failed
@@ -199,8 +203,9 @@ def main(args: list[str]) -> int:
         return QUIT
     finally:
         # Leaving anyway: a second signal mustn't cut the clean-up short.
-        signal.signal(signal.SIGHUP, signal.SIG_IGN)
-        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        for name in ("SIGHUP", "SIGTERM"):
+            if hasattr(signal, name):
+                signal.signal(getattr(signal, name), signal.SIG_IGN)
         if not hung_up:  # the terminal is gone: nothing to put back
             _theme(run, "restore")
         shutil.rmtree(run, ignore_errors=True)

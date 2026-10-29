@@ -1,6 +1,7 @@
 import hashlib
 import io
 import tarfile
+import zipfile
 
 import pytest
 
@@ -20,35 +21,39 @@ def env(tmp_path):
     return {"PATH": str(tmp_path / "sysbin"), "HOME": str(tmp_path / "home")}
 
 
+@pytest.fixture
+def own(tmp_path):
+    return tmp_path / "data" / "bin"
+
+
 def test_version(tmp_path):
     assert fzf.version(str(fake_fzf(tmp_path, "0.44.1"))) == (0, 44, 1)
     assert fzf.version(str(fake_fzf(tmp_path / "x", "0.60"))) == (0, 60, 0)
     assert fzf.version(str(tmp_path / "missing")) is None
 
 
-def test_system_fzf_new_enough(tmp_path, env):
+def test_system_fzf_new_enough(tmp_path, env, own):
     path = fake_fzf(tmp_path / "sysbin", "0.67.0")
-    assert fzf.find(env) == (str(path), (0, 67, 0))
+    assert fzf.find(own, env) == (str(path), (0, 67, 0))
 
 
-def test_system_fzf_too_old_uses_our_own(tmp_path, env):
+def test_system_fzf_too_old_uses_our_own(tmp_path, env, own):
     fake_fzf(tmp_path / "sysbin", "0.44.1")
-    own = fake_fzf(fzf.private_dir(env), fzf.PINNED)
-    assert fzf.find(env) == (str(own), (0, 74, 5))
+    ours = fake_fzf(own, fzf.PINNED)
+    assert fzf.find(own, env) == (str(ours), (0, 74, 5))
 
 
-def test_nothing_new_enough(tmp_path, env):
+def test_nothing_new_enough(tmp_path, env, own):
     fake_fzf(tmp_path / "sysbin", "0.60.3")
-    assert fzf.find(env) == (None, (0, 60, 3))
+    assert fzf.find(own, env) == (None, (0, 60, 3))
 
 
-def test_none_at_all(env):
-    assert fzf.find(env) == (None, None)
+def test_none_at_all(env, own):
+    assert fzf.find(own, env) == (None, None)
 
 
-def test_private_dir_follows_xdg(env):
-    assert fzf.private_dir({**env, "XDG_DATA_HOME": "/data"}) == fzf.private_dir({"XDG_DATA_HOME": "/data"})
-    assert str(fzf.private_dir(env)).endswith(".local/share/claude-launcher/bin")
+def test_private_dir_is_bin_in_the_data_dir(tmp_path):
+    assert fzf.private_dir(tmp_path) == tmp_path / "bin"
 
 
 def tarball(content=b"#!/bin/sh\necho '0.74.5 (pinned)'\n", name="fzf"):
@@ -60,11 +65,18 @@ def tarball(content=b"#!/bin/sh\necho '0.74.5 (pinned)'\n", name="fzf"):
     return buf.getvalue()
 
 
+def zipped(content=b"MZ fzf", name="fzf.exe"):
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr(name, content)
+    return buf.getvalue()
+
+
 class TestFetch:
     NAME = f"fzf-{fzf.PINNED}-linux_amd64.tar.gz"
 
-    def pin(self, monkeypatch, data):
-        monkeypatch.setattr(fzf, "checksums", lambda path=None: {self.NAME: hashlib.sha256(data).hexdigest()})
+    def pin(self, monkeypatch, data, name=NAME):
+        monkeypatch.setattr(fzf, "checksums", lambda path=None: {name: hashlib.sha256(data).hexdigest()})
 
     def test_verified_and_installed(self, tmp_path, monkeypatch):
         data = tarball()
@@ -88,8 +100,22 @@ class TestFetch:
     def test_tarball_without_fzf(self, tmp_path, monkeypatch):
         data = tarball(name="README")
         self.pin(monkeypatch, data)
-        with pytest.raises(KeyError):
+        with pytest.raises(RuntimeError, match="no fzf program"):
             fzf.fetch(tmp_path / "bin", machine="x86_64", download=lambda url: data)
+
+    def test_windows_zip(self, tmp_path, monkeypatch):
+        name = f"fzf-{fzf.PINNED}-windows_amd64.zip"
+        data = zipped()
+        self.pin(monkeypatch, data, name)
+        path = fzf.fetch(tmp_path / "bin", system="windows", machine="AMD64", download=lambda url: data)
+        assert path == tmp_path / "bin" / "fzf.exe" and path.read_bytes() == b"MZ fzf"
+
+    def test_zip_without_fzf(self, tmp_path, monkeypatch):
+        name = f"fzf-{fzf.PINNED}-windows_amd64.zip"
+        data = zipped(name="README")
+        self.pin(monkeypatch, data, name)
+        with pytest.raises(RuntimeError, match="no fzf.exe program"):
+            fzf.fetch(tmp_path / "bin", system="windows", machine="AMD64", download=lambda url: data)
 
 
 class TestPinnedRelease:
@@ -108,3 +134,8 @@ class TestPinnedRelease:
     )
     def test_linux_builds(self, machine, build):
         assert fzf.build_name("linux", machine) == f"fzf-{fzf.PINNED}-{build}.tar.gz"
+
+    @pytest.mark.parametrize(("machine", "build"), [("AMD64", "windows_amd64"), ("ARM64", "windows_arm64")])
+    def test_windows_builds(self, machine, build):
+        # platform.machine() on Windows says AMD64 or ARM64.
+        assert fzf.build_name("windows", machine) == f"fzf-{fzf.PINNED}-{build}.zip"

@@ -20,6 +20,7 @@ import subprocess
 import tarfile
 import tempfile
 import urllib.request
+import zipfile
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
@@ -46,9 +47,9 @@ ARCHES = {
 _RELEASES = "https://github.com/junegunn/fzf/releases/download"
 
 
-def private_dir(env: Mapping[str, str] = os.environ) -> Path:
-    data = env.get("XDG_DATA_HOME") or os.path.join(env.get("HOME") or str(Path.home()), ".local", "share")
-    return Path(data) / "claude-launcher" / "bin"
+def private_dir(data_dir: Path) -> Path:
+    """Where the fetched fzf goes, in the launcher's own data directory."""
+    return data_dir / "bin"
 
 
 def version(path: str) -> tuple[int, ...] | None:
@@ -64,19 +65,17 @@ def show(v: tuple[int, ...] | None) -> str:
     return ".".join(map(str, v)) if v else "none"
 
 
-def candidates(env: Mapping[str, str] = os.environ) -> list[str]:
+def candidates(own_dir: Path, env: Mapping[str, str] = os.environ) -> list[str]:
     """The system's fzf first, then the launcher's own copy."""
     found = [p for p in (shutil.which("fzf", path=env.get("PATH")),) if p]
-    own = private_dir(env) / "fzf"
-    if os.access(own, os.X_OK):
-        found.append(str(own))
+    found += [str(own) for own in (own_dir / "fzf", own_dir / "fzf.exe") if own.is_file() and os.access(own, os.X_OK)]
     return found
 
 
-def find(env: Mapping[str, str] = os.environ) -> tuple[str | None, tuple[int, ...] | None]:
+def find(own_dir: Path, env: Mapping[str, str] = os.environ) -> tuple[str | None, tuple[int, ...] | None]:
     """The fzf to use, and its version; or (None, the newest version seen)."""
     newest = None
-    for path in candidates(env):
+    for path in candidates(own_dir, env):
         v = version(path)
         if v and v >= MIN_VERSION:
             return path, v
@@ -98,7 +97,8 @@ def build_name(system: str, machine: str) -> str | None:
     """The release's file for this OS (fzf's name for it, like "linux") and
     processor, or None if there's no build for it."""
     arch = ARCHES.get(machine.lower())
-    name = f"fzf-{PINNED}-{system}_{arch}.tar.gz"
+    kind = "zip" if system == "windows" else "tar.gz"
+    name = f"fzf-{PINNED}-{system}_{arch}.{kind}"
     return name if arch and name in checksums() else None
 
 
@@ -117,18 +117,30 @@ def fetch(
     data = (download or _download)(f"{_RELEASES}/v{PINNED}/{name}")
     if hashlib.sha256(data).hexdigest() != checksums()[name]:
         raise RuntimeError(f"{name} didn't match its checksum; not using it")
-    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
-        member = tar.getmember("fzf")
-        if not member.isfile():
-            raise RuntimeError(f"{name} has no fzf program in it")
-        binary = tar.extractfile(member).read()  # type: ignore[union-attr]
+    program = "fzf.exe" if name.endswith(".zip") else "fzf"
+    binary = _unpack(name, data, program)
     dest.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=dest, prefix=".fzf.")
     with os.fdopen(fd, "wb") as f:
         f.write(binary)
     os.chmod(tmp, 0o755)
-    os.replace(tmp, dest / "fzf")
-    return dest / "fzf"
+    os.replace(tmp, dest / program)
+    return dest / program
+
+
+def _unpack(name: str, data: bytes, program: str) -> bytes:
+    """The fzf program from a release archive: a .tar.gz, or Windows' .zip."""
+    try:
+        if name.endswith(".zip"):
+            with zipfile.ZipFile(io.BytesIO(data)) as z:
+                return z.read(program)
+        with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
+            member = tar.getmember(program)
+            if member.isfile():
+                return tar.extractfile(member).read()  # type: ignore[union-attr]
+    except KeyError:
+        pass
+    raise RuntimeError(f"{name} has no {program} program in it")
 
 
 def _download(url: str) -> bytes:
