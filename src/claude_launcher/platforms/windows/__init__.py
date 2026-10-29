@@ -1,5 +1,5 @@
 """Windows: the boot counter and processes through the standard library, and
-the System event log for restarts and logoffs."""
+the System event log for restarts and logoffs (eventlog.py)."""
 
 from __future__ import annotations
 
@@ -14,11 +14,10 @@ from ..base import Platform
 from .host import WindowsHost
 
 
-class _NoEvents:
-    """Until the event log reader is in: no restarts or logoffs seen."""
+def _events():
+    from .eventlog import EventLog, WindowsEvents
 
-    def events(self, record, same_boot):
-        return []
+    return WindowsEvents(EventLog())
 
 
 def data_dir(env: Mapping[str, str]) -> Path:
@@ -62,7 +61,7 @@ def platform() -> Platform:
     return Platform(
         name="windows",
         host=host,
-        events=_NoEvents,
+        events=_events,
         setup=_setup,
         fzf_os="windows",
         fzf_shell="",  # fzf's own: cmd, which it then quotes {q} for

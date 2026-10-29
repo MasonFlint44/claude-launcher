@@ -7,6 +7,7 @@ The native Windows platform, `src/claude_launcher/platforms/windows/`, and what 
 | Path | Role |
 |---|---|
 | `platforms/windows/__init__.py` | Windows' `Platform`: fzf picks `cmd` itself (`SHELL=cmd`), the core's command line quoted for it (`cmd_quote`), fzf on a localhost port, files in `%LOCALAPPDATA%\claude-launcher`. |
+| `platforms/windows/eventlog.py` | Restarts and logoffs from the System log through `wevtutil.exe` (any user can read it; the Security log needs an administrator), shared with WSL. |
 | `platforms/windows/host.py` | The boot counter (registry `BootId`), processes (`NtQueryInformationProcess` for command lines), `msvcrt` locks, the console (`CONOUT$`, `CONIN$` with VT input). Standard library only. |
 
 ## Rules
@@ -18,6 +19,8 @@ The native Windows platform, `src/claude_launcher/platforms/windows/`, and what 
 - **fzf leaves the console's last column unused** (writing it wraps the line), so the picker lays out one column narrower (`columns_lost`).
 - **`HOME` isn't home**: Git Bash sets it to `/c/Users/...`. Home is `USERPROFILE`.
 - **Paths**: see `pathtext.PathText("nt")`. Claude names a log directory after the path with every non-alphanumeric character as `-` (`C:\Users\me` is `C--Users-me`), as on Linux.
+
+- **Restart and logoff detection** (`eventlog.py`). Restart or power off: the boot's last User32 1074 ("initiated the restart") to Kernel-General 13 ("shutting down"); without one (a crash, a power cut), the boot's last logged event. Logoff: Winlogon 7002 with this user's SID (`whoami.exe /user`); Windows logs one at a restart too, and the restart wins. A boot runs from one Kernel-General 12 to the next; filter by provider as well as ID, since Wininit logs 12 and 13 too. Sort by time, not by the log's order: a clock that was set wrong and then right leaves "later" events earlier in the log. Measured in the VM: 1074 → 7002 (+0.8 s) → 13 (+4 s) → 12 at the next boot. Windows Update restarts on its own (TrustedInstaller, "Upgrade (Planned)"), with the same events. The boot counter (`BootId`) goes up on every boot; whether a Fast Startup boot raises it is unchecked (the VM can't hibernate), but its shutdown logs this user's 7002 either way.
 
 ## Testing in a VM
 
