@@ -44,8 +44,10 @@ class PathText:
         return bool(drive) and not rest.strip(self.seps)
 
     def with_sep(self, directory: str) -> str:
-        """`directory` ending in a separator, ready for a name: / stays /."""
-        return directory.rstrip(self.seps) + self.sep
+        """`directory` ending in a separator, ready for a name: / stays /. On
+        Windows, the slash it already uses, so ~/git completes to ~/git/."""
+        sep = "/" if self.windows and "/" in directory and "\\" not in directory else self.sep
+        return directory.rstrip(self.seps) + sep
 
     def without_sep(self, path: str) -> str:
         """`path` without a trailing separator, except a root itself."""

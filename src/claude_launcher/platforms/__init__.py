@@ -39,4 +39,8 @@ def _detect() -> Platform:
         from .linux import platform
 
         return platform()
+    if sys.platform == "win32":
+        from .windows import platform
+
+        return platform()
     raise Unsupported(f"claude-launcher doesn't run on {sys.platform} yet")

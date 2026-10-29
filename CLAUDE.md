@@ -1,6 +1,6 @@
 # claude-launcher
 
-A project and session picker for Claude Code, plus a Claude Dark theme and a desktop launcher. README.md is the user-facing description; this file is how the code is put together and the rules for changing it. The code is split into what's the same everywhere and what differs by OS (`src/claude_launcher/platforms/`); Linux is the one platform so far. The two files imported at the end cover the split and Linux's own parts.
+A project and session picker for Claude Code, plus a Claude Dark theme and a desktop launcher. README.md is the user-facing description; this file is how the code is put together and the rules for changing it. The code is split into what's the same everywhere and what differs by OS (`src/claude_launcher/platforms/`); Linux and Windows so far. The files imported at the end cover the split and each platform's own parts.
 
 ## Layout
 
@@ -54,3 +54,4 @@ User-facing text (README, picker messages, comments) is plain and short: say wha
 
 @docs/dev/platforms.md
 @docs/dev/linux.md
+@docs/dev/windows.md

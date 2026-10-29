@@ -25,7 +25,7 @@ import time
 from collections.abc import Sequence
 from pathlib import Path
 
-from . import logs, theme, title
+from . import logs, text, theme, title
 from .paths import Paths
 from .picker import FzfTooOld, Pick, Picker, resume_dir
 
@@ -134,7 +134,10 @@ def _runtime_dir() -> str:
 
 
 def _columns() -> int:
-    return shutil.get_terminal_size((80, 24)).columns
+    """The columns fzf draws in."""
+    from .platforms import current
+
+    return shutil.get_terminal_size((80, 24)).columns - current().columns_lost
 
 
 def _claude(signals: _Signals, directory: str, args: Sequence[str]) -> int | None:
@@ -150,8 +153,10 @@ def _claude(signals: _Signals, directory: str, args: Sequence[str]) -> int | Non
 
 
 def _loop(signals: _Signals, run: Path, args: list[str]) -> int:
+    from .platforms import current
+
     # Only key bindings run with this key, so nothing else can drive fzf.
-    fzf_env = {**os.environ, "FZF_API_KEY": secrets.token_hex(16)}
+    fzf_env = {**os.environ, **current().fzf_env, "FZF_API_KEY": secrets.token_hex(16)}
     again = False
     while True:
         try:
@@ -182,6 +187,7 @@ def _loop(signals: _Signals, run: Path, args: list[str]) -> int:
 
 
 def main(args: list[str]) -> int:
+    text.utf8_out()
     # `--resume <id>`: straight to that session, in the directory it was started in.
     resume = _resume_dir(args)
     if isinstance(resume, int):  # an error, already shown

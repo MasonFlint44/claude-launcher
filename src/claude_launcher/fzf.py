@@ -86,7 +86,7 @@ def find(own_dir: Path, env: Mapping[str, str] = os.environ) -> tuple[str | None
 def checksums(path: Path | None = None) -> dict[str, str]:
     """{file name: sha256} from the pinned release's checksums file."""
     found = {}
-    for line in (path or CHECKSUMS).read_text().splitlines():
+    for line in (path or CHECKSUMS).read_text(encoding="utf-8").splitlines():
         parts = line.split()
         if len(parts) == 2 and len(parts[0]) == 64:
             found[parts[1]] = parts[0]

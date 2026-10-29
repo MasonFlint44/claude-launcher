@@ -82,3 +82,11 @@ def test_the_core_puts_the_header_back(tmp_path, monkeypatch):
     monkeypatch.setattr(picker, "restore_header", lambda run, token: calls.append((run, token)))
     assert cli.main(["--run", str(tmp_path), "ui", "restore-header", '["esc", 1.5]']) == 0
     assert calls == [(tmp_path, ["esc", 1.5])]
+
+
+def test_the_core_writes_utf8_with_plain_newlines(tmp_path):
+    # fzf reads what key bindings print: UTF-8, lines ending in \n, on any OS.
+    script = "from claude_launcher import text; text.utf8_out(); print('↻ a'); print('b')"
+    src = os.path.join(os.path.dirname(__file__), "..", "src")
+    out = subprocess.run([sys.executable, "-c", script], capture_output=True, env={**os.environ, "PYTHONPATH": src})
+    assert out.stdout == "↻ a\nb\n".encode()

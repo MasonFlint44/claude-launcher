@@ -108,11 +108,19 @@ class Platform:
     # fzf's name for this OS in its release files ("linux"), for the build
     # install.sh fetches when the system's fzf is too old.
     fzf_os: str
-    # The shell fzf runs key bindings with (its --with-shell), and the core's
-    # command line with these arguments, quoted for that shell. Key presses
-    # read both from the picker's state, so they never load the platform.
+    # The shell fzf runs key bindings with (its --with-shell, or "" for fzf's
+    # own choice), and the core's command line with these arguments, quoted
+    # for that shell. Key presses read both from the picker's state, so they
+    # never load the platform.
     fzf_shell: str
     core_command: Callable[[list[str]], str]
+    # More environment for fzf: on Windows, SHELL=cmd. fzf only quotes its
+    # placeholders for cmd when it picks cmd itself; --with-shell would get
+    # POSIX quoting.
+    fzf_env: Mapping[str, str]
+    # Columns fzf leaves unused at the right: 1 on Windows, where writing
+    # the console's last column wraps the line.
+    columns_lost: int
     # How the picker talks to fzf while it runs: "socket", a Unix socket in
     # the run directory, or "port", a localhost port fzf picks (Windows'
     # Python has no Unix sockets). Either way each request carries the run's

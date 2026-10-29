@@ -42,7 +42,7 @@ class ClaudeHome:
         session_id = session_id or str(uuid.uuid4())
         path = (log_dir or self.project(cwd)) / f"{session_id}.jsonl"
         lines = [e if isinstance(e, str) else json.dumps(e, separators=(",", ":")) for e in entries]
-        path.write_text("".join(line + "\n" for line in lines))
+        path.write_text("".join(line + "\n" for line in lines), encoding="utf-8")
         if mtime is not None:
             os.utime(path, (mtime, mtime))
         return session_id
@@ -82,6 +82,7 @@ def claude_home(tmp_path: Path, monkeypatch) -> ClaudeHome:
     paths = Paths(config=home / ".claude", home=home)
     paths.projects.mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))  # Windows' home, and ~ there
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(paths.config))
     return ClaudeHome(paths)
 
@@ -129,11 +130,18 @@ class FakeEvents:
 
 
 # tests/<platform>/ holds one platform's own tests; they run only on it.
-PLATFORM_TESTS = {"linux": "linux"}  # directory: sys.platform prefix
+PLATFORM_TESTS = {"linux": "linux", "windows": "win32"}  # directory: sys.platform prefix
+# Tests that drive a pseudo-terminal, which Windows doesn't have. Windows'
+# terminal is checked live in the VM (docs/dev/windows.md).
+POSIX_ONLY = {"test_e2e.py", "test_theme.py", "fake_terminal.py", "term.py"}
+WINDOWS = sys.platform == "win32"
+posix_only = pytest.mark.skipif(WINDOWS, reason="POSIX only")
 
 
 def pytest_ignore_collect(collection_path, config):
     tests = Path(__file__).parent
+    if WINDOWS and collection_path.name in POSIX_ONLY:
+        return True
     for directory, prefix in PLATFORM_TESTS.items():
         if collection_path.is_relative_to(tests / directory) and not sys.platform.startswith(prefix):
             return True

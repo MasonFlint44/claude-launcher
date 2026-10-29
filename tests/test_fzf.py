@@ -6,6 +6,7 @@ import zipfile
 import pytest
 
 from claude_launcher import fzf
+from conftest import posix_only
 
 
 def fake_fzf(directory, version):
@@ -26,23 +27,27 @@ def own(tmp_path):
     return tmp_path / "data" / "bin"
 
 
+@posix_only  # the fake fzf is a shell script
 def test_version(tmp_path):
     assert fzf.version(str(fake_fzf(tmp_path, "0.44.1"))) == (0, 44, 1)
     assert fzf.version(str(fake_fzf(tmp_path / "x", "0.60"))) == (0, 60, 0)
     assert fzf.version(str(tmp_path / "missing")) is None
 
 
+@posix_only  # the fake fzf is a shell script
 def test_system_fzf_new_enough(tmp_path, env, own):
     path = fake_fzf(tmp_path / "sysbin", "0.67.0")
     assert fzf.find(own, env) == (str(path), (0, 67, 0))
 
 
+@posix_only  # the fake fzf is a shell script
 def test_system_fzf_too_old_uses_our_own(tmp_path, env, own):
     fake_fzf(tmp_path / "sysbin", "0.44.1")
     ours = fake_fzf(own, fzf.PINNED)
     assert fzf.find(own, env) == (str(ours), (0, 74, 5))
 
 
+@posix_only  # the fake fzf is a shell script
 def test_nothing_new_enough(tmp_path, env, own):
     fake_fzf(tmp_path / "sysbin", "0.60.3")
     assert fzf.find(own, env) == (None, (0, 60, 3))
@@ -78,6 +83,7 @@ class TestFetch:
     def pin(self, monkeypatch, data, name=NAME):
         monkeypatch.setattr(fzf, "checksums", lambda path=None: {name: hashlib.sha256(data).hexdigest()})
 
+    @posix_only  # the fake fzf is a shell script
     def test_verified_and_installed(self, tmp_path, monkeypatch):
         data = tarball()
         self.pin(monkeypatch, data)

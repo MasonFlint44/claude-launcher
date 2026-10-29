@@ -30,7 +30,7 @@ def _write_settings(path: Path, settings: dict, old_text: str) -> bool:
     target = Path(os.path.realpath(path))
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_name(target.name + ".claude-launcher.tmp")
-    tmp.write_text(new, encoding="utf-8")
+    tmp.write_text(new, encoding="utf-8", newline="")
     if target.exists():
         os.chmod(tmp, target.stat().st_mode & 0o7777)
     os.replace(tmp, target)

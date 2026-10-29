@@ -1,9 +1,11 @@
-"""The picker's path text. Stage 2 adds Windows paths (any drive, and UNC
-paths) to these same cases."""
+"""The picker's path text, by POSIX rules (test_pathtext_windows.py has
+Windows'). Pure text, so these run on any OS."""
 
 import pytest
 
-from claude_launcher import pathtext as p
+from claude_launcher.pathtext import PathText
+
+p = PathText("posix")
 
 
 @pytest.mark.parametrize(("path", "expected"), [("/a/b", "/a/b/"), ("/a/b/", "/a/b/"), ("/", "/")])

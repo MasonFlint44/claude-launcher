@@ -96,7 +96,7 @@ def closes(event: Event, ended: float) -> bool:
 
 def _load(path: Path) -> dict | None:
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             value = json.load(f)
     except (OSError, ValueError):
         return None
@@ -186,7 +186,7 @@ class RestartState:
             if kept != loaded or not self.paths.restored.exists():
                 data = {k: {"at": c.at, "why": c.why} for k, c in kept.items()}
                 tmp = self.paths.restored.with_suffix(".tmp")
-                tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+                tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="")
                 os.replace(tmp, self.paths.restored)
 
     def load(self) -> Group:

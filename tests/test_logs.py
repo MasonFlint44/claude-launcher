@@ -1,7 +1,7 @@
 import json
 
 from claude_launcher import logs
-from conftest import assistant, conversation, user
+from conftest import assistant, conversation, posix_only, user
 
 
 def titles(claude_home):
@@ -212,6 +212,7 @@ class TestRecentProjects:
         claude_home.log(tmp_path, meta + conversation("x", tmp_path), mtime=5.0)
         assert logs.recent_projects(claude_home.paths) == [(5.0, str(tmp_path))]
 
+    @posix_only  # Windows doesn't allow " in a name
     def test_path_with_quote(self, claude_home, tmp_path):
         odd = tmp_path / 'say "hi"'
         odd.mkdir()
@@ -234,6 +235,7 @@ class TestRecentProjects:
         assert logs.recent_projects(claude_home.paths) == [(9.0, str(there)), (5.0, str(here))]
 
 
+@posix_only  # past Windows' 260-character paths unless long paths are on
 def test_long_path_log_dirs(claude_home):
     long = "/" + "a" * 250
     cut = claude_home.paths.projects / ("-" + "a" * 199 + "-deadbeef")

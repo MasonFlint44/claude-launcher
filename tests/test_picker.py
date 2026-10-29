@@ -1,4 +1,7 @@
 import json
+import os
+import re
+import sys
 
 import pytest
 
@@ -6,8 +9,9 @@ from claude_launcher.picker import Pick, Picker
 from claude_launcher.restart import RestartState
 from claude_launcher.text import strip_ansi, width
 from claude_launcher.theme import Theme
-from conftest import FakeEvents, FakeHost, conversation
+from conftest import FakeEvents, FakeHost, conversation, posix_only
 
+S = os.sep  # the separator the picker builds paths with
 NOW = 1_800_000_000.0
 
 
@@ -76,7 +80,7 @@ def plain(rows):
 
 
 def _not_config(row):
-    return not row.split("\t", 1)[0].endswith("/.claude")  # the fake home's Claude config
+    return not row.split("\t", 1)[0].endswith((f"{os.sep}.claude", "/.claude"))  # the fake home's Claude config
 
 
 def displayed(rows):
@@ -91,6 +95,7 @@ def start(env, cols=100):
 
 
 class TestProjects:
+    @posix_only  # Windows doesn't allow control characters in a name
     def test_directory_name_with_an_escape(self, env):
         odd = project(env, "a\x1b[31mb", NOW - 600)
         p, _ = start(env)
@@ -119,7 +124,15 @@ class TestProjects:
         assert any(o.startswith("--bind=enter:transform:") for o in opts)
         assert any(o.startswith("--bind=ctrl-s:transform:") for o in opts)
         assert not any(o.startswith("--bind=btab") for o in opts)
-        assert any(o.startswith(f"--listen={env.run}/fzf.sock") for o in opts)
+        listen = "localhost:0" if sys.platform == "win32" else str(env.run / "fzf.sock")  # no Unix sockets there
+        assert f"--listen={listen}" in opts
+
+    def test_files_fzf_reads_have_plain_newlines(self, env):
+        # Windows' text mode would write \r\n, and fzf would show the \r.
+        project(env, "a", NOW - 600)
+        start(env)
+        for name in ("rows", "header"):
+            assert b"\r" not in (env.run / name).read_bytes()
 
     def test_notes_dont_match(self, env):
         project(env, "a", NOW - 600)
@@ -161,7 +174,7 @@ class TestPathMode:
     def test_tilde_alone_is_home(self, env):
         make_dirs(env, "a")
         p, _ = start(env)
-        assert listed(p.rows(query="~"))[1] == "~/a"
+        assert listed(p.rows(query="~"))[1] == f"~{S}a"  # ~ alone is home, in the OS's form
         assert keys(p.rows(query="~")) == keys(p.rows(query="~/"))
 
     def test_absolute_form_kept(self, env):
@@ -184,7 +197,7 @@ class TestPathMode:
         rows = p.rows(query="~/")
         shown = listed(rows)
         assert [r.split()[0] for r in shown[1:]] == ["~/parent", "~/used", "~/aaa", "~/zzz"]
-        assert shown[1].split(None, 1)[1] == "→ git/proj, 1m ago"
+        assert shown[1].split(None, 1)[1] == f"→ git{S}proj, 1m ago"
         assert shown[2].split(None, 1)[1] == "2h ago"
         assert shown[3] == "~/aaa"
 
@@ -204,7 +217,7 @@ class TestPathMode:
         env.log(env.home / deep, conversation("x", env.home / deep), mtime=NOW - 60)
         p, _ = start(env)
         note = listed(p.rows(query="~/"))[1].split(None, 1)[1]
-        assert note.startswith("→ …") and note.endswith("directory/directory, 1m ago")
+        assert note.startswith("→ …") and note.endswith(f"directory{S}directory, 1m ago")
         assert width(note) <= 100 - 50
 
     def test_exact_name_first(self, env):
@@ -220,6 +233,7 @@ class TestPathMode:
         p, _ = start(env)
         assert listed(p.rows(query="~/"))[1:] == ["~/link", "~/real"]
 
+    @posix_only  # Windows doesn't allow control characters in a name
     def test_odd_names_left_out(self, env):
         make_dirs(env, "ok", "bad\nname", "esc\x1b[31m")
         p, _ = start(env)
@@ -237,6 +251,7 @@ class TestPathMode:
         assert len(p.rows()) == 1
         assert strip_ansi(p.make_header()).startswith("No such directory: ~no-such-user-here")
 
+    @posix_only  # chmod can't lock a directory on Windows
     def test_unreadable_directory(self, env):
         make_dirs(env, "locked/inner")
         (env.home / "locked").chmod(0)
@@ -275,8 +290,9 @@ class TestPathMode:
         env.log(env.home / "git/a/b", conversation("x", env.home / "git/a/b"), mtime=NOW - 60)
         env.log(env.home / "git/c", conversation("x", env.home / "git/c"), mtime=NOW - 600)
         p, _ = start(env)
-        assert listed(p.rows(query="~/git/"))[0].split(None, 1) == ["~/git/", "→ a/b, 1m ago"]
+        assert listed(p.rows(query="~/git/"))[0].split(None, 1) == ["~/git/", f"→ a{S}b, 1m ago"]
 
+    @posix_only  # on Windows // starts a share
     def test_doubled_leading_slash_is_the_same_directory(self, env):
         # Linux reads //home as /home, so its history still applies.
         make_dirs(env, "git/x")
@@ -334,11 +350,11 @@ class TestPathKeys:
         env.log(env.home / "git/proj", conversation("x", env.home / "git/proj"), mtime=NOW - 60)
         p, _ = start(env)
         monkeypatch.setenv("FZF_POS", "2")
-        assert p.on_tab("") == "change-query:~/git/proj/"
+        assert p.on_tab("") == f"change-query:~{S}git{S}proj{S}"  # from the row's own path
         assert p.on_tab("pro") == ""  # the second row of what "pro" matches: none
         monkeypatch.setenv("FZF_POS", "1")
-        assert p.on_tab("") == "change-query:~/"
-        assert p.on_tab("pro") == "change-query:~/git/proj/"
+        assert p.on_tab("") == f"change-query:~{S}"
+        assert p.on_tab("pro") == f"change-query:~{S}git{S}proj{S}"
 
     def test_tab_in_a_sessions_view_does_nothing(self, env):
         env.log("/tmp", conversation("hello", "/tmp"))
@@ -446,8 +462,11 @@ class TestHeader:
         p, _ = start(env, cols=120)
         monkeypatch.setenv("FZF_POS", "2")
         p.on_enter(str(d), "")
-        hints = "   ".join(line.strip() for line in strip_ansi(p.make_header()).split("\n")[1:2])
-        assert hints == "enter resume   ctrl-x dismiss ↻   alt-x dismiss all   ctrl-s all sessions   esc back"
+        # Where the hints wrap depends on the title, which holds the test's own path.
+        lines = strip_ansi(p.make_header()).split("\n")[:2]
+        parts = {part for line in lines for part in re.split(r" {3,}", line.strip())}
+        hints = {"enter resume", "ctrl-x dismiss ↻", "alt-x dismiss all", "ctrl-s all sessions", "esc back"}
+        assert hints <= parts and len(parts - hints) == 1  # and the title
 
     def test_press_again_keeps_the_header_height(self, env):
         p, _ = start(env, cols=90)
@@ -555,7 +574,7 @@ class TestSessions:
         monkeypatch.setenv("FZF_POS", "2")
         p.on_enter(str(d), "")
         title = strip_ansi(p.make_header()).split("\n")[0]
-        assert title.startswith("Claude sessions in …") and title.endswith("directory/directory")
+        assert title.startswith("Claude sessions in …") and title.endswith(f"directory{S}directory")
         assert width(title) == 57
 
 
@@ -610,7 +629,7 @@ class TestDirectorySessions:
         env.log(env.home / "proj/sub", conversation("deeper", env.home / "proj/sub"), mtime=EARLY - 60)
         start(env)
         assert "Claude sessions in" in self.enter(env, monkeypatch, env.home / "proj", "~/proj")
-        assert displayed(env.picker().rows())[2].split()[2:] == ["proj/sub", "deeper"]
+        assert displayed(env.picker().rows())[2].split()[2:] == [f"proj{S}sub", "deeper"]
 
     def test_any_depth_and_nothing_outside(self, env, monkeypatch):
         make_dirs(env, "proj/a/b", "project-other")
@@ -637,13 +656,16 @@ class TestDirectorySessions:
         make_dirs(env, "x")
         at_home = env.log(env.home, conversation("at home", env.home), mtime=EARLY - 600)
         inside = env.log(env.home / "x", conversation("inside", env.home / "x"), mtime=EARLY - 60)
-        env.log("/tmp", conversation("elsewhere", "/tmp"), mtime=EARLY - 30)
+        elsewhere = env.tmp / "elsewhere"
+        elsewhere.mkdir()
+        env.log(elsewhere, conversation("elsewhere", elsewhere), mtime=EARLY - 30)
         start(env)
         self.enter(env, monkeypatch, env.home)
         rows = env.picker().rows()
         assert keys(rows) == [f"+{env.home}", inside, at_home]
-        assert [r.split()[2] for r in displayed(rows)[2:]] == ["~/x", "~"]
+        assert [r.split()[2] for r in displayed(rows)[2:]] == [f"~{S}x", "~"]
 
+    @posix_only  # Windows has a root per drive; see test_pathtext_windows
     def test_root_holds_everything(self, env, monkeypatch):
         env.log("/tmp", conversation("elsewhere", "/tmp"), mtime=EARLY - 30)
         env.log(env.home, conversation("at home", env.home), mtime=EARLY - 60)
@@ -658,7 +680,7 @@ class TestDirectorySessions:
         env.log(env.home / "git/proj/tests", conversation("b", env.home / "git/proj/tests"), mtime=EARLY - 60)
         start(env)
         self.enter(env, monkeypatch, env.home / "git/proj", "~/git/proj")
-        assert [r.split()[2] for r in displayed(env.picker().rows())[2:]] == ["proj/tests", "proj"]
+        assert [r.split()[2] for r in displayed(env.picker().rows())[2:]] == [f"proj{S}tests", "proj"]
 
     def test_a_pasted_session_id_resumes(self, env, monkeypatch):
         d = project(env, "proj", NOW - 60)

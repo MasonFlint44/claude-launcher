@@ -10,9 +10,9 @@ import sys
 import time
 
 import pytest
-from fake_terminal import FakeTerminal
 
 from claude_launcher.platforms import current
+from conftest import posix_only
 
 HOST = current().host
 
@@ -63,8 +63,11 @@ def test_lock_keeps_another_process_out(tmp_path):
         child.wait(timeout=10)
 
 
+@posix_only  # a pseudo-terminal stands in for the terminal; Windows' is checked live
 @pytest.mark.parametrize("answers", [True, False])
 def test_terminal_reply(answers):
+    from fake_terminal import FakeTerminal
+
     t = FakeTerminal(answers=answers, da1=answers)
     try:
         reply = HOST.terminal_reply(t.slave, b"\x1b]11;?\x1b\\\x1b[c", re.compile(rb"\x1b\[\?[\d;]*c"), 0.3)

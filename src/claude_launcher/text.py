@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import sys
 import time
 import unicodedata
 
@@ -107,3 +108,13 @@ def clock(then: float, now: float | None = None) -> str:
     if now - then < 6 * 86400:
         return time.strftime("%a ", t) + hm
     return time.strftime("%b ", t) + str(t.tm_mday) + " " + hm
+
+
+def utf8_out() -> None:
+    """fzf reads UTF-8, with lines ending in \\n. Windows' Python writes the
+    system's code page (cp1252, which has no ↻) to a pipe, and \\r\\n,
+    unless told otherwise."""
+    for stream in (sys.stdout, sys.stderr):
+        utf8 = (stream.encoding or "").lower().replace("-", "") == "utf8"
+        if (not utf8 or sys.platform == "win32") and hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors=stream.errors, newline="\n")

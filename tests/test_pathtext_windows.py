@@ -131,7 +131,17 @@ def test_without_sep(path, expected):
     assert w.without_sep(path) == expected
 
 
-@pytest.mark.parametrize(("path", "expected"), [("C:\\a", "C:\\a\\"), ("C:\\", "C:\\"), ("D:/x/", "D:/x\\")])
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        ("C:\\a", "C:\\a\\"),
+        ("C:\\", "C:\\"),
+        ("D:/x/", "D:/x/"),
+        ("~/git", "~/git/"),
+        ("C:\\a/b", "C:\\a/b\\"),
+        ("C:", "C:\\"),
+    ],
+)
 def test_with_sep(path, expected):
     assert w.with_sep(path) == expected
 
@@ -169,3 +179,27 @@ def test_log_directory_name_for_a_windows_path(tmp_path):
 
     paths = Paths(config=tmp_path, home=tmp_path)
     assert paths.log_dirs_for("C:\\Users\\tester") == [tmp_path / "projects" / "C--Users-tester"]
+
+
+@pytest.mark.parametrize(
+    ("arg", "quoted"),
+    [
+        ("C:\\Program Files\\Python314\\python.exe", '^"C:\\Program Files\\Python314\\python.exe^"'),
+        ("C:\\x\\", '^"C:\\x\\\\^"'),  # a trailing backslash would escape the quote
+        ('say "hi"', '^"say \\^"hi\\^"^"'),
+        ("a&b|c<d>e(f)g^h%i!j", '^"a^&b^|c^<d^>e^(f^)g^^h^%i^!j^"'),
+    ],
+)
+def test_cmd_quote(arg, quoted):
+    # The core's command line for fzf's key bindings, which cmd runs.
+    from claude_launcher.platforms.windows import cmd_quote
+
+    assert cmd_quote(arg) == quoted
+
+
+def test_core_command_names_the_program_in_plain_quotes():
+    from claude_launcher.platforms.windows import core_command
+
+    line = core_command(["--run", "C:\\T\\x"], python="C:\\Program Files\\Python314\\python.exe")
+    assert line.startswith('"C:\\Program Files\\Python314\\python.exe" ^"')
+    assert line.endswith(' ^"--run^" ^"C:\\T\\x^"')

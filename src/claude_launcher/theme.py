@@ -71,7 +71,7 @@ class Theme:
     @classmethod
     def load(cls, path: Path = THEME_FILE) -> Theme:
         try:
-            return cls.parse(path.read_text())
+            return cls.parse(path.read_text(encoding="utf-8"))
         except OSError:
             return cls()
 
@@ -185,7 +185,7 @@ def apply(fd: int, theme: Theme, saved: Path) -> bool:
     originals = ask(fd, targets)
     if not originals:
         return False
-    saved.write_text(json.dumps(originals))
+    saved.write_text(json.dumps(originals), encoding="utf-8", newline="")
     os.write(fd, b"".join(_set(slot, targets[slot]) for slot in originals))
     return True
 
@@ -193,7 +193,7 @@ def apply(fd: int, theme: Theme, saved: Path) -> bool:
 def restore(fd: int, saved: Path) -> None:
     """Put back the colors apply() changed."""
     try:
-        originals = json.loads(saved.read_text())
+        originals = json.loads(saved.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return
     os.write(fd, b"".join(_reset(slot) for slot in originals))

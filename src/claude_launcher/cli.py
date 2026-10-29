@@ -13,7 +13,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import fzf
+from . import fzf, text
 from .picker import Picker
 
 
@@ -118,6 +118,7 @@ def main(argv: list[str] | None = None) -> int:
     # Parsed by hand: the arguments after the action are typed text (fzf's
     # query) or claude's own options, which may look like options themselves.
     argv = list(sys.argv[1:] if argv is None else argv)
+    text.utf8_out()
     run = None
     if argv[:1] == ["--run"] and len(argv) >= 2:
         run, argv = Path(argv[1]), argv[2:]

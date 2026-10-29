@@ -161,14 +161,17 @@ class Picker:
     def _file(self, name: str) -> Path:
         return self.run / name
 
+    def _read(self, name: str) -> str:
+        return self._file(name).read_text(encoding="utf-8")
+
     def _write(self, name: str, content: str) -> None:
         tmp = self._file(name + ".tmp")
-        tmp.write_text(content)
+        tmp.write_text(content, encoding="utf-8", newline="")
         os.replace(tmp, self._file(name))
 
     def _load_state(self) -> State:
         try:
-            data = json.loads(self._file("state.json").read_text())
+            data = json.loads(self._file("state.json").read_text(encoding="utf-8"))
             return State(**{k: v for k, v in data.items() if k in State.__dataclass_fields__})
         except (OSError, ValueError, TypeError):
             return State()
@@ -319,7 +322,7 @@ class Picker:
 
     def _projects(self) -> list[list]:
         try:
-            return json.loads(self._file("projects.json").read_text())
+            return json.loads(self._file("projects.json").read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return [[str(self.paths.home), 0.0]]
 
@@ -432,7 +435,7 @@ class Picker:
 
     def _sessions(self) -> list[dict]:
         try:
-            return json.loads(self._file("sessions.json").read_text())
+            return json.loads(self._file("sessions.json").read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return []
 
@@ -552,12 +555,12 @@ class Picker:
             "--tabstop=1",  # the tab before a note shows as one space
             "--header-lines=1",
             "--header-first",
-            f"--header={self._file('header').read_text()}",
+            f"--header={self._read('header')}",
             f"--prompt={PROJECTS_PROMPT}",
             "--info=inline-right",
             f"--margin=0,{self.state.cols - self.state.width},0,0",
             f"--listen={self.state.listen}",
-            f"--with-shell={self.state.shell}",
+            *([f"--with-shell={self.state.shell}"] if self.state.shell else []),
             f"--bind=change:transform:{c} ui change {{q}}",
             "--bind=start:unbind(result)",  # bound only while a cursor waits to be put back
             f"--bind=result:transform:{c} ui result {{1}}",
@@ -700,7 +703,7 @@ class Picker:
                 if self.state.view == "recent":
                     return self._dismiss(None)
                 return self._dismiss(sorted({r["group"] for r in self._sessions() if r["group"]}))
-            return f"{action}+change-header:{self._file('header').read_text()}"
+            return f"{action}+change-header:{self._read('header')}"
 
         self.state.key = [key, now_ms]
         self._save_state()
@@ -712,7 +715,7 @@ class Picker:
         """The header to put back after a first press, unless another key came since."""
         if self.state.key != token:
             return None
-        return self._file("header").read_text()
+        return self._file("header").read_text(encoding="utf-8")
 
     # --- After fzf exits -------------------------------------------------------
 
@@ -720,7 +723,7 @@ class Picker:
         """What Enter chose, or a message saying why nothing was."""
         pos, row = 1, ""
         try:
-            lines = self._file("accept").read_text().split("\n")
+            lines = self._file("accept").read_text(encoding="utf-8").split("\n")
             pos = max(1, int(lines[0]))
             row = lines[1]
         except (OSError, ValueError, IndexError):
@@ -832,7 +835,8 @@ def _nth_match(fzf_path: str, rows: list[str], query: str, pos: int, nth: str = 
             [fzf_path, f"--filter={query}", *MATCHING, f"--nth={nth}"],
             input="".join(r + "\n" for r in rows),
             capture_output=True,
-            text=True,
+            encoding="utf-8",  # fzf's, not the system's (cp1252 on Windows)
+            errors="surrogateescape",
         )
         matched = done.stdout.splitlines()
     if len(matched) < pos:

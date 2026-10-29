@@ -18,8 +18,10 @@ class TestHook:
         settings = json.loads(path.read_text())
         assert settings["model"] == "opus"
         assert settings["hooks"]["SessionStart"][0] == other
-        assert settings["hooks"]["SessionStart"][1]["hooks"][0]["command"] == "/bin/claude-session-hook start"
-        assert settings["hooks"]["SessionEnd"][0]["hooks"][0]["command"] == "/bin/claude-session-hook end"
+        assert (
+            settings["hooks"]["SessionStart"][1]["hooks"][0]["command"] == f"{Path('/bin/claude-session-hook')} start"
+        )
+        assert settings["hooks"]["SessionEnd"][0]["hooks"][0]["command"] == f"{Path('/bin/claude-session-hook')} end"
 
     def test_add_twice_changes_nothing(self, tmp_path):
         path = tmp_path / "settings.json"
@@ -33,7 +35,7 @@ class TestHook:
         hook_settings.add_hook(path, Path("/old/claude-session-hook"))
         hook_settings.add_hook(path, Path("/new/claude-session-hook"))
         groups = json.loads(path.read_text())["hooks"]["SessionStart"]
-        assert [h["command"] for g in groups for h in g["hooks"]] == ["/new/claude-session-hook start"]
+        assert [h["command"] for g in groups for h in g["hooks"]] == [f"{Path('/new/claude-session-hook')} start"]
 
     def test_writes_through_a_symlink(self, tmp_path):
         real = tmp_path / "dotfiles" / "settings.json"
@@ -45,7 +47,8 @@ class TestHook:
         hook_settings.add_hook(link, Path("/x/claude-session-hook"))
         assert link.is_symlink()
         assert "SessionStart" in json.loads(real.read_text())["hooks"]
-        assert real.stat().st_mode & 0o777 == 0o600
+        if os.name != "nt":  # Windows files have no such modes
+            assert real.stat().st_mode & 0o777 == 0o600
 
     def test_remove(self, tmp_path):
         path = tmp_path / "settings.json"

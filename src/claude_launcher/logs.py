@@ -260,7 +260,7 @@ class _Log:
         custom = _last_field(self.tail, "customTitle")
         if custom is None:  # not re-written near the end: try the file /rename writes
             try:
-                with open(self.path.parent / self.session_id / "custom-title.json") as f:
+                with open(self.path.parent / self.session_id / "custom-title.json", encoding="utf-8") as f:
                     value = json.load(f).get("customTitle")
                 custom = value if isinstance(value, str) else None
             except (OSError, ValueError, AttributeError):

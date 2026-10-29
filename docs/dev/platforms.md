@@ -11,7 +11,7 @@ Most of the launcher is the same everywhere: the picker (`picker.py`), the sessi
 | `Host` | Boot ID and start, whether a process is a running Claude, the user, a lock between processes, the terminal (opening it, and reading its answers to queries unechoed) | `/proc`, `flock`, `/dev/tty`, `termios` |
 | `EventSource` | The restarts and logouts in a record's boot that could have closed its Claude. Only events: the margins and which one wins are `restart.py`'s | the systemd journal |
 | `Setup` | What install.sh sets up after the shared steps, and undoing it; any core commands of the platform's own | Ghostty theme link, icon, desktop entries, terminal profiles; `terminal open guake` |
-| `Platform` fields | fzf's name for the OS (for the fetched build), the shell fzf runs key bindings with, the core's command line quoted for it, how the picker reaches fzf while it runs (a Unix socket, or a localhost port where Python has no Unix sockets), and where the launcher keeps its own files | `linux`, `bash -c`, `shlex`, socket, `~/.local/share/claude-launcher` |
+| `Platform` fields | fzf's name for the OS (for the fetched build), the shell fzf runs key bindings with, the core's command line quoted for it, more environment for fzf, columns fzf leaves unused, how the picker reaches fzf while it runs (a Unix socket, or a localhost port where Python has no Unix sockets), and where the launcher keeps its own files | `linux`, `bash -c`, `shlex`, none, 0, socket, `~/.local/share/claude-launcher` |
 | session hook | Writes the record `restart.Record` reads, for each interactive Claude | `bin/claude-session-hook` (bash) |
 | path text | Separators, `~`, what's inside what, path mode's splitting | `pathtext.py`: POSIX rules, or Windows' (drives, shares, either slash, case ignored), by `os.name` |
 
@@ -28,6 +28,8 @@ Most of the launcher is the same everywhere: the picker (`picker.py`), the sessi
 3. Pass `tests/contract/` on it: they run against whatever platform the tests run on.
 4. Put its own tests in `tests/<name>/`, skipped elsewhere, and its user docs in `docs/<name>.md` with a pointer from the README.
 5. Anything the picker does with paths that looks different there goes in `pathtext.py`, with cases in `tests/test_pathtext.py`.
+
+Windows (`platforms/windows/`) is the second platform; see docs/dev/windows.md.
 
 Notes for Windows and WSL. On Windows, paths aren't only on `C:`: any drive letter, and UNC paths (`\\server\share`, `\\wsl.localhost\<distro>\...`); `pathtext.PathText("nt")` has those rules, and `tests/test_pathtext_windows.py` checks them. WSL is Linux with Windows' restarts: it can reuse `linux/host.py` and the bash hook, with an `EventSource` that asks Windows (the original Windows version read event 1074 with `wevtutil.exe`).
 

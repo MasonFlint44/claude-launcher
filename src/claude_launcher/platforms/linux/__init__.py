@@ -39,6 +39,8 @@ def platform() -> Platform:
         fzf_os="linux",
         fzf_shell="bash -c",
         core_command=lambda args: shlex.join([str(CORE), *args]),
+        fzf_env={},
+        columns_lost=0,
         fzf_listen="socket",
         data_dir=data_dir,
     )
