@@ -44,7 +44,17 @@ from typing import TYPE_CHECKING
 from . import fzf, logs, pathtext, text
 from .logs import is_session_id
 from .paths import Paths
-from .pathtext import expand, first_part, is_inside, split_path, typed_path_like, up_a_level, with_sep, without_sep
+from .pathtext import (
+    below,
+    expand,
+    first_part,
+    is_inside,
+    split_path,
+    typed_path_like,
+    up_a_level,
+    with_sep,
+    without_sep,
+)
 from .restart import Group, RestartState
 from .text import color, pad, truncate, truncate_left
 from .text import width as text_width
@@ -361,14 +371,12 @@ class Picker:
         inside: dict[str, tuple[float, str]] = {}  # name: (when, where) for the latest project inside it
         prefix = with_sep(parent)
         for directory, used in self._projects():
-            directory = os.path.normpath(directory)
-            if not used:
+            rest = below(directory, parent) if used else None
+            if rest is None:
                 continue
-            if directory == parent:
+            if not rest:
                 parent_own = max(parent_own, used)
-            if not directory.startswith(prefix) or directory == parent:
                 continue
-            rest = directory[len(prefix) :]
             if used > parent_inside[0]:
                 parent_inside = (used, rest)
             name, deeper = first_part(rest)
@@ -459,8 +467,9 @@ class Picker:
         if self.state.view == "directory" and within:
             if is_inside(home, within):
                 return text.printable(self.paths.tilde(cwd))
-            return text.printable(os.path.relpath(cwd, os.path.dirname(within)))
-        if cwd == home:
+            rest, top = below(cwd, within), pathtext.name(within)
+            return text.printable(top + pathtext.SEP + rest if rest else top)
+        if pathtext.same(cwd, home):
             return "~"
         return text.printable(pathtext.name(cwd))
 

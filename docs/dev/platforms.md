@@ -13,7 +13,7 @@ Most of the launcher is the same everywhere: the picker (`picker.py`), the sessi
 | `Setup` | What install.sh sets up after the shared steps, and undoing it; any core commands of the platform's own | Ghostty theme link, icon, desktop entries, terminal profiles; `terminal open guake` |
 | `Platform` fields | fzf's name for the OS (for the fetched build), the shell fzf runs key bindings with, the core's command line quoted for it, how the picker reaches fzf while it runs (a Unix socket, or a localhost port where Python has no Unix sockets), and where the launcher keeps its own files | `linux`, `bash -c`, `shlex`, socket, `~/.local/share/claude-launcher` |
 | session hook | Writes the record `restart.Record` reads, for each interactive Claude | `bin/claude-session-hook` (bash) |
-| path text | Separators, `~`, what's inside what, path mode's splitting | `pathtext.py` (POSIX for now) |
+| path text | Separators, `~`, what's inside what, path mode's splitting | `pathtext.py`: POSIX rules, or Windows' (drives, shares, either slash, case ignored), by `os.name` |
 
 `Host` and `Setup` are made when first used and `EventSource` only when the picker sorts the restart group, so key presses, which run the core once each, never load platform code (`tests/test_imports.py` checks).
 
@@ -29,7 +29,7 @@ Most of the launcher is the same everywhere: the picker (`picker.py`), the sessi
 4. Put its own tests in `tests/<name>/`, skipped elsewhere, and its user docs in `docs/<name>.md` with a pointer from the README.
 5. Anything the picker does with paths that looks different there goes in `pathtext.py`, with cases in `tests/test_pathtext.py`.
 
-Notes for Windows and WSL. On Windows, paths aren't only on `C:`: any drive letter, and UNC paths (`\\server\share`, `\\wsl.localhost\<distro>\...`). WSL is Linux with Windows' restarts: it can reuse `linux/host.py` and the bash hook, with an `EventSource` that asks Windows (the original Windows version read event 1074 with `wevtutil.exe`).
+Notes for Windows and WSL. On Windows, paths aren't only on `C:`: any drive letter, and UNC paths (`\\server\share`, `\\wsl.localhost\<distro>\...`); `pathtext.PathText("nt")` has those rules, and `tests/test_pathtext_windows.py` checks them. WSL is Linux with Windows' restarts: it can reuse `linux/host.py` and the bash hook, with an `EventSource` that asks Windows (the original Windows version read event 1074 with `wevtutil.exe`).
 
 ## Adding a platform in a fork
 

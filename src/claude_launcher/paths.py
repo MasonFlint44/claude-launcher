@@ -27,8 +27,9 @@ class Paths:
     home: Path
 
     @classmethod
-    def from_env(cls, env: Mapping[str, str] = os.environ) -> Paths:
-        home = Path(env.get("HOME") or Path.home())
+    def from_env(cls, env: Mapping[str, str] = os.environ, windows: bool = os.name == "nt") -> Paths:
+        # On Windows, HOME is Git Bash's (/c/Users/me) when it's set at all.
+        home = Path(env.get("USERPROFILE" if windows else "HOME") or Path.home())
         config = env.get("CLAUDE_CONFIG_DIR") or str(home / ".claude")
         return cls(config=Path(config), home=home)
 
