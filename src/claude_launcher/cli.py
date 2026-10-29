@@ -1,8 +1,8 @@
-"""libexec/claude-launcher-core: the commands fzf's key bindings and install.sh
+"""libexec/claude-launcher-core: the commands fzf's key bindings and the installers
 call. Not meant to be run by hand. (bin/claude-launcher itself is launcher.py.)
 
     --run DIR ui ACTION ...  what a key does in the picker (see picker.py)
-    install add-hook|remove-hook|platform|remove-platform|fzf-... (see _install)
+    install run|undo|add-hook|remove-hook|fzf-... (see _install)
     Anything else is one of the platform's own commands (Linux: `terminal
     open guake [LAUNCHER]`, what the Guake desktop entry runs).
 """
@@ -67,8 +67,8 @@ def _install(action: str, args: list[str]) -> int:
             print(e, file=sys.stderr)
             return 1
         return 4 if changed else 0  # install.sh says which
-    if action in ("platform", "remove-platform"):
-        return _platform_setup(action, args)
+    if action in ("run", "undo"):
+        return _run_install(action, args)
     if action in ("fzf-status", "fetch-fzf", "fzf-dir"):
         from .platforms import current
 
@@ -91,26 +91,24 @@ def _install(action: str, args: list[str]) -> int:
     return 2
 
 
-def _platform_setup(action: str, args: list[str]) -> int:
-    """install platform LAUNCHER [--terminal NAMES] [--icon FILE] | remove-platform:
-    what install.sh sets up beyond the shared steps, one line per thing done."""
-    import subprocess
-
+def _run_install(action: str, args: list[str]) -> int:
+    """install run [--terminal NAMES] [--icon FILE] | install undo: everything
+    the installer does after checking for Python, one line per thing done.
+    Exits 1 after an "error: " line."""
+    from . import install
     from .platforms import current
 
-    setup = current().setup()
-    opts = dict(zip(args[1::2], args[2::2], strict=False))
-    try:
-        if action == "platform":
-            lines = setup.install(Path(args[0]), opts.get("--terminal") or None, opts.get("--icon") or None)
-        else:
-            lines = setup.uninstall()
-        for line in lines:
-            print(line, flush=True)
-    except (ValueError, RuntimeError, OSError, subprocess.SubprocessError) as e:
-        print(e, file=sys.stderr)
-        return 1
-    return 0
+    opts = dict(zip(args[::2], args[1::2], strict=False))
+    platform = current()
+    if action == "run":
+        lines = install.install(platform, opts.get("--terminal") or None, opts.get("--icon") or None)
+    else:
+        lines = install.uninstall(platform)
+    failed = False
+    for line in lines:
+        print(line, flush=True)
+        failed = failed or line.startswith("error: ")
+    return 1 if failed else 0
 
 
 USAGE = __doc__

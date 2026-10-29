@@ -72,4 +72,4 @@ def test_the_core_runs_a_platforms_own_commands(fresh, monkeypatch, capsys):
     assert cli.main(["hello", "a", "b"]) == 7
     assert calls == [["a", "b"]]
     assert cli.main(["nope"]) == 2
-    assert "install add-hook" in capsys.readouterr().err  # the usage
+    assert "install run" in capsys.readouterr().err  # the usage

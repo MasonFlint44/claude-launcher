@@ -10,7 +10,7 @@ The Linux platform, `src/claude_launcher/platforms/linux/`, and the rules for it
 | `platforms/linux/__init__.py` | Linux's `Platform`: the parts below, the fzf build name, and how fzf's key bindings run the core (`bash -c`, `shlex`). |
 | `platforms/linux/host.py` | `/proc` (boot ID, uptime, whether Claude is running), `flock`, the controlling terminal and `termios`. |
 | `platforms/linux/journal.py` | Restarts and logouts from the systemd journal (`JournalEvents`). |
-| `platforms/linux/setup.py` | What install.sh sets up after the shared steps: the Ghostty theme link, then `desktop.py` (desktop entries, the icon) and `terminals.py` (the terminals the desktop launcher can open, one class each, and how). Also the core's `terminal open guake`, which Guake's desktop entry runs. |
+| `platforms/linux/setup.py` | What install.sh sets up after fzf and the hook (`install.py`): the links in `~/.local/bin`, the Ghostty theme link, then `desktop.py` (desktop entries, the icon) and `terminals.py` (the terminals the desktop launcher can open, one class each, and how). Also the core's `terminal open guake`, which Guake's desktop entry runs. |
 | `tests/docker/` | The suite on other distros, every terminal on a virtual display, and real systemd per version. See its README. |
 
 ## Commands

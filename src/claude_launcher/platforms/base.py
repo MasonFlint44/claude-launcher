@@ -74,14 +74,23 @@ class EventSource(Protocol):
 
 
 class Setup(Protocol):
-    """What install.sh sets up for this platform beyond the shared steps (fzf,
-    the links in ~/.local/bin, the hook in settings.json): on Linux, the
+    """What the installer (install.py) sets up for this platform beyond fzf
+    and the hook in settings.json: on Linux, the links in ~/.local/bin, the
     desktop entries, terminal profiles and icon."""
 
-    def install(self, launcher: Path, terminal_names: str | None, icon: str | None) -> Iterator[str]:
+    # What install() sets up, for "could not set up ...", and what to do next.
+    what: str
+    done: str
+
+    def hook_command(self) -> Path | list[str]:
+        """What settings.json runs for the session hook: a script, which
+        Claude runs with its shell, or a program and its arguments."""
+        ...
+
+    def install(self, terminal_names: str | None, icon: str | None) -> Iterator[str]:
         """Set it up, saying what was done one line at a time ("warning: ..."
         for a problem that doesn't stop it). Raises if it can't finish.
-        `terminal_names` and `icon` are install.sh's --terminal and --icon."""
+        `terminal_names` and `icon` are the installer's --terminal and --icon."""
         ...
 
     def uninstall(self) -> Iterator[str]:
