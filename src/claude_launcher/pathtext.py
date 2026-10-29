@@ -4,6 +4,9 @@ read from Claude's logs.
 Every separator the picker relies on is in this module, so a platform whose
 paths look different (Windows: any drive letter, C:\\ or D:\\, and UNC paths
 like \\\\server\\share) changes only this. For now they're POSIX paths.
+
+Typed text stays as typed; paths are tidied (`normal`) only where they're
+compared or opened.
 """
 
 from __future__ import annotations
@@ -34,9 +37,18 @@ def first_part(rest: str) -> tuple[str, str]:
     return head, deeper
 
 
+def normal(path: str) -> str:
+    """`path` tidied for comparing: no doubled separators, `.` or `..`.
+    POSIX lets a system give a leading // a meaning of its own, so normpath
+    keeps it; Linux gives it none, so //usr is /usr. (Windows' leading \\\\ is
+    a network share, and will keep its meaning there.)"""
+    path = os.path.normpath(path)
+    return SEP + path.lstrip(SEP) if path.startswith(SEP * 2) else path
+
+
 def is_inside(path: str, directory: str) -> bool:
     """`path` is `directory` or somewhere inside it."""
-    path, directory = os.path.normpath(path), os.path.normpath(directory)
+    path, directory = normal(path), normal(directory)
     return path == directory or path.startswith(with_sep(directory))
 
 
@@ -66,7 +78,7 @@ def split_path(query: str) -> tuple[str, str]:
 def expand(typed: str) -> str | None:
     """The directory a typed path names, or None for an unknown ~user."""
     path = os.path.expanduser(typed)
-    return None if path.startswith("~") else os.path.normpath(path)
+    return None if path.startswith("~") else normal(path)
 
 
 def up_a_level(query: str) -> str:

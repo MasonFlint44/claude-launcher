@@ -35,6 +35,9 @@ def test_first_part():
         ("/ab", "/a", False),  # a sibling that starts the same
         ("/a", "/a/b", False),
         ("/x", "/", True),
+        ("/usr/lib", "//usr", True),  # Linux reads // as /
+        ("//usr/lib", "/usr", True),
+        ("/usr", "///", True),
     ],
 )
 def test_is_inside(path, directory, inside):
@@ -81,4 +84,13 @@ def test_expand(monkeypatch):
     monkeypatch.setenv("HOME", "/h/me")
     assert p.expand("~/x/") == "/h/me/x"
     assert p.expand("/a//b/") == "/a/b"
+    assert p.expand("//usr/") == "/usr"
+    assert p.expand("///") == "/"
     assert p.expand("~nobody-here-xyz/") is None
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"), [("//usr", "/usr"), ("///usr//lib/", "/usr/lib"), ("//", "/"), ("/a/../b", "/b")]
+)
+def test_normal(path, expected):
+    assert p.normal(path) == expected

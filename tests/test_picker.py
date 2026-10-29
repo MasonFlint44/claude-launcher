@@ -277,6 +277,18 @@ class TestPathMode:
         p, _ = start(env)
         assert listed(p.rows(query="~/git/"))[0].split(None, 1) == ["~/git/", "→ a/b, 1m ago"]
 
+    def test_doubled_leading_slash_is_the_same_directory(self, env):
+        # Linux reads //home as /home, so its history still applies.
+        make_dirs(env, "git/x")
+        env.log(env.home / "git", conversation("x", env.home / "git"), mtime=NOW - 7200)
+        p, _ = start(env)
+        typed = "/" + str(env.home / "git") + "/"
+        rows = p.rows(query=typed)
+        assert keys(rows)[0] == str(env.home / "git")
+        assert listed(rows)[0].split() == [typed, "2h", "ago"]
+        assert listed(rows)[1] == typed + "x"  # shown as typed, so Tab completes it
+        assert keys(rows)[1] == str(env.home / "git/x")
+
     def test_hints(self, env):
         make_dirs(env, "git/claude-launcher")
         p, _ = start(env, cols=110)
