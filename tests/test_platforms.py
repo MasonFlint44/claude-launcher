@@ -39,7 +39,9 @@ def fresh(monkeypatch):
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="loads Linux's platform")
 def test_linux(fresh, monkeypatch):
     monkeypatch.setattr(sys, "platform", "linux")
-    assert platforms.current().name == "linux"
+    from claude_launcher.platforms.wsl import is_wsl
+
+    assert platforms.current().name == ("wsl" if is_wsl() else "linux")
     assert platforms.current() is platforms.current()
 
 

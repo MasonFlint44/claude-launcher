@@ -126,7 +126,10 @@ class PathText:
 
     def expand(self, typed: str) -> str | None:
         """The directory a typed path names, or None for an unknown ~user."""
-        path = self.path.expanduser(typed)
+        try:
+            path = self.path.expanduser(typed)
+        except (ImportError, KeyError):  # ~user by POSIX rules, on an OS without pwd
+            return None
         return None if path.startswith("~") else self.normal(path)
 
     def up_a_level(self, query: str) -> str:

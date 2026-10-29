@@ -18,6 +18,22 @@ jobs:
       - run: uvx ruff format --check src tests bin/claude-launcher bin/claude-session-hook.py libexec/claude-launcher-core
       - run: shellcheck bin/claude-session-hook install.sh tests/docker/run.sh tests/docker/*/*.sh
 
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"  # the oldest the launcher runs on
+      - run: python -m pip install pytest pyte
+      - name: fzf, fetched as install.ps1 would
+        shell: pwsh
+        run: |
+          $fzf = python libexec/claude-launcher-core install fetch-fzf
+          Add-Content $env:GITHUB_PATH (Split-Path $fzf)
+      # A short temp directory keeps the deepest test paths under 260 characters.
+      - run: python -m pytest -q -p no:cacheprovider --basetemp=C:\t
+
   distro:
     runs-on: ubuntu-latest
     strategy:

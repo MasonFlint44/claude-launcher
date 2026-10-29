@@ -138,6 +138,16 @@ WINDOWS = sys.platform == "win32"
 posix_only = pytest.mark.skipif(WINDOWS, reason="POSIX only")
 
 
+def _in_wsl() -> bool:
+    from claude_launcher.platforms.wsl import is_wsl
+
+    return sys.platform.startswith("linux") and is_wsl()
+
+
+# A Linux desktop's own setup: in WSL the installer writes to Windows' side instead.
+desktop_only = pytest.mark.skipif(_in_wsl(), reason="a Linux desktop's setup, not WSL's")
+
+
 def pytest_ignore_collect(collection_path, config):
     tests = Path(__file__).parent
     if WINDOWS and collection_path.name in POSIX_ONLY:

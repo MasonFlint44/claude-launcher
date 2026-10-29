@@ -38,4 +38,6 @@ Checked in the VM (WSL 3.0.3, Ubuntu 26.04 with systemd): install.sh, the profil
 
 ## Testing in a VM
 
-The suite runs on Windows (`python -m pytest --basetemp=C:\t`; a short temp directory keeps deep test paths under 260 characters). Tests that drive a pseudo-terminal (`test_e2e.py`, `test_theme.py`) are POSIX-only; on Windows the launcher is driven over SSH, whose sessions are real consoles (ConPTY), and its screen rendered with pyte.
+The suite runs on Windows (`python -m pytest --basetemp=C:\t`; a short temp directory keeps deep test paths under 260 characters), in CI on `windows-latest` with Python 3.10, and in WSL, where a Linux desktop's own tests (`desktop_only`, such as install.sh's, which would write to the real Windows Terminal) are skipped. Tests that drive a pseudo-terminal (`test_e2e.py`, `test_theme.py`) are POSIX-only; on Windows the launcher is driven over SSH, whose sessions are real consoles (ConPTY), and its screen rendered with pyte.
+
+A Windows 11 VM (QEMU, no root needed) was used for all of the above: an unattended install, SSH for commands, QMP for screenshots and keys on its desktop (Windows Terminal), and WSL inside it. Its clock must be local time (`-rtc base=localtime`), or restarts log events hours apart.

@@ -1,6 +1,6 @@
 # claude-launcher
 
-A project and session picker for Claude Code, with a "Claude Code" app for your desktop and a Claude Dark look for your terminal. It runs on Linux.
+A project and session picker for Claude Code, with a "Claude Code" app for your desktop and a Claude Dark look for your terminal. It runs on Linux, Windows and WSL.
 
 Run `claude-launcher` (or open **Claude Code** from your apps) and you get a list of the directories you've used Claude in, most recent first. Pick one to see its sessions and resume one, or start a new session there; Ctrl-S shows your recent sessions everywhere. When Claude exits, you're back at the list.
 
@@ -25,7 +25,7 @@ project>                                                                        
 | `share/icons/` | The app icon: a prompt in a speech bubble. `scripts/render-icons.sh` renders its PNGs from the SVG. |
 | `install.sh` | Sets everything up, or with `--uninstall` takes it out. |
 | `src/claude_launcher/` | The picker's logic, in Python (standard library only). What differs by OS is in `platforms/`. |
-| `docs/` | Installing and using it on each OS ([Linux](docs/linux.md)), and [adding a platform](docs/dev/platforms.md). |
+| `docs/` | Installing and using it on each OS ([Linux](docs/linux.md), [Windows](docs/windows.md), [WSL](docs/wsl.md)), and [adding a platform](docs/dev/platforms.md). |
 
 ## Install
 
@@ -37,6 +37,15 @@ git clone https://github.com/MasonFlint44/claude-launcher.git ~/git/claude-launc
 ```
 
 [docs/linux.md](docs/linux.md) has what the installer sets up, its options, the **Claude Code** app for each terminal, updating and uninstalling.
+
+On Windows (with [Claude Code](https://docs.claude.com/en/docs/claude-code) and Git; the installer offers to install Python if you don't have it), in PowerShell:
+
+```powershell
+git clone https://github.com/MasonFlint44/claude-launcher.git $HOME\git\claude-launcher
+powershell -ExecutionPolicy Bypass -File $HOME\git\claude-launcher\install.ps1
+```
+
+Then open a **Claude Code** tab in Windows Terminal. [docs/windows.md](docs/windows.md) has the details. In WSL, clone and run `install.sh` inside your distro, as on Linux: [docs/wsl.md](docs/wsl.md).
 
 ## Colors
 
@@ -140,7 +149,7 @@ When a restart or logging out closed Claude sessions, the picker shows which:
 
 Press Ctrl-S and they're at the top of the Sessions view, marked ↻ (and at the top of their directory's sessions too). Enter resumes one, and it leaves the group; Ctrl-X takes it out without resuming, and Alt-X twice takes out every ↻ session the view shows. A session stays in the group for 7 days, unless you resume or dismiss it first, or start it again from anywhere else.
 
-**How it knows:** `claude-session-hook` keeps a small record for each interactive Claude. An exit you chose (`/exit`, `/clear`, switching with `/resume`) deletes it; closing the tab, or the desktop closing every window, keeps it with the time the session ended. When the picker opens, it checks those times against the system's own record of restarts and logouts. A session that ended during one, or just before or after it, was closed by it; anything else, like a tab you closed yourself, isn't listed. On Linux that record is the systemd journal: [docs/linux.md](docs/linux.md#how-it-knows-what-a-restart-or-logout-closed) has the details, and what it needs.
+**How it knows:** `claude-session-hook` keeps a small record for each interactive Claude. An exit you chose (`/exit`, `/clear`, switching with `/resume`) deletes it; closing the tab, or the desktop closing every window, keeps it with the time the session ended. When the picker opens, it checks those times against the system's own record of restarts and logouts. A session that ended during one, or just before or after it, was closed by it; anything else, like a tab you closed yourself, isn't listed. On Linux that record is the systemd journal ([docs/linux.md](docs/linux.md#how-it-knows-what-a-restart-or-logout-closed) has the details, and what it needs); on Windows and in WSL, Windows' System event log ([docs/windows.md](docs/windows.md#how-it-knows-what-a-restart-or-logoff-closed)).
 
 Only interactive Claude sessions in a terminal are recorded: not `claude -p`, SDK runs or an editor's Claude panel.
 

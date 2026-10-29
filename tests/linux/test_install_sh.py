@@ -9,8 +9,10 @@ import pytest
 
 from claude_launcher.paths import REPO_DIR
 from claude_launcher.platforms.linux.desktop import APP_ID, ICON_SIZES
+from conftest import desktop_only
 
-pytestmark = pytest.mark.skipif(not shutil.which("fzf"), reason="needs fzf")
+# In WSL the installer would write to the real Windows Terminal's settings.
+pytestmark = [pytest.mark.skipif(not shutil.which("fzf"), reason="needs fzf"), desktop_only]
 
 
 def run(home, *args):

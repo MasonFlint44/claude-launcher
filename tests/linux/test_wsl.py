@@ -1,6 +1,6 @@
 """WSL: Linux with Windows' restarts and logoffs, and WSL stopping on its
-own counted as a restart. Fakes only, so these run on any OS; tests/wsl
-would run in WSL itself."""
+own counted as a restart. WSL is Linux, so these are with Linux's tests;
+they use fakes for Windows' side."""
 
 import json
 from pathlib import Path
