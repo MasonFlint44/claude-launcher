@@ -69,3 +69,37 @@ class TestHook:
         path.write_text("[]")
         with pytest.raises(ValueError):
             hook_settings.add_hook(path, Path("/x/claude-session-hook"))
+
+
+class TestHookWithoutAShell:
+    """Windows: Claude runs python.exe with the hook script as an argument."""
+
+    ARGV = ["C:\\Python\\python.exe", "-I", "C:\\cl\\bin\\claude-session-hook.py"]
+
+    def test_program_and_args(self, tmp_path):
+        path = tmp_path / "settings.json"
+        assert hook_settings.add_hook(path, self.ARGV)
+        hooks = json.loads(path.read_text())["hooks"]
+        assert hooks["SessionStart"] == [
+            {"hooks": [{"type": "command", "command": self.ARGV[0], "args": [*self.ARGV[1:], "start"]}]}
+        ]
+        assert hooks["SessionEnd"][0]["hooks"][0]["args"][-1] == "end"
+
+    def test_again_changes_nothing(self, tmp_path):
+        path = tmp_path / "settings.json"
+        hook_settings.add_hook(path, self.ARGV)
+        assert not hook_settings.add_hook(path, self.ARGV)
+
+    def test_replaces_the_shell_form(self, tmp_path):
+        path = tmp_path / "settings.json"
+        hook_settings.add_hook(path, Path("/x/claude-session-hook"))
+        hook_settings.add_hook(path, self.ARGV)
+        groups = json.loads(path.read_text())["hooks"]["SessionStart"]
+        assert [h.get("args") for g in groups for h in g["hooks"]] == [[*self.ARGV[1:], "start"]]
+
+    def test_remove(self, tmp_path):
+        path = tmp_path / "settings.json"
+        path.write_text(json.dumps({"model": "opus"}))
+        hook_settings.add_hook(path, self.ARGV)
+        assert hook_settings.remove_hook(path)
+        assert json.loads(path.read_text()) == {"model": "opus"}

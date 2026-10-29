@@ -12,7 +12,7 @@ Most of the launcher is the same everywhere: the picker (`picker.py`), the sessi
 | `EventSource` | The restarts and logouts in a record's boot that could have closed its Claude. Only events: the margins and which one wins are `restart.py`'s | the systemd journal |
 | `Setup` | What install.sh sets up after the shared steps, and undoing it; any core commands of the platform's own | Ghostty theme link, icon, desktop entries, terminal profiles; `terminal open guake` |
 | `Platform` fields | fzf's name for the OS (for the fetched build), the shell fzf runs key bindings with, the core's command line quoted for it, more environment for fzf, columns fzf leaves unused, how the picker reaches fzf while it runs (a Unix socket, or a localhost port where Python has no Unix sockets), and where the launcher keeps its own files | `linux`, `bash -c`, `shlex`, none, 0, socket, `~/.local/share/claude-launcher` |
-| session hook | Writes the record `restart.Record` reads, for each interactive Claude | `bin/claude-session-hook` (bash) |
+| session hook | Writes the record `restart.Record` reads, for each interactive Claude | `bin/claude-session-hook` (bash; Windows: `bin/claude-session-hook.py`, run by Claude with no shell) |
 | path text | Separators, `~`, what's inside what, path mode's splitting | `pathtext.py`: POSIX rules, or Windows' (drives, shares, either slash, case ignored), by `os.name` |
 
 `Host` and `Setup` are made when first used and `EventSource` only when the picker sorts the restart group, so key presses, which run the core once each, never load platform code (`tests/test_imports.py` checks).

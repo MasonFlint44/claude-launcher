@@ -37,6 +37,25 @@ def _write_settings(path: Path, settings: dict, old_text: str) -> bool:
     return True
 
 
+def _is_ours(hook: object) -> bool:
+    """Our hook, in either form: a shell command line, or a program and its
+    "args" (how Windows runs it, with no shell)."""
+    if not isinstance(hook, dict):
+        return False
+    args = hook.get("args")
+    parts = [hook.get("command", ""), *(args if isinstance(args, list) else [])]
+    return any(HOOK_NAME in str(p) for p in parts)
+
+
+def hook_entry(argv: list[str], arg: str) -> dict:
+    """The settings.json entry that runs `argv` with `arg` ("start" or "end").
+    One word is a script, run by Claude's shell; more is a program and its
+    arguments, run with no shell."""
+    if len(argv) == 1:
+        return {"type": "command", "command": f"{argv[0]} {arg}"}
+    return {"type": "command", "command": argv[0], "args": [*argv[1:], arg]}
+
+
 def _without_our_hook(groups: list) -> list:
     """The event's hook groups with our hook taken out, and any group it leaves empty."""
     kept = []
@@ -44,7 +63,7 @@ def _without_our_hook(groups: list) -> list:
         if not isinstance(g, dict):
             kept.append(g)
             continue
-        hooks = [h for h in g.get("hooks", []) if HOOK_NAME not in str(h.get("command", ""))]
+        hooks = [h for h in g.get("hooks", []) if not _is_ours(h)]
         if hooks:
             kept.append({**g, "hooks": hooks})
         elif not g.get("hooks"):
@@ -52,26 +71,22 @@ def _without_our_hook(groups: list) -> list:
     return kept
 
 
-def add_hook(settings_path: Path, hook: Path) -> bool:
+def add_hook(settings_path: Path, hook: Path | list[str]) -> bool:
     """Add claude-session-hook as a SessionStart and SessionEnd hook, leaving
-    every other setting and hook as it was. True if the file changed."""
+    every other setting and hook as it was. `hook` is the script, or on
+    Windows the program and arguments that run it. True if the file changed."""
+    argv = [str(hook)] if isinstance(hook, Path) else [str(a) for a in hook]
     text, settings = _read_settings(settings_path)
     hooks = settings.setdefault("hooks", {})
     for event, arg in HOOK_EVENTS:
-        command = f"{hook} {arg}"
+        entry = hook_entry(argv, arg)
         groups = hooks.setdefault(event, [])
-        ours = [
-            h
-            for g in groups
-            if isinstance(g, dict)
-            for h in g.get("hooks", [])
-            if HOOK_NAME in str(h.get("command", ""))
-        ]
-        if len(ours) == 1 and ours[0].get("command") == command:
+        ours = [h for g in groups if isinstance(g, dict) for h in g.get("hooks", []) if _is_ours(h)]
+        if len(ours) == 1 and ours[0] == entry:
             continue
         # Drop old copies (say, from before the repo moved), then add it.
         groups[:] = _without_our_hook(groups)
-        groups.append({"hooks": [{"type": "command", "command": command}]})
+        groups.append({"hooks": [entry]})
     return _write_settings(settings_path, settings, text)
 
 

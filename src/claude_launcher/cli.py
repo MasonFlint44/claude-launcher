@@ -58,7 +58,9 @@ def _install(action: str, args: list[str]) -> int:
 
         try:
             if action == "add-hook":
-                changed = settings.add_hook(Path(args[0]), Path(args[1]))
+                # The hook script, or (Windows) the program and arguments that run it.
+                hook = Path(args[1]) if len(args) == 2 else args[1:]
+                changed = settings.add_hook(Path(args[0]), hook)
             else:
                 changed = settings.remove_hook(Path(args[0]))
         except (OSError, ValueError) as e:
