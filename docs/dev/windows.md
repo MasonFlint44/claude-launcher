@@ -27,6 +27,15 @@ The native Windows platform, `src/claude_launcher/platforms/windows/`, and what 
 
 - **What Claude gives a hook on Windows** (2.1.312): the same stdin as on Linux (`/exit` is `prompt_input_exit`, closing the terminal `other`), `CLAUDE_CODE_ENTRYPOINT=cli` (`sdk-cli` for `claude -p`), `CLAUDE_PID`. A shell-form hook runs as `bash -c "bash COMMAND"` under Git Bash, or PowerShell without it. `bash` on PATH is `System32\bash.exe`, WSL's.
 
+## WSL
+
+`platforms/wsl/` is Linux (its host, the bash hook, the `~/.local/bin` links) with two differences:
+
+- **Restarts and logoffs** (`events.py`): Windows' own, from `eventlog.py` through interop, since a WSL record's boot is WSL's and ends with Windows'. WSL stopping by itself (`wsl --shutdown`, or idle) also counts as a restart, at the current WSL boot's start: it kills Claude, so the record has no end, and a record without one is closed by the first event after it started; a tab closed earlier has its own end and isn't counted. Without interop, only that last one is known.
+- **Setup** (`setup.py`): a "Claude Code (<distro>)" Windows Terminal profile, written through `/mnt/c` (`%LOCALAPPDATA%` from `cmd.exe`, paths through `wslpath`), with its own GUID per distro, so it sits beside native Windows' profile. It runs `wsl.exe -d <distro> --cd ~ -- bash -lc "~/.local/bin/claude-launcher || exec bash"`.
+
+Checked in the VM (WSL 3.0.3, Ubuntu 26.04 with systemd): install.sh, the profile in Windows Terminal, a Claude session, `wsl --shutdown`, and the session offered back.
+
 ## Testing in a VM
 
 The suite runs on Windows (`python -m pytest --basetemp=C:\t`; a short temp directory keeps deep test paths under 260 characters). Tests that drive a pseudo-terminal (`test_e2e.py`, `test_theme.py`) are POSIX-only; on Windows the launcher is driven over SSH, whose sessions are real consoles (ConPTY), and its screen rendered with pyte.

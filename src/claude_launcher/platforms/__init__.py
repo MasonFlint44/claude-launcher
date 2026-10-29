@@ -36,8 +36,12 @@ def _detect() -> Platform:
     if importlib.util.find_spec(f"{__name__}.fork") is not None:
         return importlib.import_module(f"{__name__}.fork").platform()
     if sys.platform.startswith("linux"):
-        from .linux import platform
+        from .wsl import is_wsl
 
+        if is_wsl():
+            from .wsl import platform
+        else:
+            from .linux import platform
         return platform()
     if sys.platform == "win32":
         from .windows import platform

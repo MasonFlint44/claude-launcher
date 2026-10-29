@@ -31,7 +31,7 @@ Most of the launcher is the same everywhere: the picker (`picker.py`), the sessi
 
 Windows (`platforms/windows/`) is the second platform; see docs/dev/windows.md.
 
-Notes for Windows and WSL. On Windows, paths aren't only on `C:`: any drive letter, and UNC paths (`\\server\share`, `\\wsl.localhost\<distro>\...`); `pathtext.PathText("nt")` has those rules, and `tests/test_pathtext_windows.py` checks them. WSL is Linux with Windows' restarts: it can reuse `linux/host.py` and the bash hook, with an `EventSource` that asks Windows (the original Windows version read event 1074 with `wevtutil.exe`).
+WSL (`platforms/wsl/`) is Linux's platform with Windows' restarts and logoffs (through interop) plus WSL stopping on its own, and a Windows Terminal profile per distro; it's picked on Linux when the kernel's release says "microsoft". See docs/dev/windows.md.
 
 ## Adding a platform in a fork
 

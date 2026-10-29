@@ -29,28 +29,28 @@ def _ghostty_themes(env: Mapping[str, str] = os.environ) -> Path:
     return Path(config) / "ghostty" / "themes"
 
 
-def _bin_dir(env: Mapping[str, str] = os.environ) -> Path:
+def bin_dir(env: Mapping[str, str] = os.environ) -> Path:
     return Path(env.get("HOME") or str(Path.home())) / ".local" / "bin"
 
 
-def _link(target: Path, link: Path) -> Iterator[str]:
-    """Link `link` to `target`, unless something that isn't a link is there."""
-    if link.exists() and not link.is_symlink():
-        yield f"warning: {link} exists and isn't a link; leaving it alone"
+def link(target: Path, path: Path) -> Iterator[str]:
+    """Link `path` to `target`, unless something that isn't a link is there."""
+    if path.exists() and not path.is_symlink():
+        yield f"warning: {path} exists and isn't a link; leaving it alone"
         return
-    link.parent.mkdir(parents=True, exist_ok=True)
-    link.unlink(missing_ok=True)
-    link.symlink_to(target)
-    yield f"Linked {link}"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.unlink(missing_ok=True)
+    path.symlink_to(target)
+    yield f"Linked {path}"
 
 
-def _unlink_ours(link: Path) -> Iterator[str]:
+def unlink_ours(link: Path) -> Iterator[str]:
     if link.is_symlink() and os.readlink(link).startswith(str(REPO_DIR) + os.sep):
         link.unlink()
         yield f"Removed {link}"
 
 
-_COMMANDS = ("claude-launcher", "claude-session-hook")
+COMMANDS = ("claude-launcher", "claude-session-hook")
 
 
 class LinuxSetup:
@@ -59,27 +59,27 @@ class LinuxSetup:
 
     def hook_command(self) -> Path:
         """What settings.json runs: the hook's link, so the repo can move."""
-        return _bin_dir() / "claude-session-hook"
+        return bin_dir() / "claude-session-hook"
 
     def install(self, terminal_names: str | None, icon: str | None) -> Iterator[str]:
         # The launcher and its hook: links, so `git pull` updates them.
-        bin_dir = _bin_dir()
-        for name in _COMMANDS:
-            yield from _link(REPO_DIR / "bin" / name, bin_dir / name)
-        if str(bin_dir) not in os.environ.get("PATH", "").split(os.pathsep):
-            yield f"warning: {bin_dir} is not on your PATH"
+        commands_dir = bin_dir()
+        for name in COMMANDS:
+            yield from link(REPO_DIR / "bin" / name, commands_dir / name)
+        if str(commands_dir) not in os.environ.get("PATH", "").split(os.pathsep):
+            yield f"warning: {commands_dir} is not on your PATH"
         # The theme, so any Ghostty window can use it: theme = claude-dark
-        yield from _link(THEME_FILE, _ghostty_themes() / "claude-dark")
-        ctx = _context(bin_dir / "claude-launcher")
+        yield from link(THEME_FILE, _ghostty_themes() / "claude-dark")
+        ctx = _context(commands_dir / "claude-launcher")
         yield desktop.install_icon(ctx, icon)
         names = [n for n in terminal_names.split(",") if n] if terminal_names else None
         yield from desktop.install_terminals(ctx, names)
 
     def uninstall(self) -> Iterator[str]:
         """Takes out what install() set up, going on past a part that fails."""
-        for name in _COMMANDS:
-            yield from _unlink_ours(_bin_dir() / name)
-        yield from _unlink_ours(_ghostty_themes() / "claude-dark")
+        for name in COMMANDS:
+            yield from unlink_ours(bin_dir() / name)
+        yield from unlink_ours(_ghostty_themes() / "claude-dark")
         ctx = _context()
         try:
             for path in desktop.remove_terminals(ctx):

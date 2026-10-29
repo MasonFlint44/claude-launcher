@@ -11,6 +11,7 @@ import json
 import os
 import shutil
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 
 from ...theme import Theme
@@ -26,9 +27,24 @@ _NAMES = ("black", "red", "green", "yellow", "blue", "purple", "cyan", "white")
 _ANSI = (*_NAMES, *(f"bright{n.capitalize()}" for n in _NAMES))
 
 
-def fragments_dir(env: Mapping[str, str] = os.environ) -> Path:
+def fragments_dir(env: Mapping[str, str] = os.environ, app: str = APP) -> Path:
     local = env.get("LOCALAPPDATA") or os.path.join(env.get("USERPROFILE") or str(Path.home()), "AppData", "Local")
-    return Path(local) / "Microsoft" / "Windows Terminal" / "Fragments" / APP
+    return fragments_root(Path(local)) / app
+
+
+def fragments_root(local_app_data: Path) -> Path:
+    return local_app_data / "Microsoft" / "Windows Terminal" / "Fragments"
+
+
+@dataclass(frozen=True)
+class Profile:
+    """Native Windows has one; WSL one per distro, beside it."""
+
+    name: str = PROFILE_NAME
+    guid: str = PROFILE_GUID
+
+
+NATIVE = Profile()
 
 
 def scheme(theme: Theme) -> dict[str, str]:
@@ -48,12 +64,12 @@ def scheme(theme: Theme) -> dict[str, str]:
     return out
 
 
-def fragment(commandline: str, starting_directory: str, icon: str, theme: Theme) -> dict:
+def fragment(commandline: str, starting_directory: str, icon: str, theme: Theme, profile: Profile = NATIVE) -> dict:
     return {
         "profiles": [
             {
-                "guid": PROFILE_GUID,
-                "name": PROFILE_NAME,
+                "guid": profile.guid,
+                "name": profile.name,
                 "commandline": commandline,
                 "startingDirectory": starting_directory,
                 "icon": icon,
@@ -75,6 +91,7 @@ def write(
     icon: Path,
     theme: Theme,
     windows_path: Callable[[Path], str] = str,
+    profile: Profile = NATIVE,
 ) -> Path:
     """Write the fragment and its icon into `directory`; returns the fragment.
     `windows_path` names a file the way Windows Terminal will (WSL writes
@@ -86,7 +103,7 @@ def write(
             old.unlink()
     shutil.copyfile(icon, shown_icon)
     path = directory / f"{APP}.json"
-    data = fragment(commandline, starting_directory, windows_path(shown_icon), theme)
+    data = fragment(commandline, starting_directory, windows_path(shown_icon), theme, profile)
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(json.dumps(data, indent=4) + "\n", encoding="utf-8", newline="")
     os.replace(tmp, path)
