@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from . import title
 from .paths import THEME_FILE
 
 if TYPE_CHECKING:
@@ -163,7 +164,7 @@ def ask(fd: int, slots, host: Host | None = None) -> dict[str, str] | None:
     return found
 
 
-def enabled(env=os.environ) -> bool:
+def enabled(env=os.environ, windows: bool = os.name == "nt") -> bool:
     """Whether to switch colors: CLAUDE_LAUNCHER_COLORS=0 turns it off, =1 on
     even inside GNU screen.
 
@@ -175,7 +176,7 @@ def enabled(env=os.environ) -> bool:
     setting = env.get("CLAUDE_LAUNCHER_COLORS", "")
     if setting in ("0", "1"):
         return setting == "1"
-    return not (env.get("STY") or env.get("TERM", "") in ("", "dumb"))
+    return not (env.get("STY") or title.dumb(env, windows))
 
 
 def apply(fd: int, theme: Theme, saved: Path) -> bool:

@@ -203,3 +203,11 @@ def test_core_command_names_the_program_in_plain_quotes():
     line = core_command(["--run", "C:\\T\\x"], python="C:\\Program Files\\Python314\\python.exe")
     assert line.startswith('"C:\\Program Files\\Python314\\python.exe" ^"')
     assert line.endswith(' ^"--run^" ^"C:\\T\\x^"')
+
+
+def test_colors_switch_on_windows_without_term():
+    from claude_launcher import theme
+
+    assert theme.enabled({}, windows=True)
+    assert not theme.enabled({}, windows=False)
+    assert not theme.enabled({"CLAUDE_LAUNCHER_COLORS": "0"}, windows=True)

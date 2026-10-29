@@ -26,7 +26,9 @@ def data_dir(env: Mapping[str, str]) -> Path:
 
 
 def _setup():
-    raise NotImplementedError("setting up on Windows isn't in yet")
+    from .setup import WindowsSetup
+
+    return WindowsSetup(data_dir(os.environ))
 
 
 _CMD_SPECIAL = re.compile(r'[&|<>()^%!"]')

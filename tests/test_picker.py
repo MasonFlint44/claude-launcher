@@ -964,4 +964,6 @@ def test_title_skipped_on_dumb_terminals():
 
     assert title.enabled({"TERM": "xterm-256color"})
     assert not title.enabled({"TERM": "dumb"})
-    assert not title.enabled({})
+    assert not title.enabled({}, windows=False)
+    assert title.enabled({}, windows=True)  # Windows' consoles never set TERM
+    assert not title.enabled({"TERM": "dumb"}, windows=True)
