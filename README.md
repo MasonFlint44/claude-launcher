@@ -144,10 +144,13 @@ When a restart or logging out closed Claude sessions, the picker shows which:
 
 ```
   Select a project directory for Claude                          enter open   tab complete   ctrl-s sessions   esc quit
-  ↻ 3 sessions were open when your computer restarted (11:14 PM)   ctrl-s to see them
+  ↻ 1 session was open when you logged out (2:10 PM)   ctrl-s to see them
+  ↻ 3 sessions were open when your computer restarted (Mon 11:14 PM)
 ```
 
-Press Ctrl-S and they're at the top of the Sessions view, marked ↻ (and at the top of their directory's sessions too). Enter resumes one, and it leaves the group; Ctrl-X takes it out without resuming, and Alt-X twice takes out every ↻ session the view shows. A session stays in the group for 7 days, unless you resume or dismiss it first, or start it again from anywhere else.
+There's a line for each restart or logout, newest first (past three, the oldest share one line). In WSL, WSL stopping on its own (`wsl --shutdown`) gets its own line too, "open when WSL stopped"; if Windows restarted or you logged out, that's what it says instead.
+
+Press Ctrl-S and they're at the top of the Sessions view, marked ↻ with what closed each and the day, like "Mon restart" (and at the top of their directory's sessions too). Enter resumes one, and it leaves the group; Ctrl-X takes it out without resuming, and Alt-X twice takes out every ↻ session the view shows. A session stays in the group for 7 days, unless you resume or dismiss it first, or start it again from anywhere else.
 
 **How it knows:** `claude-session-hook` keeps a small record for each interactive Claude. An exit you chose (`/exit`, `/clear`, switching with `/resume`) deletes it; closing the tab, or the desktop closing every window, keeps it with the time the session ended. When the picker opens, it checks those times against the system's own record of restarts and logouts. A session that ended during one, or just before or after it, was closed by it; anything else, like a tab you closed yourself, isn't listed. On Linux that record is the systemd journal ([docs/linux.md](docs/linux.md#how-it-knows-what-a-restart-or-logout-closed) has the details, and what it needs); on Windows and in WSL, Windows' System event log ([docs/windows.md](docs/windows.md#how-it-knows-what-a-restart-or-logoff-closed)).
 

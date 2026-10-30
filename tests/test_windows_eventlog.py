@@ -26,6 +26,7 @@ def xml(provider, event_id, at, **data):
 BOOTED = lambda at: xml(el.KERNEL, 12, at)  # noqa: E731
 SHUTTING_DOWN = lambda at: xml(el.KERNEL, 13, at)  # noqa: E731
 RESTART = lambda at, kind="restart": xml("User32", 1074, at, param5=kind)  # noqa: E731
+HIBERNATING = lambda at: xml("Microsoft-Windows-Kernel-Power", 42, at, TargetState=6, EffectiveState=5)  # noqa: E731
 LOGOFF = lambda at, sid=ME: xml("Microsoft-Windows-Winlogon", 7002, at, TSId=1, UserSid=sid)  # noqa: E731
 
 
@@ -134,3 +135,27 @@ def test_by_time_not_the_logs_order():
     skewed = [SHUTTING_DOWN(T + 4000), BOOTED(T + 18000)]
     found = events([*skewed, RESTART(T + 100), SHUTTING_DOWN(T + 104), BOOTED(T + 108)])
     assert found == [Event(T + 100, T + 104, "restart")]
+
+
+def test_fast_startup_is_a_restart_in_the_same_boot():
+    # Shut down with Fast Startup: power off, the logoff, then hibernating, and no new boot.
+    found = events([RESTART(T + 100, "power off"), LOGOFF(T + 100.5), HIBERNATING(T + 101)], same_boot=True)
+    assert Event(T + 100, T + 101, "restart") in found
+    assert Event(T + 100.5, T + 100.5, "logout") in found  # the restart wins in restart.py
+
+
+def test_hibernating_alone_isnt_a_restart():
+    assert events([HIBERNATING(T + 100)], same_boot=True) == []
+
+
+def test_a_1074_long_before_hibernating_isnt_fast_startup():
+    assert (
+        events([RESTART(T + 100, "power off"), HIBERNATING(T + 100 + el._FAST_STARTUP_GAP + 1)], same_boot=True) == []
+    )
+
+
+def test_a_crash_after_fast_startup_starts_at_the_last_event():
+    # A Fast Startup shutdown, then this boot crashed: the crash isn't dated from the earlier 1074.
+    log = [RESTART(T + 100, "power off"), HIBERNATING(T + 101), BOOTED(T + 900)]
+    found = events(log, last_before=xml("Some-Provider", 1, T + 400))
+    assert found == [Event(T + 100, T + 101, "restart"), Event(T + 400, T + 400, "restart")]

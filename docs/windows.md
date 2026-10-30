@@ -39,8 +39,8 @@ In any other terminal tab, `claude-launcher` switches that tab to Claude Dark wh
 
 `claude-session-hook.py` keeps a small record for each interactive Claude in `%USERPROFILE%\.claude\state\claude-launcher\open\`. An exit you chose (`/exit`, `/clear`, switching with `/resume`) deletes it; closing the tab, or Windows closing every window, keeps it with the time the session ended. When the picker opens, it checks those times against Windows' System event log, which any user can read:
 
-- **Restart or shutdown** (including Windows Update's own restarts): from when it was started to when Windows began shutting down. After a crash or power cut, from the last thing logged.
-- **Logoff**: when you signed out. Shutting down with Fast Startup on (Windows' default) signs you out and hibernates rather than shutting down, so sessions it closed are listed as "open when your session ended".
+- **Restart or shutdown** (including Windows Update's own restarts): from when it was started to when Windows began shutting down. After a crash or power cut, from the last thing logged. Shutting down with Fast Startup on (Windows' default) hibernates instead of shutting down; it closes Claude all the same, and counts as a shutdown.
+- **Logoff**: when you signed out.
 
 A session that ended in that span, or up to 30 seconds before or 10 seconds after it, was closed by it. So was one that never recorded an end. Anything else, like a tab you closed yourself, isn't listed.
 

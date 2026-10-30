@@ -6,6 +6,11 @@ WSL, which runs the same wevtutil.exe through interop.
   (User32 1074) to "the operating system is shutting down" (Kernel-General
   13). After a crash or power cut there's neither: the restart starts at the
   boot's last logged event.
+- Shutting down with Fast Startup: "power off" (1074) and then, instead of
+  shutting down, hibernating (Kernel-Power 42, "entering sleep"). The boot
+  goes on after it (no Kernel-General 13 or 12, and the same BootId), but
+  Claude was closed as at a shutdown, so it counts as one, from the 1074 to
+  the 42. Hibernating on its own logs no 1074, and Claude keeps running.
 - Logoff: Winlogon's logoff notification (7002) for this user. Windows logs
   one at a restart too; the restart wins, as on Linux.
 
@@ -30,6 +35,9 @@ KERNEL = "Microsoft-Windows-Kernel-General"
 BOOTED, SHUTTING_DOWN = 12, 13
 RESTART_BEGUN = ("User32", 1074)
 LOGOFF = ("Microsoft-Windows-Winlogon", 7002)
+HIBERNATING = ("Microsoft-Windows-Kernel-Power", 42)
+# Fast Startup hibernates about a second after its 1074 (measured in a VM).
+_FAST_STARTUP_GAP = 120
 # How far before a Claude started to look: a restart can't have closed it
 # before then, but its boot's last events can come just before a record.
 _BEFORE = 60
@@ -119,13 +127,31 @@ class EventLog:
 
     def since(self, t: float) -> list[LogEvent] | None:
         """The boots, restarts and logoffs from `t` on, oldest first."""
-        kinds = " or ".join([_one(KERNEL, BOOTED, SHUTTING_DOWN), _one(*RESTART_BEGUN), _one(*LOGOFF)])
+        kinds = " or ".join(
+            [_one(KERNEL, BOOTED, SHUTTING_DOWN), _one(*RESTART_BEGUN), _one(*LOGOFF), _one(*HIBERNATING)]
+        )
         return self.query(f"*[System[({kinds}) and TimeCreated[@SystemTime>='{format_time(t)}']]]")
 
     def last_before(self, t: float) -> LogEvent | None:
         """The last event of any kind before `t`: where a boot that crashed ended."""
         found = self.query(f"*[System[TimeCreated[@SystemTime<'{format_time(t)}']]]", newest_first=True, count=1)
         return found[0] if found else None
+
+
+def _fast_startups(events: list[LogEvent]) -> list[tuple[float, float]]:
+    """Fast Startup shutdowns in a boot's events (oldest first): each 1074
+    followed by hibernating, with no shutting down between, as (1074, 42)."""
+    out = []
+    for i, e in enumerate(events):
+        if (e.provider, e.id) != RESTART_BEGUN:
+            continue
+        for later in events[i + 1 :]:
+            if later.at - e.at > _FAST_STARTUP_GAP or (later.provider, later.id) == (KERNEL, SHUTTING_DOWN):
+                break
+            if (later.provider, later.id) == HIBERNATING:
+                out.append((e.at, later.at))
+                break
+    return out
 
 
 def user_sid() -> str | None:
@@ -163,12 +189,14 @@ class WindowsEvents:
             for e in in_boot
             if (e.provider, e.id) == LOGOFF and sid is not None and e.data.get("UserSid") == sid
         ]
+        fast = _fast_startups(in_boot)
+        events += [Event(begun, slept, "restart") for begun, slept in fast]
         if not same_boot and next_boot is not None:
-            events.append(self._restart(in_boot, next_boot))
+            events.append(self._restart(in_boot, next_boot, {begun for begun, _ in fast}))
         return events
 
-    def _restart(self, in_boot: list[LogEvent], next_boot: float) -> Event:
-        begun = [e.at for e in in_boot if (e.provider, e.id) == RESTART_BEGUN]
+    def _restart(self, in_boot: list[LogEvent], next_boot: float, fast: set[float]) -> Event:
+        begun = [e.at for e in in_boot if (e.provider, e.id) == RESTART_BEGUN and e.at not in fast]
         ended = [e.at for e in in_boot if (e.provider, e.id) == (KERNEL, SHUTTING_DOWN)]
         if begun:
             start = begun[-1]

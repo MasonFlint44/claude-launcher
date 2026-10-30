@@ -2,6 +2,7 @@ import json
 import os
 import re
 import sys
+import time
 
 import pytest
 
@@ -493,30 +494,51 @@ class TestHeader:
         a = env.log("/tmp", conversation("a", "/tmp"))
         b = env.log("/tmp", conversation("b", "/tmp"))
         env.paths.state.mkdir(parents=True)
-        env.paths.restored.write_text(json.dumps({a: closed(NOW - 300, "logout"), b: closed(NOW - 600, "logout")}))
+        env.paths.restored.write_text(json.dumps({a: closed(NOW - 300, "logout"), b: closed(NOW - 300, "logout")}))
         p, _ = start(env)
-        assert "2 sessions were open when your session ended" in strip_ansi(p.make_header())
+        assert "2 sessions were open when you logged out" in strip_ansi(p.make_header())
         p.on_sessions()
-        assert "↻ open when your session ended" in strip_ansi(p.make_header())
+        assert "↻ open when you logged out" in strip_ansi(p.make_header())
 
     def test_wsl_stop_nudge(self, env):
         a = env.log("/tmp", conversation("a", "/tmp"))
-        b = env.log("/tmp", conversation("b", "/tmp"))
         env.paths.state.mkdir(parents=True)
         env.paths.restored.write_text(json.dumps({a: closed(NOW - 300, "wsl-stop")}))
         p, _ = start(env)
         assert "1 session was open when WSL stopped" in strip_ansi(p.make_header())
-        env.paths.restored.write_text(json.dumps({a: closed(NOW - 300, "wsl-stop"), b: closed(NOW - 600)}))
-        p, _ = start(env)
-        assert "2 sessions were open when WSL stopped" in strip_ansi(p.make_header())  # a restart stops WSL too
 
-    def test_mixed_nudge(self, env):
+    def test_one_line_per_event_newest_first(self, env):
+        a, b, c = (env.log("/tmp", conversation(n, "/tmp")) for n in "abc")
+        env.paths.state.mkdir(parents=True)
+        env.paths.restored.write_text(
+            json.dumps({a: closed(NOW - 300, "wsl-stop"), b: closed(NOW - 9000), c: closed(NOW - 9000)})
+        )
+        p, _ = start(env)
+        lines = strip_ansi(p.make_header()).split("\n")
+        assert "↻ 1 session was open when WSL stopped" in lines[2] and lines[2].endswith("ctrl-s to see them")
+        assert lines[3].startswith("↻ 2 sessions were open when your computer restarted (")
+        assert lines[4] == " "
+
+    def test_events_past_three_share_a_line(self, env):
+        ids = [env.log("/tmp", conversation(f"s{i}", "/tmp")) for i in range(5)]
+        env.paths.state.mkdir(parents=True)
+        restored = {sid: closed(NOW - 1000 * (i + 1), "logout") for i, sid in enumerate(ids[:3])}
+        restored |= {ids[3]: closed(NOW - 9000), ids[4]: closed(NOW - 9000)}
+        env.paths.restored.write_text(json.dumps(restored))
+        p, _ = start(env)
+        lines = strip_ansi(p.make_header()).split("\n")[2:-1]
+        assert len(lines) == 3
+        assert lines[1].startswith("↻ 1 session was open when you logged out")
+        assert lines[2] == "↻ 3 more from earlier"
+
+    def test_sessions_view_says_each_reason_shown(self, env):
         a = env.log("/tmp", conversation("a", "/tmp"))
         b = env.log("/tmp", conversation("b", "/tmp"))
         env.paths.state.mkdir(parents=True)
-        env.paths.restored.write_text(json.dumps({a: closed(NOW - 300, "logout"), b: closed(NOW - 600)}))
+        env.paths.restored.write_text(json.dumps({a: closed(NOW - 300, "logout"), b: closed(NOW - 9000)}))
         p, _ = start(env)
-        assert "2 sessions were closed by a restart or logout" in strip_ansi(p.make_header())
+        p.on_sessions()
+        assert "↻ open when your computer restarted or you logged out" in strip_ansi(p.make_header())
 
 
 class TestSessions:
@@ -548,6 +570,8 @@ class TestSessions:
         p.on_sessions()
         shown = displayed(p.rows())
         assert shown[1].startswith("↻ ") and shown[1].endswith("open at restart")
+        day = time.strftime("%a", time.localtime(NOW - 300))
+        assert shown[1].split()[1:3] == [day, "restart"]  # what closed it, not its age
         assert not shown[2].startswith("↻")
         assert shown[2].endswith("recent")
         assert "ctrl-x dismiss ↻" in strip_ansi(p.make_header())

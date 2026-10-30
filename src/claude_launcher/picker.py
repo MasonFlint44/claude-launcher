@@ -67,6 +67,11 @@ MAX_WIDTH = 120  # widest the picker gets, in columns
 DIR_COLUMN = 50  # the directory list's first column
 DOUBLE_PRESS_MS = 1000
 HINT_GAP = 8  # the least space between the title and the hints beside it
+# What closed a ↻ session, for the line under the title and for its row, in
+# the order they win (restart.REASONS).
+CLOSED_BY = {"restart": "your computer restarted", "logout": "you logged out", "wsl-stop": "WSL stopped"}
+CLOSED_ROW = {"restart": "restart", "logout": "logout", "wsl-stop": "WSL stop"}
+NUDGE_LINES = 3  # events beyond these share one "more" line
 
 # How fzf reads and matches rows, the same in the picker and in `_nth_match`.
 MATCHING = ["--ansi", "--tiebreak=index", "--delimiter=\t", "--with-nth=2.."]
@@ -91,7 +96,7 @@ class State:
     cols: int = 80
     width: int = 80
     key: list | None = None  # [key, time in ms] of a first press waiting for its second
-    restored: list = field(default_factory=lambda: [0, 0.0, []])  # [count, latest, reasons]
+    restored: list = field(default_factory=list)  # [[why, at, count]] per restart or logout, newest first
     has_group_rows: bool = False  # the Sessions view shows ↻ rows
     back: list | None = None  # [query, cursor] the directory list had when left
     pending_pos: int = 0  # the cursor to put back once the list's rows are in
@@ -249,29 +254,30 @@ class Picker:
         lines = [title + " " * (room - text_width(title) - text_width(joined(top))) + joined(top) if top else title]
         return lines + [" " * max(0, room - text_width(line)) + line for line in below]
 
-    def _closed_by(self) -> str:
-        """What happened to the ↻ sessions, for the restart line."""
-        reasons = set(self.state.restored[2])
-        if reasons == {"restart"}:
-            return "open when your computer restarted"
-        if reasons == {"logout"}:
-            return "open when your session ended"
-        if "wsl-stop" in reasons:  # only in WSL, where a restart or logout stops WSL too
-            return "open when WSL stopped"
-        return "closed by a restart or logout"
-
-    def _nudge(self) -> str:
-        """The line under the title about sessions a restart or logout closed."""
+    def _nudge(self) -> list[str]:
+        """The lines under the title about sessions a restart or logout
+        closed: in the directory list, one per restart or logout, newest
+        first; in a Sessions view, what closed the ↻ rows it shows."""
         if self.state.view == "projects":
-            count, latest, _ = self.state.restored
-            if not count:
-                return ""
-            what = "1 session was" if count == 1 else f"{count} sessions were"
-            when = text.clock(latest, self.now())
-            return self._accent(f"↻ {what} {self._closed_by()} ({when})") + "   ctrl-s " + self._dim("to see them")
+            events = self.state.restored
+            lines = []
+            for why, at, count in events[: NUDGE_LINES if len(events) <= NUDGE_LINES else NUDGE_LINES - 1]:
+                what = "1 session was" if count == 1 else f"{count} sessions were"
+                lines.append(self._accent(f"↻ {what} open when {CLOSED_BY[why]} ({text.clock(at, self.now())})"))
+            if len(events) > NUDGE_LINES:
+                more = sum(count for _, _, count in events[NUDGE_LINES - 1 :])
+                lines.append(self._accent(f"↻ {more} more from earlier"))
+            if lines:
+                lines[0] += "   ctrl-s " + self._dim("to see them")
+            return lines
         if self.state.has_group_rows:
-            return self._accent("↻") + " " + self._dim(self._closed_by())
-        return ""
+            shown = {r["closed"][0] for r in self._sessions() if r["group"] and r.get("closed")}
+            said = [CLOSED_BY[why] for why in CLOSED_BY if why in shown]
+            if not said:
+                return []
+            joined = said[0] if len(said) == 1 else ", ".join(said[:-1]) + " or " + said[-1]
+            return [self._accent("↻") + " " + self._dim("open when " + joined)]
+        return []
 
     def make_header(self, hints: list[str] | None = None) -> str:
         """The title with the key hints (see `_hint_lines`), then the restart
@@ -283,9 +289,7 @@ class Picker:
             usual = len(lines)
             lines = self._hint_lines(self._title(), [(h, True) for h in hints])
             lines += [" "] * (usual - len(lines))
-        nudge = self._nudge()
-        if nudge:
-            lines.append(nudge)
+        lines += self._nudge()
         lines.append(" ")
         return "\n".join(lines)
 
@@ -417,7 +421,11 @@ class Picker:
         if within is not None:
             sessions = [s for s in sessions if s.cwd and is_inside(s.cwd, within)]
         group = self.restart.load()
-        rows = [{**asdict(s), "group": _group_key(s.id, group, continued_from)} for s in sessions]
+        rows = []
+        for s in sessions:
+            key = _group_key(s.id, group, continued_from)
+            closed = group.sessions[key] if key else None
+            rows.append({**asdict(s), "group": key, "closed": [closed.why, closed.at] if closed else None})
         self._save_sessions(rows)
         return bool(rows)
 
@@ -444,9 +452,9 @@ class Picker:
     def sessions_rows(self) -> list[str]:
         """The Sessions view, header row first. A session whose directory isn't
         here (deleted, or only inside a devcontainer) has it dimmed and marked."""
-        title_width = self.state.width - 42
+        title_width = self.state.width - 43
         now = self.now()
-        out = ["\t" + self._dim("  " + pad("Last active", 11) + " " + pad("Directory", 24) + " Session")]
+        out = ["\t" + self._dim("  " + pad("Last active", 12) + " " + pad("Directory", 24) + " Session")]
         if self.state.view == "directory":
             out.append(f"{NEW_SESSION}{self.state.dir}\t \t{self._accent('+ New session')}")
         for r in self._sessions():
@@ -455,7 +463,12 @@ class Picker:
             note = " (missing)" if missing else ""
             directory = truncate_left(self._session_dir(cwd), 24 - len(note)) + note
             directory = pad(self._dim(directory) if missing else directory, 24)
-            when = pad(text.age(r["active"], now), 11)
+            closed = r.get("closed") if r["group"] else None
+            if closed:  # what closed it, and the day: "Mon restart"
+                when = time.strftime("%a ", time.localtime(closed[1])) + CLOSED_ROW.get(closed[0], "")
+            else:
+                when = text.age(r["active"], now)
+            when = pad(when, 12)
             if r["group"]:
                 mark, when = self._accent("↻") + " ", self._accent(when)
             else:
@@ -659,7 +672,7 @@ class Picker:
         rows = self._sessions()
         for r in rows:
             if r["group"] and (keys is None or r["group"] in keys):
-                r["group"] = None
+                r["group"], r["closed"] = None, None
         self._save_sessions(rows)
         self.state.restored = _restored(group)
         self.state.key = None
@@ -778,8 +791,12 @@ def _platform() -> Platform:
 
 
 def _restored(group: Group) -> list:
-    latest = group.latest
-    return [len(group), latest.at if latest else 0.0, sorted(group.reasons)]
+    """The group by what closed it: [[why, at, count]], newest first. The
+    sessions one restart or logout closed share its time."""
+    counts: dict[tuple[str, float], int] = {}
+    for c in group.sessions.values():
+        counts[(c.why, c.at)] = counts.get((c.why, c.at), 0) + 1
+    return [[why, at, n] for (why, at), n in sorted(counts.items(), key=lambda kv: kv[0][1], reverse=True)]
 
 
 def _action(name: str, arg: str) -> str:
