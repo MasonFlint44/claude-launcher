@@ -273,6 +273,9 @@ class WindowsSetup:
             shutil.copyfile(icon, kept)
         return kept if kept.is_file() else DEFAULT_ICON
 
+    def check(self) -> None:
+        """Nothing to check before installing here."""
+
     def uninstall(self) -> Iterator[str]:
         shim = _bin_dir(self.env) / "claude-launcher.cmd"
         if shim.is_file() and _SHIM_MARK in shim.read_text(encoding="utf-8", errors="replace"):

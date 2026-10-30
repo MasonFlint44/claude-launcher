@@ -65,13 +65,11 @@ def install(platform, terminal_names: str | None = None, icon: str | None = None
     setup = platform.setup()
     # A setup that can't go ahead here (WSL that can't tell its distro) says
     # so before anything is changed.
-    check = getattr(setup, "check", None)
-    if check is not None:
-        try:
-            check()
-        except FAILURES as e:
-            yield f"error: {e}"
-            return
+    try:
+        setup.check()
+    except FAILURES as e:
+        yield f"error: {e}"
+        return
     if not shutil.which("claude"):
         yield "warning: claude is not on your PATH; install Claude Code before using the launcher"
     for line in _fzf(platform):

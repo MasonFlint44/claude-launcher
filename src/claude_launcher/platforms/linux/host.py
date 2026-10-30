@@ -31,6 +31,9 @@ def is_claude(argv: list[str]) -> bool:
 # are pid 1's start, in clock ticks (12 hex digits: millennia at 100 Hz).
 # The whole stays 32 hex digits, the size of any other boot ID.
 _KEPT = 20
+# How long after its record's start a Claude may have started (the hook runs
+# once Claude is up).
+_SAME_PROCESS = 10
 
 
 class LinuxHost:
@@ -67,15 +70,28 @@ class LinuxHost:
         ticks = self._init_start()
         return start if ticks is None else start + ticks / os.sysconf("SC_CLK_TCK")
 
-    def claude_running(self, pid: object) -> bool:
+    def claude_running(self, pid: object, started: float | None = None) -> bool:
         if not isinstance(pid, int):
             return False
         try:
-            with open(f"/proc/{pid}/cmdline", "rb") as f:
+            with open(f"{self.proc}/{pid}/cmdline", "rb") as f:
                 argv = f.read().decode(errors="replace").split("\0")
         except OSError:
             return False
-        return is_claude([a for a in argv if a])
+        if not is_claude([a for a in argv if a]):
+            return False
+        # A Claude that started well after the record did got the pid since.
+        began = self._process_start(pid)
+        return started is None or began is None or began <= started + _SAME_PROCESS
+
+    def _process_start(self, pid: int) -> float | None:
+        """When process `pid` started, as a Unix time."""
+        try:
+            ticks = int(self._read(f"{pid}/stat").rpartition(") ")[2].split()[19])
+            uptime = float(self._read("uptime").split()[0])
+        except (OSError, IndexError, ValueError):
+            return None
+        return time.time() - uptime + ticks / os.sysconf("SC_CLK_TCK")
 
     def user(self) -> str:
         return pwd.getpwuid(os.getuid()).pw_name

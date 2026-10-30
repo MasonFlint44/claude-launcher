@@ -29,6 +29,7 @@ class WslEvents:
             windows = WindowsEvents(EventLog(run=interop.wevtutil), sid=interop.user_sid)
         self.windows = windows
         self.now = now
+        self._stopped: float | None = None
 
     def events(self, record, same_boot: bool) -> list[Event] | None:
         # Windows' boots aren't WSL's: whether Windows restarted after the
@@ -36,5 +37,7 @@ class WslEvents:
         found = self.windows.events(record, same_boot=False)
         if same_boot:
             return found
-        stopped = self.host.boot_start(self.now())
+        if self._stopped is None:  # once: every record from an earlier boot ended here
+            self._stopped = self.host.boot_start(self.now())
+        stopped = self._stopped
         return [*(found or []), Event(stopped, stopped, "wsl-stop")]

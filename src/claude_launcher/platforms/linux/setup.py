@@ -85,6 +85,9 @@ class LinuxSetup:
         names = [n for n in terminal_names.split(",") if n] if terminal_names else None
         yield from desktop.install_terminals(ctx, names)
 
+    def check(self) -> None:
+        """Nothing to check before installing here."""
+
     def uninstall(self) -> Iterator[str]:
         """Takes out what install() set up, going on past a part that fails,
         for any reason: what's left is harder to find later."""

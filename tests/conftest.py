@@ -102,7 +102,7 @@ class FakeHost:
     def boot_start(self, now: float) -> float:
         return self.started(now)
 
-    def claude_running(self, pid: object) -> bool:
+    def claude_running(self, pid: object, started: float | None = None) -> bool:
         return pid in self.running
 
     def user(self) -> str:

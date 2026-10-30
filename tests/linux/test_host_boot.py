@@ -46,3 +46,22 @@ def test_without_pid_1s_stat_the_vms_boot(tmp_path):
     host = fake_proc(tmp_path, stat=False)
     assert host.boot_id() == VM_BOOT
     assert host.boot_start(NOW) == NOW - 5000
+
+
+def a_claude(root, pid, start_ticks):
+    (root / str(pid)).mkdir()
+    (root / str(pid) / "cmdline").write_bytes(b"/home/me/.local/bin/claude\0")
+    rest = " ".join(["S", "0", "1", "1"] + ["0"] * 15 + [str(start_ticks), "1000"])
+    (root / str(pid) / "stat").write_text(f"{pid} (claude) {rest}\n")
+
+
+def test_a_claude_that_got_the_pid_since_isnt_the_records(tmp_path, monkeypatch):
+    import time
+
+    host = fake_proc(tmp_path, release="6.8.0-31-generic")
+    monkeypatch.setattr(time, "time", lambda: NOW)
+    boot = NOW - 5000
+    a_claude(tmp_path, 700, start_ticks=100 * HZ)  # started 100 s into the boot
+    assert host.claude_running(700)
+    assert host.claude_running(700, started=boot + 101)  # its own record, written once it was up
+    assert not host.claude_running(700, started=boot + 50)  # a record from before it started

@@ -31,6 +31,7 @@ def test_these_tests_arent_claude():
     assert not HOST.claude_running(os.getpid())
     assert not HOST.claude_running("not a pid")
     assert not HOST.claude_running(None)
+    assert not HOST.claude_running(os.getpid(), started=time.time())
 
 
 def test_user():

@@ -6,9 +6,10 @@ from __future__ import annotations
 import time
 
 from claude_launcher.platforms import Event, current
-from claude_launcher.restart import REASONS, Record, normalize_boot_id
+from claude_launcher.restart import Record, normalize_boot_id, reasons
 
 PLATFORM = current()
+KEYS = {r.key for r in reasons(PLATFORM.reasons)}  # the shared reasons and the platform's own
 
 
 def record(boot_id: str) -> Record:
@@ -20,7 +21,7 @@ def check(events) -> None:
     assert events is None or isinstance(events, list)
     for e in events or ():
         assert isinstance(e, Event)
-        assert e.why in REASONS
+        assert e.why in KEYS
         assert e.start <= e.end
 
 

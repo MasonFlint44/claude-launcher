@@ -28,7 +28,6 @@ formats are what each platform's hook and event source agree on.
 
 from __future__ import annotations
 
-import contextlib
 import json
 import os
 import re
@@ -127,8 +126,16 @@ def _load(path: Path) -> dict | None:
 
 
 def _remove(path: Path) -> None:
-    with contextlib.suppress(OSError):
-        path.unlink()
+    # On Windows a file another process has open (the hook writing it, an
+    # antivirus scan) can't be removed for a moment.
+    for _ in range(5):
+        try:
+            path.unlink()
+            return
+        except PermissionError:
+            time.sleep(0.01)
+        except OSError:
+            return
 
 
 def _parse_group(data: dict) -> dict[str, Closed]:
@@ -249,7 +256,7 @@ class RestartState:
                 decided.append(path)
                 continue
             same_boot = record.boot_id == this_boot
-            if same_boot and record.ended is None and self.host.claude_running(record.pid):
+            if same_boot and record.ended is None and self.host.claude_running(record.pid, record.started):
                 group.pop(record.session_id, None)  # it's open again
                 continue
             closed = self._closed_by(record, same_boot, now)

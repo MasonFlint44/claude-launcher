@@ -33,8 +33,10 @@ class Host(Protocol):
         """When this boot began, as a Unix time."""
         ...
 
-    def claude_running(self, pid: object) -> bool:
-        """Whether process `pid` is a Claude Code that's still running."""
+    def claude_running(self, pid: object, started: float | None = None) -> bool:
+        """Whether process `pid` is a Claude Code that's still running, and,
+        given `started` (when its record says it started), the same process
+        rather than a new one that got the pid since."""
         ...
 
     def user(self) -> str:
@@ -95,6 +97,11 @@ class Setup(Protocol):
         `terminal_names` and `icon` are the installer's --terminal and --icon."""
         ...
 
+    def check(self) -> None:
+        """Raise if this machine can't be set up at all, before the installer
+        changes anything (WSL: which distro this is)."""
+        ...
+
     def uninstall(self) -> Iterator[str]:
         """Take out what install() set up, going on past a part that fails."""
         ...
@@ -113,11 +120,11 @@ class Platform:
     # Made only when needed: reading the event log costs time, and most runs
     # of the core (one per key press) never do.
     events: Callable[[], EventSource]
-    # Made only when needed, like events: only install.sh and the platform's
-    # own commands use it.
+    # Made only when needed, like events: only the installer (install.py) and
+    # the platform's own commands use it.
     setup: Callable[[], Setup]
     # fzf's name for this OS in its release files ("linux"), for the build
-    # install.sh fetches when the system's fzf is too old.
+    # the installer fetches when the system's fzf is too old.
     fzf_os: str
     # The shell fzf runs key bindings with (its --with-shell, or "" for fzf's
     # own choice), and the core's command line with these arguments, quoted
