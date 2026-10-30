@@ -16,13 +16,27 @@ import json, sys
 sys.path.insert(0, sys.argv[1])
 from claude_launcher.cli import main
 main(sys.argv[2:])
-print(json.dumps(sorted(m for m in sys.modules if m.startswith("claude_launcher"))), file=sys.stderr)
+print(json.dumps(sorted(sys.modules)), file=sys.stderr)
 """
 NOT_ON_A_KEY_PRESS = ("claude_launcher.platforms", "claude_launcher.settings")
+# Only fetching fzf needs these, and they cost about 12 ms.
+FETCHING = ("urllib", "hashlib", "tarfile", "zipfile")
 
 
 @pytest.mark.parametrize(
-    "action", [["change", "abc"], ["change", "~/"], ["tab", "~/"], ["key", "esc", "x"], ["result", "x"]]
+    "action",
+    [
+        ["change", "abc"],
+        ["change", "~/"],
+        ["tab", "~/"],
+        ["key", "esc", "x"],
+        ["key", "ctrl-c", ""],
+        ["result", "x"],
+        ["enter", "x", ""],
+        ["sessions"],
+        ["dismiss", "x"],
+        ["menu"],
+    ],
 )
 def test_key_actions_stay_light(tmp_path, claude_home, action):
     # As the picker leaves it once it has started: it saves how key bindings
@@ -36,3 +50,4 @@ def test_key_actions_stay_light(tmp_path, claude_home, action):
     )
     loaded = json.loads(done.stderr.strip().splitlines()[-1])
     assert [m for m in loaded if m.startswith(NOT_ON_A_KEY_PRESS)] == []
+    assert [m for m in loaded if m.split(".")[0] in FETCHING] == []

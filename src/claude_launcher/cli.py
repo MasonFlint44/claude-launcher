@@ -2,7 +2,7 @@
 call. Not meant to be run by hand. (bin/claude-launcher itself is launcher.py.)
 
     --run DIR ui ACTION ...  what a key does in the picker (see picker.py)
-    install run|undo|add-hook|remove-hook|fzf-... (see _install)
+    install run|undo|fzf-status|fetch-fzf|fzf-dir (see _install)
     Anything else is one of the platform's own commands (Linux: `terminal
     open guake [LAUNCHER]`, what the Guake desktop entry runs).
 """
@@ -53,20 +53,8 @@ def _ui(run: Path, action: str, args: list[str]) -> int:
 
 
 def _install(action: str, args: list[str]) -> int:
-    if action in ("add-hook", "remove-hook"):
-        from . import settings
-
-        try:
-            if action == "add-hook":
-                # The hook script, or (Windows) the program and arguments that run it.
-                hook = Path(args[1]) if len(args) == 2 else args[1:]
-                changed = settings.add_hook(Path(args[0]), hook)
-            else:
-                changed = settings.remove_hook(Path(args[0]))
-        except (OSError, ValueError) as e:
-            print(e, file=sys.stderr)
-            return 1
-        return 4 if changed else 0  # install.sh says which
+    """install run|undo (the installers), or fzf-status|fetch-fzf|fzf-dir
+    (CI and the Docker checks)."""
     if action in ("run", "undo"):
         return _run_install(action, args)
     if action in ("fzf-status", "fetch-fzf", "fzf-dir"):
@@ -123,15 +111,19 @@ def main(argv: list[str] | None = None) -> int:
     if argv[:1] == ["--run"] and len(argv) >= 2:
         run, argv = Path(argv[1]), argv[2:]
     command, rest = (argv[0], argv[1:]) if argv else ("", [])
-    if command == "install" and rest:
-        return _install(rest[0], rest[1:])
     if command == "ui" and rest and run is not None:
         return _ui(run, rest[0], rest[1:])
-    if command and command not in ("install", "ui"):
-        from .platforms import current
+    from .platforms import Unsupported, current  # not before: key presses never load the platform
 
-        platform_command = current().setup().commands.get(command)
-        if platform_command is not None:
-            return platform_command(rest)
+    try:
+        if command == "install" and rest:
+            return _install(rest[0], rest[1:])
+        if command and command not in ("install", "ui"):
+            platform_command = current().setup().commands.get(command)
+            if platform_command is not None:
+                return platform_command(rest)
+    except Unsupported as e:
+        print(e, file=sys.stderr)
+        return 1
     print(USAGE, file=sys.stderr)
     return 2

@@ -1,3 +1,4 @@
+import dataclasses
 import json
 import os
 import re
@@ -7,7 +8,7 @@ import time
 import pytest
 
 from claude_launcher.picker import Pick, Picker
-from claude_launcher.restart import RestartState
+from claude_launcher.restart import Reason, RestartState
 from claude_launcher.text import strip_ansi, width
 from claude_launcher.theme import Theme
 from conftest import FakeEvents, FakeHost, conversation, posix_only
@@ -87,6 +88,23 @@ def _not_config(row):
 def displayed(rows):
     """What fzf shows: the fields after the first, a tab shown as a space (--tabstop=1)."""
     return [r.split("\t", 1)[1].replace("\t", " ").rstrip() for r in plain(rows) if _not_config(r)]
+
+
+# WSL's own reason, as platforms/wsl gives it (test_platforms checks).
+WSL_STOP = Reason("wsl-stop", "WSL stopped", "WSL stop", 30)
+
+
+@pytest.fixture
+def wsl(monkeypatch):
+    """The picker on a platform with WSL's reason."""
+    from claude_launcher import picker
+
+    real = picker._platform()
+    monkeypatch.setattr(picker, "_platform", lambda: dataclasses.replace(real, reasons=(WSL_STOP,)))
+
+
+# The local midnight that starts NOW's day.
+MIDNIGHT = time.mktime((*time.localtime(NOW)[:3], 0, 0, 0, 0, 0, -1))
 
 
 def start(env, cols=100):
@@ -500,14 +518,14 @@ class TestHeader:
         p.on_sessions()
         assert "↻ open when you logged out" in strip_ansi(p.make_header())
 
-    def test_wsl_stop_nudge(self, env):
+    def test_wsl_stop_nudge(self, env, wsl):
         a = env.log("/tmp", conversation("a", "/tmp"))
         env.paths.state.mkdir(parents=True)
         env.paths.restored.write_text(json.dumps({a: closed(NOW - 300, "wsl-stop")}))
         p, _ = start(env)
         assert "1 session was open when WSL stopped" in strip_ansi(p.make_header())
 
-    def test_one_line_per_event_newest_first(self, env):
+    def test_one_line_per_event_newest_first(self, env, wsl):
         a, b, c = (env.log("/tmp", conversation(n, "/tmp")) for n in "abc")
         env.paths.state.mkdir(parents=True)
         env.paths.restored.write_text(
@@ -530,6 +548,83 @@ class TestHeader:
         assert len(lines) == 3
         assert lines[1].startswith("↻ 1 session was open when you logged out")
         assert lines[2] == "↻ 3 more from earlier"
+
+    def test_exactly_three_events_get_a_line_each(self, env, wsl):
+        a, b, c = (env.log("/tmp", conversation(n, "/tmp")) for n in "abc")
+        env.paths.state.mkdir(parents=True)
+        env.paths.restored.write_text(
+            json.dumps({a: closed(NOW - 300, "wsl-stop"), b: closed(NOW - 3000, "logout"), c: closed(NOW - 9000)})
+        )
+        p, _ = start(env)
+        lines = strip_ansi(p.make_header()).split("\n")[2:-1]
+        assert [line.split(" (")[0] for line in lines] == [
+            "↻ 1 session was open when WSL stopped",
+            "↻ 1 session was open when you logged out",
+            "↻ 1 session was open when your computer restarted",
+        ]
+
+    def test_one_restart_read_at_slightly_different_times_is_one_line(self, env):
+        a, b = (env.log("/tmp", conversation(n, "/tmp")) for n in "ab")
+        env.paths.state.mkdir(parents=True)
+        env.paths.restored.write_text(json.dumps({a: closed(NOW - 300), b: closed(NOW - 300.01)}))
+        p, _ = start(env)
+        lines = strip_ansi(p.make_header()).split("\n")
+        assert "↻ 2 sessions were open when your computer restarted" in lines[2] and lines[3] == " "
+
+    def test_a_reason_this_platform_doesnt_know(self, env):
+        a = env.log("/tmp", conversation("a", "/tmp"))
+        env.paths.state.mkdir(parents=True)
+        env.paths.restored.write_text(json.dumps({a: closed(MIDNIGHT + 60, "gone")}))
+        p, _ = start(env)
+        assert "↻ 1 session was open when Claude was stopped" in strip_ansi(p.make_header())
+        p.on_sessions()
+        assert "↻ open when Claude was stopped" in strip_ansi(p.make_header())
+        assert displayed(p.rows())[1].startswith("↻ today stopped ")
+
+    def test_sessions_view_says_all_three_reasons(self, env, wsl):
+        a, b, c = (env.log("/tmp", conversation(n, "/tmp")) for n in "abc")
+        env.paths.state.mkdir(parents=True)
+        env.paths.restored.write_text(
+            json.dumps({a: closed(NOW - 300, "wsl-stop"), b: closed(NOW - 3000, "logout"), c: closed(NOW - 9000)})
+        )
+        p, _ = start(env)
+        p.on_sessions()
+        header = strip_ansi(p.make_header())
+        assert "↻ open when your computer restarted, you logged out or WSL stopped" in header
+
+    def test_a_directorys_view_says_only_its_rows_reasons(self, env, monkeypatch):
+        d = project(env, "proj", NOW - 60)
+        elsewhere = env.log("/tmp", conversation("b", "/tmp"))
+        env.paths.state.mkdir(parents=True)
+        env.paths.restored.write_text(
+            json.dumps({sid_in(env, d): closed(NOW - 300, "logout"), elsewhere: closed(NOW - 9000)})
+        )
+        p, _ = start(env, cols=120)
+        monkeypatch.setenv("FZF_POS", "2")
+        p.on_enter(str(d), "")
+        header = strip_ansi(p.make_header())
+        assert "↻ open when you logged out" in header and "restarted" not in header
+
+    def test_a_directorys_view_without_its_own_restored_rows_says_nothing(self, env, monkeypatch):
+        d = project(env, "proj", NOW - 60)
+        elsewhere = env.log("/tmp", conversation("b", "/tmp"))
+        env.paths.state.mkdir(parents=True)
+        env.paths.restored.write_text(json.dumps({elsewhere: closed(NOW - 300)}))
+        p, _ = start(env, cols=120)
+        monkeypatch.setenv("FZF_POS", "2")
+        p.on_enter(str(d), "")
+        assert "↻" not in strip_ansi(p.make_header())
+
+    def test_each_reason_has_its_texts(self, env, wsl):
+        # Whatever the platform's reasons, the picker has a header and a row text for each, in the order they win.
+        from claude_launcher.restart import SHARED, reasons
+
+        p, _ = start(env)
+        expected = reasons([WSL_STOP])
+        assert [r[0] for r in p.state.reasons] == [r.key for r in expected] == ["restart", "logout", "wsl-stop"]
+        assert p.state.reasons == [[r.key, r.header, r.row, r.rank] for r in expected]
+        assert all(r.header and r.row for r in expected)
+        assert {r.key for r in SHARED} <= {r[0] for r in p.state.reasons}
 
     def test_sessions_view_says_each_reason_shown(self, env):
         a = env.log("/tmp", conversation("a", "/tmp"))
@@ -565,16 +660,48 @@ class TestSessions:
         older = env.log("/tmp", conversation("open at restart", "/tmp"), mtime=NOW - 9000)
         env.log("/tmp", conversation("recent", "/tmp"), mtime=NOW - 60)
         env.paths.state.mkdir(parents=True)
-        env.paths.restored.write_text(json.dumps({older: closed(NOW - 300)}))
+        env.paths.restored.write_text(json.dumps({older: closed(MIDNIGHT + 60)}))
         p, _ = start(env)
         p.on_sessions()
         shown = displayed(p.rows())
         assert shown[1].startswith("↻ ") and shown[1].endswith("open at restart")
-        day = time.strftime("%a", time.localtime(NOW - 300))
-        assert shown[1].split()[1:3] == [day, "restart"]  # what closed it, not its age
+        assert shown[1].split()[1:3] == ["today", "restart"]  # what closed it, not its age
         assert not shown[2].startswith("↻")
         assert shown[2].endswith("recent")
         assert "ctrl-x dismiss ↻" in strip_ansi(p.make_header())
+
+    @pytest.mark.parametrize(
+        ("at", "why", "when"),
+        [
+            (MIDNIGHT + 60, "restart", "today restart"),
+            (MIDNIGHT - 60, "logout", "yesterday logout"),
+            (MIDNIGHT - 86400 + 60, "logout", "yesterday logout"),
+            (MIDNIGHT - 86400 - 60, "restart", time.strftime("%a", time.localtime(MIDNIGHT - 86400 - 60)) + " restart"),
+            (MIDNIGHT - 5 * 86400, "wsl-stop", time.strftime("%a", time.localtime(MIDNIGHT - 5 * 86400)) + " WSL stop"),
+        ],
+    )
+    def test_a_restored_rows_day_and_reason(self, env, wsl, at, why, when):
+        sid = env.log("/tmp", conversation("x", "/tmp"), mtime=NOW - 9000)
+        env.paths.state.mkdir(parents=True)
+        env.paths.restored.write_text(json.dumps({sid: closed(at, why)}))
+        p, _ = start(env)
+        p.on_sessions()
+        assert displayed(p.rows())[1].startswith(f"↻ {when} ")
+
+    @pytest.mark.parametrize(("why", "column"), [(None, 12), ("logout", 16), ("restart", 17), ("wsl-stop", 18)])
+    def test_the_first_column_is_as_wide_as_its_rows(self, env, wsl, why, column):
+        sid = env.log("/tmp", conversation("a title long enough to be cut " * 4, "/tmp"), mtime=NOW - 9000)
+        if why:
+            env.paths.state.mkdir(parents=True)
+            env.paths.restored.write_text(json.dumps({sid: closed(MIDNIGHT - 60, why)}))
+        p, _ = start(env, cols=80)
+        p.on_sessions()
+        heading, row = plain(p.rows())[:2]
+        assert heading.split()[:2] == (["When", "Directory"] if why else ["Last", "active"])
+        assert heading.index("Directory") == 1 + 2 + column + 1  # the tab, the mark, the column, a space
+        shown = displayed(p.rows())[1]
+        assert width(shown) == 77  # what fzf leaves of 80 columns, filled
+        assert width(shown[shown.index("a title") :]) == 80 - 31 - column  # at 80 columns, at least 31 for the title
 
     def test_ages_and_marks_dont_match(self, env, monkeypatch):
         d = project(env, "proj", NOW - 60)
@@ -1002,3 +1129,18 @@ def test_title_skipped_on_dumb_terminals():
     assert not title.enabled({}, windows=False)
     assert title.enabled({}, windows=True)  # Windows' consoles never set TERM
     assert not title.enabled({"TERM": "dumb"}, windows=True)
+
+
+def test_nth_match_takes_rows_as_fzf_gives_them():
+    # Only \n ends a row: a title can hold other line breaks (U+2028), and
+    # bytes that aren't UTF-8 come back as they went.
+    import shutil
+
+    from claude_launcher.picker import _nth_match
+
+    fzf = shutil.which("fzf")
+    rows = ["a\tone two", "b\tone", "c\x80\tone\udc80"]
+    rows = [r.encode("utf-8", "surrogateescape").decode("utf-8", "surrogateescape") for r in rows]
+    assert _nth_match(fzf, rows, "one", 1) == "a"
+    assert _nth_match(fzf, rows, "one", 3) == "c\x80"
+    assert _nth_match(fzf, rows, "one", 4) == ""

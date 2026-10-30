@@ -75,3 +75,18 @@ def test_the_core_runs_a_platforms_own_commands(fresh, monkeypatch, capsys):
     assert calls == [["a", "b"]]
     assert cli.main(["nope"]) == 2
     assert "install run" in capsys.readouterr().err  # the usage
+
+
+def test_platforms_add_reasons_but_share_restart_and_logout():
+    assert platform("mine").reasons == ()
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="builds on Linux's platform")
+def test_wsl_adds_wsl_stopping_after_restarts_and_logouts():
+    from test_picker import WSL_STOP
+
+    from claude_launcher.platforms import wsl
+    from claude_launcher.restart import reasons
+
+    assert wsl.platform().reasons == (WSL_STOP,)
+    assert [r.key for r in reasons(wsl.platform().reasons)] == ["restart", "logout", "wsl-stop"]

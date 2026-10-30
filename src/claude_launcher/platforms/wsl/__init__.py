@@ -7,7 +7,7 @@ from __future__ import annotations
 import dataclasses
 import os
 
-from ..base import Platform
+from ..base import Platform, Reason
 
 
 def is_wsl(release: str | None = None) -> bool:
@@ -31,4 +31,7 @@ def platform() -> Platform:
     from ..linux import platform as linux
 
     base = linux()
-    return dataclasses.replace(base, name="wsl", events=lambda: _events(base.host), setup=_setup)
+    stopped = Reason("wsl-stop", "WSL stopped", "WSL stop", 30)  # after a Windows restart or logoff, which stop it too
+    return dataclasses.replace(
+        base, name="wsl", events=lambda: _events(base.host), setup=_setup, reasons=(*base.reasons, stopped)
+    )

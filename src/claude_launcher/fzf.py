@@ -10,21 +10,18 @@ left alone.
 
 from __future__ import annotations
 
-import hashlib
-import io
 import os
 import platform
 import re
 import shutil
 import subprocess
-import tarfile
-import tempfile
-import urllib.request
-import zipfile
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from .paths import REPO_DIR
+
+# Fetching's modules (urllib, hashlib, tarfile, zipfile) are imported where
+# they're used: the picker imports this module on every key press.
 
 MIN_VERSION = (0, 67, 0)
 PINNED = "0.74.5"
@@ -110,6 +107,9 @@ def fetch(
 ) -> Path:
     """Download the pinned fzf for this machine into `dest`, checking it
     against the release's checksum before it's used. Returns its path."""
+    import hashlib
+    import tempfile
+
     machine = machine or platform.machine()
     name = build_name(system, machine)
     if name is None:
@@ -130,6 +130,10 @@ def fetch(
 
 def _unpack(name: str, data: bytes, program: str) -> bytes:
     """The fzf program from a release archive: a .tar.gz, or Windows' .zip."""
+    import io
+    import tarfile
+    import zipfile
+
     try:
         if name.endswith(".zip"):
             with zipfile.ZipFile(io.BytesIO(data)) as z:
@@ -144,5 +148,7 @@ def _unpack(name: str, data: bytes, program: str) -> bytes:
 
 
 def _download(url: str) -> bytes:
+    import urllib.request
+
     with urllib.request.urlopen(url, timeout=60) as response:
         return response.read()

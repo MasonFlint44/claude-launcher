@@ -69,11 +69,15 @@ class PathText:
         """`path` tidied for opening and comparing: no doubled separators, `.`
         or `..`. POSIX lets a system give a leading // a meaning of its own, so
         normpath keeps it; Linux gives it none, so //usr is /usr. On Windows a
-        leading \\\\ is a network share and stays, and C: is C:\\."""
-        if self.windows and _DRIVE.fullmatch(path):
-            path += self.sep
+        leading \\\\ is a network share and stays, and a drive on its own
+        ends in a separator (C: is C:\\, \\\\srv\\share is \\\\srv\\share\\), so a
+        root compares the same either way."""
         path = self.path.normpath(path)
-        if not self.windows and path.startswith("//"):
+        if self.windows:
+            drive, rest = ntpath.splitdrive(path)
+            if drive and not rest:
+                path += self.sep
+        elif path.startswith("//"):
             path = "/" + path.lstrip("/")
         return path
 
