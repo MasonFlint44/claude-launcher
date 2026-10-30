@@ -138,3 +138,23 @@ def test_fzf_find_takes_the_installed_one():
         pytest.skip("no fetched fzf.exe")
     path, version = fzf.find(own, env={"PATH": ""})
     assert path == str(own / "fzf.exe") and version >= fzf.MIN_VERSION
+
+
+def test_npms_claude_cmd_gets_its_arguments_as_they_were(tmp_path):
+    # npm installs claude as claude.cmd; the launcher runs it through cmd.
+    import json
+    import subprocess
+    import sys
+
+    from claude_launcher import launcher
+
+    d = tmp_path / "npm claude (x)"
+    d.mkdir()
+    show = d / "show.py"
+    show.write_text("import json, sys; print(json.dumps(sys.argv[1:]))")
+    cmd = d / "claude.cmd"
+    cmd.write_text(f'@echo off\r\n"{sys.executable}" "{show}" %*\r\n', newline="")
+    args = ["--resume", "a b", "x&y", "100%", '"q"', "^caret", "!x!", "%PATH%", "C:\\x\\", "end\\\\"]
+    line = launcher._claude_command(args, which=lambda name: str(cmd), windows=True)
+    out = subprocess.run(line, capture_output=True, text=True, check=True).stdout
+    assert json.loads(out) == args
