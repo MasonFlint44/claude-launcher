@@ -140,10 +140,52 @@ def _columns() -> int:
     return shutil.get_terminal_size((80, 24)).columns - current().columns_lost
 
 
+def _batch_arg(arg: str) -> str:
+    """`arg` quoted for a .cmd or .bat file, which cmd reads a second time when
+    it expands %* inside (BatBadBut). A quote is doubled, so cmd never takes
+    what follows as unquoted, and the program's own parsing reads "" as one
+    quote; backslashes are doubled before a quote. %cd:~,% expands to
+    nothing, so a % can't start a variable."""
+    out, slashes = ['"'], 0
+    for ch in arg:
+        if ch == "\\":
+            slashes += 1
+        else:
+            if ch == '"':
+                out.append("\\" * slashes + '"')
+            slashes = 0
+        out.append("%%cd:~,%" if ch == "%" else ch)
+    out.append("\\" * slashes + '"')
+    return "".join(out)
+
+
+def _claude_command(
+    args: Sequence[str], which=shutil.which, windows: bool = os.name == "nt", comspec: str | None = None
+) -> list[str] | str:
+    """How to run claude with `args`. On Windows, npm installs it as
+    claude.cmd, which CreateProcess can't start by name (it doesn't try
+    PATHEXT), so it's found on PATH and run through cmd."""
+    if not windows:
+        return ["claude", *args]
+    found = which("claude")
+    if not found or not found.lower().endswith((".cmd", ".bat")):
+        return [found or "claude", *args]
+    if any(c in a for a in args for c in "\r\n\0"):
+        raise ValueError("Can't pass a line break to claude.cmd")
+    line = " ".join([f'"{found}"', *(_batch_arg(a) for a in args)])
+    # /s: cmd takes off just the outer quotes; /v:off, so ! is never expanded.
+    return f'"{comspec or os.environ.get("COMSPEC", "cmd.exe")}" /d /e:on /v:off /s /c "{line}"'
+
+
 def _claude(signals: _Signals, directory: str, args: Sequence[str]) -> int | None:
     """Run claude in `directory`. Its exit code, or None if it couldn't start."""
+    env = None
+    if os.name != "nt":  # as a shell's cd would: cwd alone leaves PWD naming where the launcher started
+        env = {**os.environ, "PWD": directory}
     try:
-        return signals.run(["claude", *args], cwd=directory).returncode
+        return signals.run(_claude_command(args), cwd=directory, env=env).returncode
+    except ValueError as e:
+        print(e, file=sys.stderr)
     except FileNotFoundError as e:
         gone = e.filename == directory
         print(f"No such directory: {directory}" if gone else "claude isn't on your PATH", file=sys.stderr)
@@ -169,6 +211,8 @@ def _loop(signals: _Signals, run: Path, args: list[str]) -> int:
             done = signals.run(opts, stdin=rows, stdout=subprocess.PIPE, env=fzf_env)  # opts[0] is the fzf to run
         if done.returncode == QUIT:
             return 0
+        if done.returncode < 0:  # killed by a signal: exit as a shell would
+            return 128 - done.returncode
         if done.returncode > 1:  # fzf itself failed
             return done.returncode
         # The query is fzf's first line of output; the picker works out the rest
@@ -188,6 +232,13 @@ def _loop(signals: _Signals, run: Path, args: list[str]) -> int:
 
 def main(args: list[str]) -> int:
     text.utf8_out()
+    from .platforms import Unsupported, current
+
+    try:
+        current()
+    except Unsupported as e:
+        print(e, file=sys.stderr)
+        return 1
     # `--resume <id>`: straight to that session, in the directory it was started in.
     resume = _resume_dir(args)
     if isinstance(resume, int):  # an error, already shown

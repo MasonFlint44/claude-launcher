@@ -501,3 +501,15 @@ def test_term_puts_the_colors_back(launch):
     raw = bytes(t.raw)
     assert 0 <= raw.find(b"\x1b]11;#1f1e1d") < raw.rfind(b"\x1b]111\x1b\\")
     assert list(launch.runtime.iterdir()) == []
+
+
+def test_fzf_killed_ends_the_launcher(launch, claude_home, tmp_path):
+    # An fzf killed by a signal isn't a pick: nothing may start in ~.
+    killer = tmp_path / "killer"
+    killer.mkdir()
+    fzf = killer / "fzf"
+    fzf.write_text(f'#!/bin/sh\n[ "$1" = --version ] && exec {shutil.which("fzf")} "$@"\nkill -KILL $$\n')
+    fzf.chmod(0o755)
+    t = launch(PATH=f"{killer}:{tmp_path / 'bin'}:/usr/local/bin:/usr/bin:/bin")
+    assert t.wait_exit() == 128 + signal.SIGKILL
+    assert launch.calls() == []
