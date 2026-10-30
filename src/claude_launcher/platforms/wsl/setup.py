@@ -101,11 +101,11 @@ class WslSetup:
         return terminal.fragments_root(local) / f"{terminal.APP}-wsl-{self.distro}"
 
     def _commandline(self) -> str:
-        # Windows Terminal hands this to wsl.exe, which splits it as Windows
-        # programs do: double quotes. Distro and user names can't hold one.
+        # Unquoted: wsl.exe keeps quotes around -d's and -u's values as part
+        # of the name (checked in the VM: "There is no distribution with the
+        # supplied name"), and distro and user names hold no spaces.
         return (
-            f'wsl.exe -d "{self.distro}" -u "{self.user()}" --cd ~ -- '
-            'bash -lc "~/.local/bin/claude-launcher || exec bash"'
+            f'wsl.exe -d {self.distro} -u {self.user()} --cd ~ -- bash -lc "~/.local/bin/claude-launcher || exec bash"'
         )
 
     def _icon(self, icon: str | None) -> Path:

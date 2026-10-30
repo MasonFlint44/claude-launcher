@@ -163,7 +163,7 @@ def test_writes_a_profile_for_this_distro_and_user(windows, home):
     assert profile["name"] == "Claude Code (Ubuntu)"
     assert profile["guid"] != terminal.PROFILE_GUID  # beside native Windows' profile
     assert profile["commandline"] == (
-        'wsl.exe -d "Ubuntu" -u "me" --cd ~ -- bash -lc "~/.local/bin/claude-launcher || exec bash"'
+        'wsl.exe -d Ubuntu -u me --cd ~ -- bash -lc "~/.local/bin/claude-launcher || exec bash"'
     )
     assert profile["startingDirectory"] == "\\\\wsl.localhost\\Ubuntu\\" + str(home).lstrip("/").replace("/", "\\")
     assert profile["icon"] == "C:\\Users\\José\\AppData\\Local\\Microsoft\\Windows Terminal\\Fragments\\" + (
@@ -260,7 +260,7 @@ def test_distro_without_wsl_distro_name(windows, home, root):
     setup = make(windows, home, WSL_DISTRO_NAME=None)
     assert setup.distro == "Ubuntu-24.04"
     list(setup.install(None, None))
-    assert profile_of(windows, "Ubuntu-24.04")["commandline"].startswith('wsl.exe -d "Ubuntu-24.04" ')
+    assert profile_of(windows, "Ubuntu-24.04")["commandline"].startswith("wsl.exe -d Ubuntu-24.04 ")
 
 
 def test_no_distro_stops_before_anything(windows, home):
