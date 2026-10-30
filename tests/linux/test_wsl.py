@@ -26,7 +26,22 @@ THIS_BOOT, LAST_BOOT = "1" * 32, "2" * 32
     [("6.6.87.2-microsoft-standard-WSL2", True), ("4.4.0-19041-Microsoft", True), ("6.8.0-31-generic", False)],
 )
 def test_is_wsl(release, wsl):
-    assert is_wsl(release) is wsl
+    assert is_wsl(release, env={"WSL_DISTRO_NAME": "Ubuntu"}) is wsl
+
+
+@pytest.mark.parametrize(
+    "marker", ["run/WSL", "proc/sys/fs/binfmt_misc/WSLInterop", "proc/sys/fs/binfmt_misc/WSLInterop-late"]
+)
+def test_wsl_without_its_distro_name(tmp_path, marker):
+    # sudo resets the environment; WSL's own files are still there.
+    (tmp_path / marker).parent.mkdir(parents=True, exist_ok=True)
+    (tmp_path / marker).touch()
+    assert is_wsl("6.6.87.2-microsoft-standard-WSL2", root=str(tmp_path), env={})
+
+
+def test_a_container_on_wsls_kernel_isnt_wsl(tmp_path):
+    # Docker Desktop's containers, and devcontainers, run WSL's kernel.
+    assert not is_wsl("6.6.87.2-microsoft-standard-WSL2", root=str(tmp_path), env={})
 
 
 def test_wsl_is_picked_inside_wsl(monkeypatch):
