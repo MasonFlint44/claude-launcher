@@ -14,8 +14,8 @@ git clone https://github.com/MasonFlint44/claude-launcher.git ~/git/claude-launc
 The installer:
 
 1. Checks for fzf 0.67 or newer. Ubuntu 24.04 and Debian ship older ones, so if yours is older (or missing), it downloads fzf 0.74.5 from fzf's GitHub releases, checks it against the release's checksum, and keeps it in `~/.local/share/claude-launcher/bin` for the launcher alone. Your own fzf stays as it is.
-2. Links `~/.local/bin/claude-launcher` and `~/.local/bin/claude-session-hook` to the scripts in this repo, so `git pull` picks up changes.
-3. Adds `claude-session-hook` to Claude Code's user settings (`~/.claude/settings.json`, or `$CLAUDE_CONFIG_DIR/settings.json`) as a SessionStart and SessionEnd hook. Your other settings and hooks are left as they are. If `settings.json` is a link (into a dotfiles repo, say), the file it points to is edited and the link stays. Sessions started after this use the hook.
+2. Adds `claude-session-hook` to Claude Code's user settings (`~/.claude/settings.json`, or `$CLAUDE_CONFIG_DIR/settings.json`) as a SessionStart and SessionEnd hook. Your other settings and hooks are left as they are. If `settings.json` is a link (into a dotfiles repo, say), the file it points to is edited and the link stays. Sessions started after this use the hook.
+3. Links `~/.local/bin/claude-launcher` and `~/.local/bin/claude-session-hook` to the scripts in this repo, so `git pull` picks up changes.
 4. Links the theme to `~/.config/ghostty/themes/claude-dark`.
 5. Adds the app icon and a **Claude Code** desktop launcher for your terminal (see below), with a Claude Code profile in terminals that use profiles.
 
@@ -54,7 +54,7 @@ Switching a tab to Claude Dark is tested in Ghostty, kitty, WezTerm, GNOME Termi
 
 `claude-session-hook` keeps a small record for each interactive Claude in `~/.claude/state/claude-launcher/open/`. An exit you chose (`/exit`, `/clear`, switching with `/resume`) deletes the record straight away. Closing the tab, or the desktop closing every window, keeps it, with the time the session ended. When the picker opens, it checks those times against the systemd journal:
 
-- **Restart:** from when the restart began (logind's "System is rebooting." message, or after a crash or power cut, the last thing logged) to the end of that boot.
+- **Restart or shutdown:** from when it began (logind's "System is rebooting." or "System is powering down.", or after a crash or power cut, the last thing logged) to the end of that boot.
 - **Logout:** from when your desktop session ended (GNOME and KDE stop `graphical-session.target`, just before the windows close) to when the system was done with it. A Claude in an SSH session also counts when that SSH session ends. Other logins, like a script that connects over SSH on a schedule, don't count.
 
 A session that ended in that span, or up to 30 seconds before it began (desktops close windows before the system hears about the restart or logout) or 10 seconds after it ended, was closed by it. So was one that never recorded an end at all.

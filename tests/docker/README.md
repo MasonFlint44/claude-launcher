@@ -40,6 +40,6 @@ Then it reboots the container, leaves another Claude open, and powers the contai
 
 It can't test what a real desktop closes first, or a power cut. On systemd 257 and later, logind in a container doesn't name sessions after their audit IDs, so the SSH check is skipped there.
 
-It needs `--cgroupns=private --cap-add SYS_ADMIN --security-opt apparmor=unconfined --tmpfs /run --tmpfs /run/lock`, not `--privileged`; override with `RUN_OPTS=`. `KEEP=1` leaves the containers to look at. A run takes about 2.5 minutes, with the distros in parallel.
+It needs `--cgroupns=private --cap-add SYS_ADMIN --security-opt apparmor=unconfined --tmpfs /run --tmpfs /run/lock`, not `--privileged`; override with `RUN_OPTS=`. `KEEP=1` leaves the containers to look at. A run takes about 4 minutes, with the distros in parallel.
 
 Images stay after a run. Remove them with `docker images 'claude-launcher-*' -q | xargs docker rmi`.

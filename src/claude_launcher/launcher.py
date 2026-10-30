@@ -174,7 +174,12 @@ def _claude_command(
         raise ValueError("Can't pass a line break to claude.cmd")
     line = " ".join([f'"{found}"', *(_batch_arg(a) for a in args)])
     # /s: cmd takes off just the outer quotes; /v:off, so ! is never expanded.
-    return f'"{comspec or os.environ.get("COMSPEC", "cmd.exe")}" /d /e:on /v:off /s /c "{line}"'
+    # System32's cmd.exe, not %ComSpec%, which can be another shell (TCC)
+    # that reads these switches its own way.
+    if comspec is None:
+        root = os.environ.get("SystemRoot")
+        comspec = os.path.join(root, "System32", "cmd.exe") if root else "cmd.exe"
+    return f'"{comspec}" /d /e:on /v:off /s /c "{line}"'
 
 
 def _claude(signals: _Signals, directory: str, args: Sequence[str]) -> int | None:

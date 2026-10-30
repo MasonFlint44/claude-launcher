@@ -20,11 +20,11 @@ project>                                                                        
 | Path | What it is |
 |---|---|
 | `bin/claude-launcher` | The picker. Runs fzf, then `claude` in the chosen directory. |
-| `bin/claude-session-hook` | A Claude Code hook that notes which sessions are open, so the picker can list the ones a restart or logout closed. |
+| `bin/claude-session-hook` | A Claude Code hook that notes which sessions are open, so the picker can list the ones a restart or logout closed (`claude-session-hook.py` on Windows). |
 | `themes/claude-dark` | The Claude Dark colors, as a Ghostty theme. |
 | `share/icons/` | The app icon: a prompt in a speech bubble. `scripts/render-icons.sh` renders its PNGs from the SVG. |
-| `install.sh` | Sets everything up, or with `--uninstall` takes it out. |
-| `src/claude_launcher/` | The picker's logic, in Python (standard library only). What differs by OS is in `platforms/`. |
+| `install.sh`, `install.ps1` | Set everything up, on Linux and WSL or on Windows, or with `--uninstall` / `-Uninstall` take it out. |
+| `src/claude_launcher/`, `libexec/` | The picker's logic, in Python (standard library only), and the script fzf's keys and the installers run. What differs by OS is in `src/claude_launcher/platforms/`. |
 | `docs/` | Installing and using it on each OS ([Linux](docs/linux.md), [Windows](docs/windows.md), [WSL](docs/wsl.md)), and [adding a platform](docs/dev/platforms.md). |
 
 ## Install
@@ -120,11 +120,13 @@ The Directory column says where each session ran, so a session in a subdirectory
 **All sessions:** Ctrl-S shows your sessions in every directory, most recently active first.
 
 ```
-    Last active Directory                Session
-▌ ↻ 5m ago      my-app                   Playback scrubber fix
-▌   2h ago      ~                        Dimming lights at sunset
-▌   2w ago      workspace (missing)      Queue configuration
+    When          Directory                Session
+▌ ↻ today restart my-app                   Playback scrubber fix
+▌   2h ago        ~                        Dimming lights at sunset
+▌   2w ago        workspace (missing)      Queue configuration
 ```
+
+A ↻ row shows what closed the session and the day ("today restart", "yesterday logout", "Mon restart"), so that column is headed "When" while there are any.
 
 In either view, type to filter (it matches the directory and the title), and press Enter to resume the highlighted session in its directory. Esc goes back to the directory list, with the search and the cursor where you left them.
 
@@ -150,7 +152,7 @@ When a restart or logging out closed Claude sessions, the picker shows which:
 
 There's a line for each restart or logout, newest first (past three, the oldest share one line). In WSL, WSL stopping on its own (`wsl --shutdown`) gets its own line too, "open when WSL stopped"; if Windows restarted or you logged out, that's what it says instead.
 
-Press Ctrl-S and they're at the top of the Sessions view, marked ↻ with what closed each and the day, like "Mon restart" (and at the top of their directory's sessions too). Enter resumes one, and it leaves the group; Ctrl-X takes it out without resuming, and Alt-X twice takes out every ↻ session the view shows. A session stays in the group for 7 days, unless you resume or dismiss it first, or start it again from anywhere else.
+Press Ctrl-S and they're at the top of the Sessions view, marked ↻ with what closed each and the day, like "today restart" or "Mon restart" (and at the top of their directory's sessions too). Enter resumes one, and it leaves the group; Ctrl-X takes it out without resuming, and Alt-X twice takes out every ↻ session the view shows. A session stays in the group for 7 days, unless you resume or dismiss it first, or start it again from anywhere else.
 
 **How it knows:** `claude-session-hook` keeps a small record for each interactive Claude. An exit you chose (`/exit`, `/clear`, switching with `/resume`) deletes it; closing the tab, or the desktop closing every window, keeps it with the time the session ended. When the picker opens, it checks those times against the system's own record of restarts and logouts. A session that ended during one, or just before or after it, was closed by it; anything else, like a tab you closed yourself, isn't listed. On Linux that record is the systemd journal ([docs/linux.md](docs/linux.md#how-it-knows-what-a-restart-or-logout-closed) has the details, and what it needs); on Windows and in WSL, Windows' System event log ([docs/windows.md](docs/windows.md#how-it-knows-what-a-restart-or-logoff-closed)).
 

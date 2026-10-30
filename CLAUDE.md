@@ -1,36 +1,36 @@
 # claude-launcher
 
-A project and session picker for Claude Code, plus a Claude Dark theme and a desktop launcher. README.md is the user-facing description; this file is how the code is put together and the rules for changing it. The code is split into what's the same everywhere and what differs by OS (`src/claude_launcher/platforms/`); Linux and Windows so far. The files imported at the end cover the split and each platform's own parts.
+A project and session picker for Claude Code, plus a Claude Dark theme and a desktop launcher. README.md is the user-facing description; this file is how the code is put together and the rules for changing it. The code is split into what's the same everywhere and what differs by OS (`src/claude_launcher/platforms/`): Linux, Windows, and WSL (Linux with Windows' restarts). The files imported at the end cover the split and each platform's own parts.
 
 ## Layout
 
 | Path | Role |
 |---|---|
-| `bin/claude-launcher` | Python. Runs `launcher.main()`; nothing else. |
-| `libexec/claude-launcher-core` | Entry script for the Python package. fzf's key bindings and the installers call it; it isn't on PATH. |
+| `bin/claude-launcher` | Python. Checks for Python 3.10+, then runs `launcher.main()`; nothing else. |
+| `libexec/claude-launcher-core` | Entry script for the Python package (checks for Python 3.10+ first, in syntax old Pythons can read). fzf's key bindings and the installers call it; it isn't on PATH. |
 | `src/claude_launcher/launcher.py` | The loop: sets the tab's colors and title, runs fzf with the options the picker gives it, starts `claude`, comes back. Signals: see its docstring. |
 | `src/claude_launcher/cli.py` | Subcommands for the entry script. Arguments are parsed by hand, because they include fzf's query and claude's own options. |
 | `src/claude_launcher/picker.py` | The picker: rows, headers, what each key does, and what Enter chose. Its state lives in a per-run directory (see the module docstring). |
 | `src/claude_launcher/pathtext.py` | Paths as text: separators, `~`, what's inside what, path mode's splitting, by POSIX or Windows rules. The only place the picker knows what a separator is. |
 | `src/claude_launcher/logs.py` | Reading Claude's session logs: the sessions list, titles, directories. |
-| `src/claude_launcher/platforms/` | What differs by OS, behind the interfaces in `base.py`; `current()` picks the platform. See docs/dev/platforms.md, and docs/dev/linux.md for `linux/`. |
-| `src/claude_launcher/restart.py` | The group of sessions a restart or logout closed: the rule, and the record format. The same on every platform. |
+| `src/claude_launcher/platforms/` | What differs by OS, behind the interfaces in `base.py`; `current()` picks the platform. See docs/dev/platforms.md, docs/dev/linux.md for `linux/`, and docs/dev/windows.md for `windows/` and `wsl/`. |
+| `src/claude_launcher/restart.py` | The group of sessions a restart, logout or a platform's own reason (`Reason`) closed: the rule, and the record format. The same on every platform. |
 | `src/claude_launcher/theme.py` | Reads `themes/claude-dark`; switches a terminal's colors and puts them back. |
 | `src/claude_launcher/title.py` | The tab title: "Claude Code" while the picker shows, and the old title put back on exit. |
 | `src/claude_launcher/fzf.py`, `share/fzf/` | Which fzf to run, and fetching the pinned one when the system's is too old (checked against the release's checksums file). |
 | `src/claude_launcher/install.py`, `install.sh` | The installer's steps, the same on every platform; install.sh (and Windows' install.ps1) only check for Python and show the steps' lines. |
 | `src/claude_launcher/settings.py` | For the installer: adding the hook to Claude's settings.json (a script, or a program and its arguments), and taking it out. |
 | `share/icons/`, `scripts/render-icons.sh` | The app icon. Edit the SVG, then run the script to re-render the PNGs. |
-| `tests/` | pytest. `term.py` is a pseudo-terminal driver (pyte) for the end-to-end and hook tests. `contract/` checks any platform's parts; `linux/` is Linux's own tests. |
+| `tests/` | pytest. `term.py` is a pseudo-terminal driver (pyte) for the end-to-end and hook tests. `contract/` checks any platform's parts; `linux/` and `windows/` run only on their OS (each has a `RUNS_ON` file). |
 
 ## Commands
 
 ```bash
-uv run pytest                    # everything (about 20 s)
+uv run pytest                    # everything (about 30 s)
 uv run pytest -m "not e2e"       # skip the pseudo-terminal tests
-uvx ruff check src tests bin/claude-launcher bin/claude-session-hook.py libexec/claude-launcher-core
-uvx ruff format src tests bin/claude-launcher bin/claude-session-hook.py libexec/claude-launcher-core
-shellcheck bin/claude-session-hook install.sh tests/docker/run.sh tests/docker/*/*.sh
+uvx ruff@0.17.3 check src tests bin/claude-launcher bin/claude-session-hook.py libexec/claude-launcher-core
+uvx ruff@0.17.3 format src tests bin/claude-launcher bin/claude-session-hook.py libexec/claude-launcher-core
+shellcheck bin/claude-session-hook install.sh scripts/render-icons.sh tests/docker/run.sh tests/docker/*/*.sh tests/docker/terminals/systemd-run
 ```
 
 Run these before calling a change done, and the Docker layer a change touches (docs/dev/linux.md). CI runs everything. Tests need fzf 0.67+ on PATH. The Ghostty theme check is skipped if Ghostty isn't installed.
