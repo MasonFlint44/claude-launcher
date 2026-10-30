@@ -1,40 +1,73 @@
 """What the installer sets up in WSL: claude-launcher and its hook in
 ~/.local/bin, as on Linux, and a "Claude Code (<distro>)" profile in Windows
-Terminal, written through /mnt/c, that opens the launcher in this distro.
-Native Windows' profile, if there is one, stays beside it."""
+Terminal, written through Windows' drive, that opens the launcher in this
+distro as this user. Native Windows' profile, if there is one, stays beside
+it. The launcher works in any terminal, so when Windows can't be reached the
+profile is skipped with a warning rather than failing the install."""
 
 from __future__ import annotations
 
 import os
-import subprocess
+import pwd
+import shutil
 import uuid
 from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 
-from ...paths import REPO_DIR, THEME_FILE
+from ...install import FAILURES
+from ...paths import THEME_FILE
 from ...theme import Theme
-from ..linux.setup import COMMANDS, bin_dir, link, unlink_ours
+from ..linux import data_dir as linux_data_dir
+from ..linux.setup import bin_dir, link_commands, unlink_commands
 from ..windows import terminal
 from ..windows.setup import DEFAULT_ICON
+from . import interop
 
 
-def _run(argv: list[str]) -> str:
-    # From /mnt/c, so cmd.exe doesn't complain about starting in a UNC path.
-    done = subprocess.run(argv, capture_output=True, text=True, timeout=20, cwd="/mnt/c", check=True)
-    return done.stdout.strip()
+def _user() -> str:
+    return pwd.getpwuid(os.getuid()).pw_name
 
 
 class WslSetup:
     what = "the Windows Terminal profile"
 
-    def __init__(self, env: Mapping[str, str] = os.environ, run: Callable[[list[str]], str] = _run):
+    def __init__(
+        self,
+        env: Mapping[str, str] = os.environ,
+        run: Callable[..., bytes] = interop.run,
+        mounts: str = "/proc/mounts",
+        user: Callable[[], str] = _user,
+    ):
         self.env = env
-        self.run = run
-        self.distro = env.get("WSL_DISTRO_NAME", "")  # WSL sets it in every distro's processes
+        self.run = run  # a program's output; raises if it fails
+        self.windows = interop.Interop(env, mounts, run)
+        self.user = user
+        self.data_dir = linux_data_dir(env)
+        self._distro: str | None = None
+        self.skipped = False  # the profile, this run
 
     @property
     def done(self) -> str:
+        if self.skipped:
+            return "Run claude-launcher in any terminal."
         return f'Restart Windows Terminal and open a "{self.profile.name}" tab, or run claude-launcher in any terminal.'
+
+    @property
+    def distro(self) -> str:
+        """This distro's name: WSL_DISTRO_NAME, which sudo leaves out, else
+        from where Windows sees / (\\\\wsl.localhost\\<distro>\\, or \\\\wsl$\\<distro>\\
+        on older WSL). "" if neither says."""
+        if self._distro is None:
+            name = self.env.get("WSL_DISTRO_NAME", "")
+            if not name:
+                try:
+                    root = self._wslpath("-w", "/")
+                except FAILURES:
+                    root = ""
+                parts = root[2:].split("\\") if root.startswith("\\\\") else []
+                name = parts[1] if len(parts) > 1 else ""
+            self._distro = name
+        return self._distro
 
     @property
     def profile(self) -> terminal.Profile:
@@ -44,40 +77,89 @@ class WslSetup:
     def hook_command(self) -> Path:
         return bin_dir(self.env) / "claude-session-hook"
 
+    def check(self) -> None:
+        """Before the installer does anything: the profile is per distro."""
+        if not self.distro:
+            raise RuntimeError("can't tell which WSL distro this is; run install.sh in a WSL terminal, without sudo")
+
+    def _wslpath(self, flag: str, path: str) -> str:
+        return self.run(["wslpath", flag, path]).decode("utf-8", errors="surrogateescape").strip()
+
+    def _local_app_data(self) -> str:
+        # /d: no AutoRun commands (Clink, conda), whose output would come
+        # first. /u: echo writes UTF-16, so a name like José comes through
+        # whatever the console's code page is.
+        out = self.windows.run("cmd.exe", ["/d", "/u", "/c", "echo", "%LOCALAPPDATA%"])
+        text = out.decode("utf-16-le", errors="replace") if b"\0" in out else out.decode("utf-8", errors="replace")
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if not lines or "%" in lines[-1]:
+            raise RuntimeError("Windows didn't say where %LOCALAPPDATA% is")
+        return lines[-1]
+
     def _fragments(self) -> Path:
-        local = self.run(["cmd.exe", "/c", "echo %LOCALAPPDATA%"])
-        if not local or "%" in local:
-            raise RuntimeError("could not find %LOCALAPPDATA% (is WSL interop on?)")
-        return terminal.fragments_root(Path(self.run(["wslpath", "-u", local]))) / f"{terminal.APP}-wsl-{self.distro}"
+        local = Path(self._wslpath("-u", self._local_app_data()))
+        return terminal.fragments_root(local) / f"{terminal.APP}-wsl-{self.distro}"
+
+    def _commandline(self) -> str:
+        # Windows Terminal hands this to wsl.exe, which splits it as Windows
+        # programs do: double quotes. Distro and user names can't hold one.
+        return (
+            f'wsl.exe -d "{self.distro}" -u "{self.user()}" --cd ~ -- '
+            'bash -lc "~/.local/bin/claude-launcher || exec bash"'
+        )
+
+    def _icon(self, icon: str | None) -> Path:
+        """The icon to show: --icon's (kept, so it can move), last time's, or
+        ours. A .png, as on Windows."""
+        kept = self.data_dir / "icon.png"
+        if icon == "default":
+            kept.unlink(missing_ok=True)
+        elif icon:
+            if not icon.lower().endswith(".png"):
+                raise ValueError("for Windows Terminal, --icon takes a .png")
+            if not os.path.isfile(icon):
+                raise ValueError(f"not a file: {icon}")
+            kept.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(icon, kept)
+        return kept if kept.is_file() else DEFAULT_ICON
 
     def install(self, terminal_names: str | None, icon: str | None) -> Iterator[str]:
-        if not self.distro:
-            raise RuntimeError("WSL_DISTRO_NAME isn't set; run this inside WSL")
+        self.check()
         if terminal_names:
             yield "warning: --terminal is for Linux desktops; in WSL the launcher opens in Windows Terminal"
-        commands_dir = bin_dir(self.env)
-        for name in COMMANDS:
-            yield from link(REPO_DIR / "bin" / name, commands_dir / name)
-        if str(commands_dir) not in self.env.get("PATH", "").split(os.pathsep):
-            yield f"warning: {commands_dir} is not on your PATH"
+        shown = self._icon(icon)
+        yield from link_commands(self.env)
         home = self.env.get("HOME") or str(Path.home())
-        written = terminal.write(
-            self._fragments(),
-            f'wsl.exe -d {self.distro} --cd ~ -- bash -lc "~/.local/bin/claude-launcher || exec bash"',
-            "\\\\wsl.localhost\\" + self.distro + home.replace("/", "\\"),
-            Path(icon) if icon and icon != "default" else DEFAULT_ICON,
-            Theme.load(THEME_FILE),
-            windows_path=lambda p: self.run(["wslpath", "-w", str(p)]),
-            profile=self.profile,
-        )
+        try:
+            written = terminal.write(
+                self._fragments(),
+                self._commandline(),
+                self._wslpath("-w", home),
+                shown,
+                Theme.load(THEME_FILE),
+                windows_path=lambda p: self._wslpath("-w", str(p)),
+                profile=self.profile,
+            )
+        except FAILURES as e:
+            self.skipped = True
+            yield f"warning: {e}; the Windows Terminal profile was skipped"
+            return
         yield f'Added the "{self.profile.name}" profile to Windows Terminal ({written.parent})'
 
     def uninstall(self) -> Iterator[str]:
-        for name in COMMANDS:
-            yield from unlink_ours(bin_dir(self.env) / name)
-        directory = self._fragments()
-        if terminal.remove(directory):
-            yield f'Removed the "{self.profile.name}" Windows Terminal profile ({directory})'
+        yield from unlink_commands(self.env)
+        if not self.distro:
+            yield (
+                "warning: can't tell which WSL distro this is, so its Windows Terminal profile is still there; "
+                "run install.sh --uninstall in a WSL terminal, without sudo"
+            )
+            return
+        try:
+            directory = self._fragments()
+            if terminal.remove(directory):
+                yield f'Removed the "{self.profile.name}" Windows Terminal profile ({directory})'
+        except FAILURES as e:
+            yield f"warning: {e}; the Windows Terminal profile is still there"
 
     @property
     def commands(self) -> Mapping[str, Callable[[list[str]], int]]:

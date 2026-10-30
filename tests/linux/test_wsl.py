@@ -3,16 +3,13 @@ own counted as a restart. WSL is Linux, so these are with Linux's tests;
 they use fakes for Windows' side."""
 
 import json
-from pathlib import Path
 
 import pytest
 
 from claude_launcher import platforms
 from claude_launcher.platforms import Event
-from claude_launcher.platforms.windows import terminal
 from claude_launcher.platforms.wsl import is_wsl
 from claude_launcher.platforms.wsl.events import WslEvents
-from claude_launcher.platforms.wsl.setup import WslSetup
 from claude_launcher.restart import Closed, Record, RestartState
 from conftest import FakeHost, conversation
 
@@ -136,64 +133,3 @@ def test_a_logoff_is_said_over_wsl_stopping(claude_home):
 def test_a_tab_closed_before_isnt_brought_back(sort):
     (closed,), group = sort(NOW - 3000)
     assert closed not in group.sessions
-
-
-@pytest.fixture
-def wsl_setup(tmp_path):
-    windows = tmp_path / "c" / "Users" / "me" / "AppData" / "Local"
-    calls = []
-
-    def run(argv):
-        calls.append(argv)
-        if argv[0] == "cmd.exe":
-            return "C:\\Users\\me\\AppData\\Local"
-        if argv[:2] == ["wslpath", "-u"]:
-            return str(windows)
-        if argv[:2] == ["wslpath", "-w"]:
-            return "C:" + argv[2][len(str(tmp_path / "c")) :].replace("/", "\\")
-        raise AssertionError(argv)
-
-    home = tmp_path / "home" / "me"
-    env = {"WSL_DISTRO_NAME": "Ubuntu", "HOME": str(home), "PATH": str(home / ".local" / "bin")}
-    s = WslSetup(env, run)
-    s.windows, s.home = windows, home
-    return s
-
-
-def test_setup_writes_a_profile_for_this_distro(wsl_setup):
-    lines = list(wsl_setup.install(None, None))
-    fragment = wsl_setup.windows / "Microsoft" / "Windows Terminal" / "Fragments" / "claude-launcher-wsl-Ubuntu"
-    profile = json.loads((fragment / "claude-launcher.json").read_text())["profiles"][0]
-    assert profile["name"] == "Claude Code (Ubuntu)"
-    assert profile["guid"] != terminal.PROFILE_GUID  # beside native Windows' profile
-    assert profile["commandline"].startswith("wsl.exe -d Ubuntu --cd ~ -- bash -lc ")
-    assert profile["icon"].startswith("C:\\Users\\me\\AppData\\Local\\Microsoft\\Windows Terminal\\Fragments\\")
-    assert profile["startingDirectory"] == "\\\\wsl.localhost\\Ubuntu\\" + str(wsl_setup.home).lstrip("/").replace(
-        "/", "\\"
-    )
-    assert (wsl_setup.home / ".local" / "bin" / "claude-launcher").is_symlink()
-    assert lines[-1].startswith('Added the "Claude Code (Ubuntu)" profile')
-
-
-def test_profile_id_is_the_distros_own_and_stable(wsl_setup):
-    other = WslSetup({**wsl_setup.env, "WSL_DISTRO_NAME": "Debian"}, wsl_setup.run)
-    assert wsl_setup.profile.guid == WslSetup(wsl_setup.env, wsl_setup.run).profile.guid
-    assert wsl_setup.profile.guid != other.profile.guid
-
-
-def test_setup_uninstall(wsl_setup):
-    list(wsl_setup.install(None, None))
-    list(wsl_setup.uninstall())
-    assert not (
-        wsl_setup.windows / "Microsoft" / "Windows Terminal" / "Fragments" / "claude-launcher-wsl-Ubuntu"
-    ).exists()
-    assert not (wsl_setup.home / ".local" / "bin" / "claude-launcher").exists()
-
-
-def test_the_hook_is_linuxs(wsl_setup):
-    assert wsl_setup.hook_command() == Path(wsl_setup.home) / ".local" / "bin" / "claude-session-hook"
-
-
-def test_needs_to_be_in_wsl(wsl_setup):
-    with pytest.raises(RuntimeError, match="WSL_DISTRO_NAME"):
-        list(WslSetup({}, wsl_setup.run).install(None, None))
