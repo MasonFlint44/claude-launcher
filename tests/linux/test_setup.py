@@ -5,6 +5,7 @@ import subprocess
 
 from claude_launcher.paths import CORE, REPO_DIR
 from claude_launcher.platforms.linux.setup import COMMANDS, link_commands, unlink_commands, unlink_ours
+from conftest import desktop_only
 
 
 def env_for(home):
@@ -54,6 +55,7 @@ def test_a_dangling_link_into_the_repo_still_goes(tmp_path):
     assert list(unlink_ours(link)) == [f"Removed {link}"]
 
 
+@desktop_only  # WSL's platform has no terminals to list
 def test_terminal_list():
     done = subprocess.run([str(CORE), "terminal", "list"], capture_output=True, text=True, check=True)
     assert done.stdout.split()[:2] == ["ghostty", "kitty"] and "default" in done.stdout.split()
