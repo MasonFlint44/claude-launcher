@@ -4,7 +4,7 @@ were. The same record as bin/claude-session-hook (bash, for Linux and WSL);
 see that script and restart.py.
 
 Claude runs it through a .cmd that finds Python (platforms/windows/setup.py):
-cmd /d /c ...\claude-session-hook.cmd start|end, which runs
+cmd /d /c <data dir>\\claude-session-hook.cmd start|end, which runs
 python -I claude-session-hook.py start|end. It runs on every session
 start and end, so it imports only what it needs, and always exits 0.
 """
