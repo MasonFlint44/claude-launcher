@@ -129,8 +129,9 @@ class FakeEvents:
         return None if self.found is None else list(self.found)
 
 
-# tests/<platform>/ holds one platform's own tests; they run only on it.
-PLATFORM_TESTS = {"linux": "linux", "windows": "win32"}  # directory: sys.platform prefix
+# tests/<platform>/ holds one platform's own tests, and its RUNS_ON file the
+# sys.platform prefix they run on (a fork adds its own directory and file).
+RUNS_ON = "RUNS_ON"
 # Tests that drive a pseudo-terminal, which Windows doesn't have. Windows'
 # terminal is checked live in the VM (docs/dev/windows.md).
 POSIX_ONLY = {"test_e2e.py", "test_theme.py", "fake_terminal.py", "term.py"}
@@ -152,7 +153,8 @@ def pytest_ignore_collect(collection_path, config):
     tests = Path(__file__).parent
     if WINDOWS and collection_path.name in POSIX_ONLY:
         return True
-    for directory, prefix in PLATFORM_TESTS.items():
-        if collection_path.is_relative_to(tests / directory) and not sys.platform.startswith(prefix):
+    for marker in tests.glob(f"*/{RUNS_ON}"):
+        prefix = marker.read_text(encoding="utf-8").strip()
+        if collection_path.is_relative_to(marker.parent) and not sys.platform.startswith(prefix):
             return True
     return None

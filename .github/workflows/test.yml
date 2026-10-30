@@ -8,34 +8,86 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same branch or PR replaces a run still going.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  RUFF: ruff@0.17.3  # pinned, so a new ruff release can't fail a run on its own
+  PY_FILES: src tests bin/claude-launcher bin/claude-session-hook.py libexec/claude-launcher-core
+
 jobs:
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
-      - run: uvx ruff check src tests bin/claude-launcher bin/claude-session-hook.py libexec/claude-launcher-core
-      - run: uvx ruff format --check src tests bin/claude-launcher bin/claude-session-hook.py libexec/claude-launcher-core
-      - run: shellcheck bin/claude-session-hook install.sh tests/docker/run.sh tests/docker/*/*.sh
+      - run: uvx $RUFF check $PY_FILES
+      - run: uvx $RUFF format --check $PY_FILES
+      - run: shellcheck bin/claude-session-hook install.sh scripts/render-icons.sh tests/docker/run.sh tests/docker/*/*.sh tests/docker/terminals/systemd-run
 
   windows:
     runs-on: windows-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.14"]  # the oldest the launcher runs on, and the newest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.10"  # the oldest the launcher runs on
-      - run: python -m pip install pytest pyte
-      - name: fzf, fetched as install.ps1 would
+          python-version: ${{ matrix.python }}
+      - uses: astral-sh/setup-uv@v6
+      - name: pytest and pyte, from uv.lock
+        shell: pwsh
+        run: |
+          uv export --frozen --only-group dev --no-hashes -o requirements-dev.txt
+          python -m pip install -r requirements-dev.txt
+      - name: fzf for the tests
         shell: pwsh
         run: |
           $fzf = python libexec/claude-launcher-core install fetch-fzf
           Add-Content $env:GITHUB_PATH (Split-Path $fzf)
       # A short temp directory keeps the deepest test paths under 260 characters.
-      - run: python -m pytest -q -p no:cacheprovider --basetemp=C:\t
+      - run: python -m pytest -q -rs -p no:cacheprovider --basetemp=C:\t
+      - name: install.ps1 lint
+        if: matrix.python == '3.10'
+        shell: pwsh
+        run: |
+          # Write-Host is how the installer colors its lines.
+          $found = Invoke-ScriptAnalyzer -Path install.ps1 -Severity Warning,Error -ExcludeRule PSAvoidUsingWriteHost
+          $found | Format-Table -AutoSize | Out-String -Width 200
+          if ($found) { exit 1 }
+      - name: install.ps1, then -Uninstall, in Windows PowerShell 5.1
+        if: matrix.python == '3.10'
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          $home2 = Join-Path $env:RUNNER_TEMP "home"
+          New-Item -ItemType Directory -Force (Join-Path $home2 "AppData\Local") | Out-Null
+          $env:USERPROFILE = $home2
+          $env:LOCALAPPDATA = Join-Path $home2 "AppData\Local"
+          $env:CLAUDE_CONFIG_DIR = Join-Path $home2 ".claude"
+          $fragment = Join-Path $env:LOCALAPPDATA "Microsoft\Windows Terminal\Fragments\claude-launcher\claude-launcher.json"
+          $shim = Join-Path $home2 ".local\bin\claude-launcher.cmd"
+          $settings = Join-Path $env:CLAUDE_CONFIG_DIR "settings.json"
+
+          powershell -ExecutionPolicy Bypass -File install.ps1
+          if ($LASTEXITCODE -ne 0) { throw "install.ps1 exited $LASTEXITCODE" }
+          foreach ($f in $fragment, $shim, $settings) { if (-not (Test-Path -LiteralPath $f)) { throw "missing: $f" } }
+          if (-not (Select-String -LiteralPath $settings -Pattern "claude-session-hook" -Quiet)) { throw "no hook in settings.json" }
+
+          powershell -ExecutionPolicy Bypass -File install.ps1 -Uninstall
+          if ($LASTEXITCODE -ne 0) { throw "install.ps1 -Uninstall exited $LASTEXITCODE" }
+          foreach ($f in $fragment, $shim) { if (Test-Path -LiteralPath $f) { throw "left behind: $f" } }
+          if (Select-String -LiteralPath $settings -Pattern "claude-session-hook" -Quiet) { throw "hook left in settings.json" }
 
   distro:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -46,6 +98,7 @@ jobs:
 
   terminals:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - run: tests/docker/run.sh terminals
@@ -57,6 +110,7 @@ jobs:
 
   systemd:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - run: tests/docker/run.sh systemd
