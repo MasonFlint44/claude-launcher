@@ -6,13 +6,23 @@ from __future__ import annotations
 
 import dataclasses
 import os
+from collections.abc import Mapping
 
 from ..base import Platform, Reason
 
+# What WSL puts in a distro and not in a container on its kernel (Docker
+# Desktop's, a devcontainer's): its interop's directory, and the binfmt entry
+# that runs Windows programs (WSLInterop-late when systemd cleared the first).
+_MARKERS = ("run/WSL", "proc/sys/fs/binfmt_misc/WSLInterop", "proc/sys/fs/binfmt_misc/WSLInterop-late")
 
-def is_wsl(release: str | None = None) -> bool:
-    """WSL's kernels say so: 6.6.87.2-microsoft-standard-WSL2, or WSL 1's 4.4.0-19041-Microsoft."""
-    return "microsoft" in (release if release is not None else os.uname().release).lower()
+
+def is_wsl(release: str | None = None, root: str = "/", env: Mapping[str, str] = os.environ) -> bool:
+    """WSL's kernels say so (6.6.87.2-microsoft-standard-WSL2, or WSL 1's
+    4.4.0-19041-Microsoft), but so does a container on Docker Desktop; a
+    distro also has WSL's own files, or (not under sudo) WSL_DISTRO_NAME."""
+    if "microsoft" not in (release if release is not None else os.uname().release).lower():
+        return False
+    return bool(env.get("WSL_DISTRO_NAME")) or any(os.path.exists(os.path.join(root, m)) for m in _MARKERS)
 
 
 def _events(host):

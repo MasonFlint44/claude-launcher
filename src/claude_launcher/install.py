@@ -22,6 +22,8 @@ from pathlib import Path
 from . import fzf, settings
 from .paths import Paths
 
+# What a step that fails raises; the installer shows the message. The
+# platforms' setups catch the same.
 FAILURES = (ValueError, RuntimeError, OSError, subprocess.SubprocessError)
 
 
@@ -60,15 +62,26 @@ def _hook(setup, settings_path: Path) -> Iterator[str]:
 
 
 def install(platform, terminal_names: str | None = None, icon: str | None = None) -> Iterator[str]:
+    setup = platform.setup()
+    # A setup that can't go ahead here (WSL that can't tell its distro) says
+    # so before anything is changed.
+    check = getattr(setup, "check", None)
+    if check is not None:
+        try:
+            check()
+        except FAILURES as e:
+            yield f"error: {e}"
+            return
     if not shutil.which("claude"):
         yield "warning: claude is not on your PATH; install Claude Code before using the launcher"
     for line in _fzf(platform):
         yield line
         if line.startswith("error: "):
             return
-    setup = platform.setup()
     yield from _hook(setup, Paths.from_env().config / "settings.json")
     try:
+        # A part the launcher can do without (WSL's Windows Terminal profile)
+        # is the setup's to warn about; what it raises stops the install.
         yield from setup.install(terminal_names, icon)
     except FAILURES as e:
         yield f"warning: {e}"
@@ -77,24 +90,31 @@ def install(platform, terminal_names: str | None = None, icon: str | None = None
     yield f"Done. {setup.done}"
 
 
+def _said(e: Exception) -> str:
+    return str(e) or type(e).__name__
+
+
 def uninstall(platform) -> Iterator[str]:
-    """Takes everything out again, going on past a step that fails."""
-    setup = platform.setup()
+    """Takes everything out again, going on past a step that fails for any
+    reason, even a bug: what's left behind is harder to find later."""
     try:
+        setup = platform.setup()
         yield from setup.uninstall()
-    except FAILURES as e:
-        yield f"warning: could not remove everything the installer set up: {e}"
+    except Exception as e:
+        yield f"warning: could not remove everything the installer set up: {_said(e)}"
     paths = Paths.from_env()
     settings_path = paths.config / "settings.json"
-    if settings_path.is_file():
-        try:
-            if settings.remove_hook(settings_path):
-                yield f"Removed the session hook from {settings_path}"
-        except (OSError, ValueError) as e:
-            yield f"warning: could not remove the session hook from {settings_path}: {e}"
-    own = platform.data_dir(os.environ)
-    if own.is_dir():
-        shutil.rmtree(own, ignore_errors=True)
-        yield f"Removed {own} (the launcher's own fzf, your icon, and its settings)"
+    try:
+        if settings_path.is_file() and settings.remove_hook(settings_path):
+            yield f"Removed the session hook from {settings_path}"
+    except Exception as e:
+        yield f"warning: could not remove the session hook from {settings_path}: {_said(e)}"
+    try:
+        own = platform.data_dir(os.environ)
+        if own.is_dir():
+            shutil.rmtree(own, ignore_errors=True)
+            yield f"Removed {own} (the launcher's own fzf, your icon, and its settings)"
+    except Exception as e:
+        yield f"warning: could not remove the launcher's own files: {_said(e)}"
     if paths.state.is_dir():
         yield f"Left the launcher's state in {paths.state}; delete that directory to remove it"

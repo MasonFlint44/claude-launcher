@@ -50,7 +50,22 @@ uuid='[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 session_id=${BASH_REMATCH[1]}
 reason=other
 [[ $input =~ \"reason\"[[:space:]]*:[[:space:]]*\"([a-z_]+)\" ]] && reason=${BASH_REMATCH[1]}
-read -r boot_id < /proc/sys/kernel/random/boot_id
+# Another /proc for the boot's files, for tests only.
+proc=${CLAUDE_LAUNCHER_TEST_PROC:-/proc}
+read -r boot_id < "$proc/sys/kernel/random/boot_id"
+# Under WSL's kernel every distro shares one VM's boot ID, but a distro can
+# stop and start again while the VM runs on, so its boot is the VM's and its
+# pid 1's start (in clock ticks), as 32 hex digits. platforms/linux/host.py
+# does the same.
+release=
+read -r release 2>/dev/null < "$proc/sys/kernel/osrelease"
+if [[ ${release,,} == *microsoft* ]] && read -r init 2>/dev/null < "$proc/1/stat"; then
+  read -ra init <<< "${init##*) }"
+  if [[ ${init[19]:-} =~ ^[0-9]+$ ]]; then
+    boot_id=${boot_id//-/}
+    printf -v boot_id '%s%012x' "${boot_id:0:20}" "${init[19]}"
+  fi
+fi
 # The login session Claude runs in: for an SSH session, its end closes Claude.
 login_session=
 read -r login_session < "/proc/$pid/sessionid" 2>/dev/null
