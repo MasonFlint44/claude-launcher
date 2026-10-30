@@ -3,8 +3,9 @@ are open, so after a restart or logoff claude-launcher can list the ones that
 were. The same record as bin/claude-session-hook (bash, for Linux and WSL);
 see that script and restart.py.
 
-Claude runs it directly, with no shell (settings.json's "args" form):
-python.exe -I claude-session-hook.py start|end. It runs on every session
+Claude runs it through a .cmd that finds Python (platforms/windows/setup.py):
+cmd /d /c ...\claude-session-hook.cmd start|end, which runs
+python -I claude-session-hook.py start|end. It runs on every session
 start and end, so it imports only what it needs, and always exits 0.
 """
 
@@ -40,7 +41,7 @@ def run(event, payload, env, boot_id=windows_boot_id, now=time.time, parent=os.g
     if not UUID.fullmatch(session_id):
         return
     reason = data.get("reason") if isinstance(data.get("reason"), str) else "other"
-    # Claude says its own pid; with no shell in between, it's also the parent.
+    # Claude says its own pid. The parent is cmd (or py), not Claude: a last resort.
     pid = int(env["CLAUDE_PID"]) if env.get("CLAUDE_PID", "").isdigit() else parent()
     home = env.get("USERPROFILE") or os.path.expanduser("~")
     folder = os.path.join(

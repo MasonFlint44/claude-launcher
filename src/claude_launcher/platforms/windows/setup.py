@@ -1,11 +1,16 @@
-"""What the installer sets up on Windows: claude-launcher.cmd on PATH, and the
-"Claude Code" Windows Terminal profile (terminal.py), with Claude Dark."""
+"""What the installer sets up on Windows: claude-launcher.cmd on PATH, the
+"Claude Code" Windows Terminal profile (terminal.py), with Claude Dark, and
+the .cmd files those and the session hook run.
+
+Nothing names a python.exe: each .cmd finds Python when it runs (`_RUN`), so
+a Python that's upgraded, moved or replaced just works. That costs about 20 ms
+for cmd to start (the hook takes about 57 ms, where a fixed python.exe took
+36), once at each session's start and end."""
 
 from __future__ import annotations
 
 import os
 import shutil
-import sys
 from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 
@@ -17,6 +22,23 @@ LAUNCHER = REPO_DIR / "bin" / "claude-launcher"
 HOOK = REPO_DIR / "bin" / "claude-session-hook.py"
 DEFAULT_ICON = REPO_DIR / "share" / "icons" / "claude-launcher-256.png"
 _SHIM_MARK = "rem claude-launcher: "
+# Runs a Python script with Python 3, found each time: the first python.exe on
+# PATH, unless that's the Microsoft Store's stand-in (in WindowsApps, which
+# only offers to install Python), then the py launcher, then the stand-in
+# after all (whose message says how to get Python). "-" stands for unset:
+# cmd can't take part of a variable that isn't set. Checked in a VM with each
+# of those on PATH, alone and together.
+_RUN = """@echo off
+{mark}
+setlocal
+set "PY=-" & set "ARG=" & set "STUB=-"
+for %%P in (python.exe) do if not "%%~$PATH:P"=="" set "PY=%%~$PATH:P"
+if /i not "%PY:\\WindowsApps\\=%"=="%PY%" (set "STUB=%PY%" & set "PY=-")
+if "%PY%"=="-" for %%P in (py.exe) do if not "%%~$PATH:P"=="" (set "PY=%%~$PATH:P" & set "ARG=-3")
+if "%PY%"=="-" set "PY=%STUB%"
+if "%PY%"=="-" (echo claude-launcher needs Python 3.10 or newer: https://www.python.org/downloads/ 1>&2 & exit /b 9009)
+"%PY%" %ARG% {script} %*
+"""
 
 
 def _bin_dir(env: Mapping[str, str] = os.environ) -> Path:
@@ -24,37 +46,54 @@ def _bin_dir(env: Mapping[str, str] = os.environ) -> Path:
     return Path(env.get("USERPROFILE") or str(Path.home())) / ".local" / "bin"
 
 
-def launcher_command(python: str = sys.executable) -> str:
-    return f'"{python}" "{LAUNCHER}"'
+def _cmd_path(path: Path) -> str:
+    """A path in a .cmd: quoted, with % doubled so cmd doesn't expand it."""
+    return '"' + str(path).replace("%", "%%") + '"'
 
 
-def _shim(python: str) -> str:
-    # Marked as ours, so uninstall only removes this one.
-    return f"@echo off\r\n{_SHIM_MARK}{REPO_DIR}\r\n{launcher_command(python)} %*\r\n"
+def run_cmd(script: str) -> str:
+    """A .cmd that runs `script` (Python's options and the script) with
+    Python 3. Marked as ours, so uninstall only removes ours."""
+    text = _RUN.format(mark=f"{_SHIM_MARK}{str(REPO_DIR).replace('%', '%%')}", script=script)
+    return text.replace("\n", "\r\n")
 
 
 class WindowsSetup:
     what = "the Windows Terminal profile"
     done = 'Restart Windows Terminal and open a "Claude Code" tab, or run claude-launcher in any terminal.'
 
-    def __init__(self, data_dir: Path, env: Mapping[str, str] = os.environ, python: str = sys.executable):
+    def __init__(self, data_dir: Path, env: Mapping[str, str] = os.environ):
         self.data_dir = data_dir
         self.env = env
-        self.python = python
+
+    @property
+    def _hook_cmd(self) -> Path:
+        return self.data_dir / "claude-session-hook.cmd"  # the name tells settings.py it's ours
+
+    @property
+    def _launcher_cmd(self) -> Path:
+        return self.data_dir / "claude-launcher.cmd"
 
     def hook_command(self) -> list[str]:
-        """Claude runs Python on the hook directly: no shell to start."""
-        return [self.python, "-I", str(HOOK)]
+        """cmd running the hook's .cmd, with nothing after it but "start" or
+        "end": cmd /c keeps one quoted path's quotes, but not more than one."""
+        system = os.path.join(self.env.get("SystemRoot", "C:\\Windows"), "System32", "cmd.exe")
+        comspec = self.env.get("ComSpec") or system
+        return [comspec, "/d", "/c", str(self._hook_cmd)]
 
     def install(self, terminal_names: str | None, icon: str | None) -> Iterator[str]:
         if terminal_names:
             yield "warning: --terminal is for Linux; on Windows the launcher opens in Windows Terminal"
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        launcher = run_cmd(_cmd_path(LAUNCHER))
+        self._hook_cmd.write_text(run_cmd("-I " + _cmd_path(HOOK)), encoding="utf-8", newline="")
+        self._launcher_cmd.write_text(launcher, encoding="utf-8", newline="")
         shim = _bin_dir(self.env) / "claude-launcher.cmd"
         if shim.exists() and _SHIM_MARK not in shim.read_text(encoding="utf-8", errors="replace"):
             yield f"warning: {shim} isn't one of ours; leaving it alone"
         else:
             shim.parent.mkdir(parents=True, exist_ok=True)
-            shim.write_text(_shim(self.python), encoding="utf-8", newline="")
+            shim.write_text(launcher, encoding="utf-8", newline="")
             yield f"Wrote {shim}"
         path = os.environ.get("PATH", "").lower().split(os.pathsep)
         if str(shim.parent).lower() not in path:
@@ -62,7 +101,7 @@ class WindowsSetup:
         shown = self._icon(icon)
         written = terminal.write(
             terminal.fragments_dir(self.env),
-            launcher_command(self.python),
+            _cmd_path(self._launcher_cmd),
             "%USERPROFILE%",
             shown,
             Theme.load(THEME_FILE),

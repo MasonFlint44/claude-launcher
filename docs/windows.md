@@ -18,7 +18,7 @@ powershell -ExecutionPolicy Bypass -File $HOME\git\claude-launcher\install.ps1
 The installer:
 
 1. Checks for fzf 0.67 or newer, and if there isn't one, downloads fzf 0.74.5 from fzf's GitHub releases, checks it against the release's checksum, and keeps it in `%LOCALAPPDATA%\claude-launcher\bin` for the launcher alone.
-2. Adds the session hook to Claude Code's user settings (`%USERPROFILE%\.claude\settings.json`, or `%CLAUDE_CONFIG_DIR%\settings.json`), as a SessionStart and SessionEnd hook that Claude runs with Python directly (no shell, so Git Bash isn't needed). Your other settings and hooks are left as they are.
+2. Adds the session hook to Claude Code's user settings (`%USERPROFILE%\.claude\settings.json`, or `%CLAUDE_CONFIG_DIR%\settings.json`), as a SessionStart and SessionEnd hook. Your other settings and hooks are left as they are.
 3. Writes `claude-launcher.cmd` to `%USERPROFILE%\.local\bin`, so `claude-launcher` runs in any terminal.
 4. Adds a **Claude Code** profile to Windows Terminal, in Claude Dark, with the app icon. It's a [fragment](https://learn.microsoft.com/windows/terminal/json-fragment-extensions), so your Windows Terminal settings file isn't touched; restart Windows Terminal to see it.
 
@@ -52,7 +52,7 @@ git -C $HOME\git\claude-launcher pull
 
 Changes apply right away. If the profile changed (`src\claude_launcher\platforms\windows\`), re-run `install.ps1` and restart Windows Terminal.
 
-The profile, `claude-launcher.cmd` and the session hook run the Python the installer found. If you remove that Python, or move to a new version (3.13 to 3.14, say), re-run `install.ps1`.
+The profile, `claude-launcher.cmd` and the session hook find Python each time they run (the first `python` on your PATH, else the `py` launcher), so upgrading or replacing Python needs nothing from you.
 
 ## Uninstalling
 
