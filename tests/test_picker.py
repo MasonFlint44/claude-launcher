@@ -508,7 +508,7 @@ class TestHeader:
         assert "1 session was open when WSL stopped" in strip_ansi(p.make_header())
         env.paths.restored.write_text(json.dumps({a: closed(NOW - 300, "wsl-stop"), b: closed(NOW - 600)}))
         p, _ = start(env)
-        assert "closed when WSL stopped, or by a restart or logout" in strip_ansi(p.make_header())
+        assert "2 sessions were open when WSL stopped" in strip_ansi(p.make_header())  # a restart stops WSL too
 
     def test_mixed_nudge(self, env):
         a = env.log("/tmp", conversation("a", "/tmp"))

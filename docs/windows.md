@@ -33,14 +33,14 @@ Re-running it is safe; it updates what's already there.
 
 Open it from Windows Terminal's new-tab menu. Quitting the picker closes the tab; if the launcher fails, its message stays up. Your own changes to the profile (font, size and so on) are kept in Windows Terminal's settings and survive re-installing.
 
-In any other terminal tab, `claude-launcher` switches that tab to Claude Dark while it runs and back when it exits, as on Linux.
+In any other terminal tab, `claude-launcher` switches that tab to Claude Dark while it runs and back when it exits, as on Linux. The old console window (conhost, Windows 10's default) runs the picker too, but keeps its own colors, since it doesn't say what they are, and its default font has no ↻.
 
 ## How it knows what a restart or logoff closed
 
 `claude-session-hook.py` keeps a small record for each interactive Claude in `%USERPROFILE%\.claude\state\claude-launcher\open\`. An exit you chose (`/exit`, `/clear`, switching with `/resume`) deletes it; closing the tab, or Windows closing every window, keeps it with the time the session ended. When the picker opens, it checks those times against Windows' System event log, which any user can read:
 
 - **Restart or shutdown** (including Windows Update's own restarts): from when it was started to when Windows began shutting down. After a crash or power cut, from the last thing logged.
-- **Logoff**: when you signed out.
+- **Logoff**: when you signed out. Shutting down with Fast Startup on (Windows' default) signs you out and hibernates rather than shutting down, so sessions it closed are listed as "open when your session ended".
 
 A session that ended in that span, or up to 30 seconds before or 10 seconds after it, was closed by it. So was one that never recorded an end. Anything else, like a tab you closed yourself, isn't listed.
 
@@ -51,6 +51,8 @@ git -C $HOME\git\claude-launcher pull
 ```
 
 Changes apply right away. If the profile changed (`src\claude_launcher\platforms\windows\`), re-run `install.ps1` and restart Windows Terminal.
+
+The profile, `claude-launcher.cmd` and the session hook run the Python the installer found. If you remove that Python, or move to a new version (3.13 to 3.14, say), re-run `install.ps1`.
 
 ## Uninstalling
 
