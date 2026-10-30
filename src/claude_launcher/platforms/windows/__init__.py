@@ -11,7 +11,6 @@ from pathlib import Path
 
 from ...paths import CORE
 from ..base import Platform
-from .host import WindowsHost
 
 
 def _events():
@@ -20,9 +19,13 @@ def _events():
     return WindowsEvents(EventLog())
 
 
+def local_app_data(env: Mapping[str, str]) -> Path:
+    """%LOCALAPPDATA%, or where it is by default when it isn't set."""
+    return Path(env.get("LOCALAPPDATA") or os.path.join(env.get("USERPROFILE") or str(Path.home()), "AppData", "Local"))
+
+
 def data_dir(env: Mapping[str, str]) -> Path:
-    local = env.get("LOCALAPPDATA") or os.path.join(env.get("USERPROFILE") or str(Path.home()), "AppData", "Local")
-    return Path(local) / "claude-launcher"
+    return local_app_data(env) / "claude-launcher"
 
 
 def _setup():
@@ -59,10 +62,13 @@ def core_command(args: list[str], python: str = sys.executable) -> str:
 
 
 def platform() -> Platform:
-    host = WindowsHost()
+    # Here, not at the top: WSL imports eventlog.py and terminal.py from this
+    # package, and has no use for Windows' own host (ctypes).
+    from .host import WindowsHost
+
     return Platform(
         name="windows",
-        host=host,
+        host=WindowsHost(),
         events=_events,
         setup=_setup,
         fzf_os="windows",
