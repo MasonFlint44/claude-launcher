@@ -103,3 +103,46 @@ class TestHookWithoutAShell:
         hook_settings.add_hook(path, self.ARGV)
         assert hook_settings.remove_hook(path)
         assert json.loads(path.read_text()) == {"model": "opus"}
+
+
+class TestUnusualFiles:
+    """Shapes Claude wouldn't write: reported plainly, and the file left alone."""
+
+    @pytest.mark.parametrize(
+        "settings, message",
+        [
+            ({"hooks": []}, "hooks isn't an object"),
+            ({"hooks": None}, "hooks isn't an object"),
+            ({"hooks": {"SessionStart": {}}}, "hooks.SessionStart isn't a list"),
+            ({"hooks": {"SessionEnd": None}}, "hooks.SessionEnd isn't a list"),
+            ({"hooks": {"SessionStart": [{"hooks": None}]}}, "aren't a list"),
+            ({"hooks": {"SessionStart": [{"hooks": "x"}]}}, "aren't a list"),
+        ],
+    )
+    @pytest.mark.parametrize("change", ["add", "remove"])
+    def test_refused_with_a_plain_message(self, tmp_path, settings, message, change):
+        path = tmp_path / "settings.json"
+        text = json.dumps(settings)
+        path.write_text(text)
+        with pytest.raises(ValueError, match=message):
+            if change == "add":
+                hook_settings.add_hook(path, Path("/x/claude-session-hook"))
+            else:
+                hook_settings.remove_hook(path)
+        assert path.read_text() == text
+
+    def test_other_events_are_not_checked(self, tmp_path):
+        path = tmp_path / "settings.json"
+        path.write_text(json.dumps({"hooks": {"Stop": {"odd": True}}}))
+        assert hook_settings.add_hook(path, Path("/x/claude-session-hook"))
+        assert json.loads(path.read_text())["hooks"]["Stop"] == {"odd": True}
+
+    def test_a_bom_is_read_and_not_written(self, tmp_path):
+        path = tmp_path / "settings.json"
+        path.write_bytes(b"\xef\xbb\xbf" + json.dumps({"model": "opus"}).encode())
+        assert hook_settings.add_hook(path, Path("/x/claude-session-hook"))
+        raw = path.read_bytes()
+        assert not raw.startswith(b"\xef\xbb\xbf")
+        assert json.loads(raw)["model"] == "opus"
+        assert hook_settings.remove_hook(path)
+        assert json.loads(path.read_text()) == {"model": "opus"}

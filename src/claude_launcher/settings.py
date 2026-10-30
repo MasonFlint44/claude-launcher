@@ -12,13 +12,37 @@ HOOK_EVENTS = (("SessionStart", "start"), ("SessionEnd", "end"))
 
 def _read_settings(path: Path) -> tuple[str, dict]:
     try:
-        text = path.read_text(encoding="utf-8")
+        # utf-8-sig: Windows editors (Notepad, PowerShell 5.1) may add a BOM.
+        # It's written back without one.
+        text = path.read_text(encoding="utf-8-sig")
     except FileNotFoundError:
         text = ""
     settings = json.loads(text) if text.strip() else {}
     if not isinstance(settings, dict):
         raise ValueError(f"{path} is not a JSON object")
     return text, settings
+
+
+def _hooks(settings: dict, create: bool) -> dict | None:
+    """settings.json's "hooks", checked to be the shape Claude reads, so an
+    unusual file is reported rather than half-changed."""
+    if "hooks" not in settings:
+        if not create:
+            return None
+        settings["hooks"] = {}
+    hooks = settings["hooks"]
+    if not isinstance(hooks, dict):
+        raise ValueError("settings.json's hooks isn't an object")
+    for event, _ in HOOK_EVENTS:
+        if event not in hooks:
+            continue
+        groups = hooks[event]
+        if not isinstance(groups, list):
+            raise ValueError(f"settings.json's hooks.{event} isn't a list")
+        for g in groups:
+            if isinstance(g, dict) and "hooks" in g and not isinstance(g["hooks"], list):
+                raise ValueError(f"a hooks.{event} entry in settings.json has hooks that aren't a list")
+    return hooks
 
 
 def _write_settings(path: Path, settings: dict, old_text: str) -> bool:
@@ -77,7 +101,7 @@ def add_hook(settings_path: Path, hook: Path | list[str]) -> bool:
     Windows the program and arguments that run it. True if the file changed."""
     argv = [str(hook)] if isinstance(hook, Path) else [str(a) for a in hook]
     text, settings = _read_settings(settings_path)
-    hooks = settings.setdefault("hooks", {})
+    hooks = _hooks(settings, create=True)
     for event, arg in HOOK_EVENTS:
         entry = hook_entry(argv, arg)
         groups = hooks.setdefault(event, [])
@@ -92,11 +116,11 @@ def add_hook(settings_path: Path, hook: Path | list[str]) -> bool:
 
 def remove_hook(settings_path: Path) -> bool:
     text, settings = _read_settings(settings_path)
-    hooks = settings.get("hooks")
-    if not isinstance(hooks, dict):
+    hooks = _hooks(settings, create=False)
+    if hooks is None:
         return False
     for event, _ in HOOK_EVENTS:
-        if isinstance(hooks.get(event), list):
+        if event in hooks:
             hooks[event] = _without_our_hook(hooks[event])
             if not hooks[event]:
                 del hooks[event]

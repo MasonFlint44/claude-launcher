@@ -15,73 +15,118 @@ param(
 )
 $ErrorActionPreference = "Continue"  # "Stop" makes a native program's stderr fatal in PowerShell 5.1
 if ($Help) {
-    Get-Content $PSCommandPath | Select-Object -Skip 1 -First 9 | ForEach-Object { $_ -replace "^# ?", "" }
+    foreach ($line in Get-Content -LiteralPath $PSCommandPath) {
+        if ($line -notlike "#*") { break }
+        $line -replace "^# ?", ""
+    }
     exit 0
 }
 
 $repo = Split-Path -Parent $PSCommandPath
 $core = Join-Path $repo "libexec\claude-launcher-core"
-# The core writes UTF-8; read it as UTF-8.
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-$env:PYTHONIOENCODING = "utf-8"
 
 function Say([string]$text) { Write-Host "==> " -ForegroundColor DarkYellow -NoNewline; Write-Host $text }
 function Warn([string]$text) { Write-Host "warning: " -ForegroundColor Yellow -NoNewline; Write-Host $text }
 function Fail([string]$text) { Write-Host "error: " -ForegroundColor Red -NoNewline; Write-Host $text }
 
-# A Python 3.10+, as the full path to its python.exe, or $null. Skips the
-# Microsoft Store's python.exe, which only offers to install Python.
+# A Python 3.10+, as the full path to its python.exe, or $null. Tried in the
+# order the launcher's .cmd files find one (setup.py's _RUN), so this is the
+# Python they'll run: the first python.exe on PATH unless it's in WindowsApps,
+# then py -3, then that WindowsApps one. There, python.exe is either the
+# Microsoft Store's stand-in, which only offers to install Python and fails
+# here with no output, or a real Python from the Store or the Python install
+# manager.
 function Find-Python {
     $check = "import sys; print(sys.executable) if sys.version_info >= (3, 10) else sys.exit(1)"
-    foreach ($try in @(@("py", "-3"), @("python"), @("python3"))) {
-        $cmd = Get-Command $try[0] -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-        if (-not $cmd -or $cmd.Source -like "*\WindowsApps\*") { continue }
-        $rest = @($try | Select-Object -Skip 1)
-        $out = & $cmd.Source @rest -c $check 2>$null
+    $first = Get-Command -Name python.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    $launcher = Get-Command -Name py.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    $candidates = @()
+    $store = $null
+    if ($first) {
+        if ($first.Source -like "*\WindowsApps\*") { $store = $first.Source } else { $candidates += , @($first.Source) }
+    }
+    if ($launcher) { $candidates += , @($launcher.Source, "-3") }
+    if ($store) { $candidates += , @($store) }
+    foreach ($candidate in $candidates) {
+        $exe = $candidate[0]
+        $rest = @($candidate | Select-Object -Skip 1)
+        $out = & $exe @rest -c $check 2>$null
         if ($LASTEXITCODE -eq 0 -and $out) { return ($out | Select-Object -Last 1).Trim() }
     }
     return $null
 }
 
-function Update-Path {
+# PATH as a new session would have it, after winget changed it.
+function Import-MachineAndUserPath {
     $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
         [Environment]::GetEnvironmentVariable("Path", "User")
 }
 
-$python = Find-Python
-if (-not $python -and -not $Uninstall) {
-    Warn "claude-launcher needs Python 3.10 or newer, and there isn't one."
-    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
-        Fail "Install Python from https://www.python.org/downloads/, then run this again."
-        exit 1
-    }
-    $answer = Read-Host "Install Python 3.13 for you now, with winget? [Y/n]"
-    if ($answer -and $answer -notmatch "^[Yy]") {
-        Fail "Install Python 3.10 or newer, then run this again."
-        exit 1
-    }
-    winget install --exact --id Python.Python.3.13 --scope user --accept-package-agreements --accept-source-agreements
-    Update-Path
-    $python = Find-Python
-    if (-not $python) {
-        Fail "Python didn't install; install it from https://www.python.org/downloads/, then run this again."
-        exit 1
-    }
-}
-if (-not $python) { Fail "Python 3.10 or newer is needed to uninstall; nothing was changed."; exit 1 }
-
-# Run the shared steps, showing their lines: "warning: ..." as a warning, and
-# "error: ..." as the error that stopped them.
-if ($Uninstall) {
-    $steps = @("install", "undo")
-} else {
+# The install or uninstall; returns the exit code.
+function Invoke-Install {
     $steps = @("install", "run")
-    if ($Icon -and $Icon -ne "default") { $Icon = (Resolve-Path $Icon).Path }
-    if ($Icon) { $steps += @("--icon", $Icon) }
+    if ($Uninstall) {
+        $steps = @("install", "undo")
+    } elseif ($Icon -eq "default") {  # -eq ignores case
+        $steps += @("--icon", "default")
+    } elseif ($Icon) {
+        # -LiteralPath: [ and ] are wildcards to plain -Path.
+        if (-not (Test-Path -LiteralPath $Icon -PathType Leaf)) {
+            Fail "No such file: $Icon"
+            return 1
+        }
+        $steps += @("--icon", (Resolve-Path -LiteralPath $Icon).ProviderPath)
+    }
+
+    $python = Find-Python
+    if (-not $python -and -not $Uninstall) {
+        Warn "claude-launcher needs Python 3.10 or newer, and there isn't one."
+        if (-not (Get-Command -Name winget -ErrorAction SilentlyContinue)) {
+            Fail "Install Python from https://www.python.org/downloads/, then run this again."
+            return 1
+        }
+        $answer = Read-Host "Install Python 3.13 for you now, with winget? [Y/n]"
+        if ($answer -and $answer -notmatch "^[Yy]") {
+            Fail "Install Python 3.10 or newer, then run this again."
+            return 1
+        }
+        winget install --exact --id Python.Python.3.13 --scope user --accept-package-agreements --accept-source-agreements | Out-Host
+        Import-MachineAndUserPath
+        $python = Find-Python
+        if (-not $python) {
+            Fail "Python didn't install; install it from https://www.python.org/downloads/, then run this again."
+            return 1
+        }
+    }
+    if (-not $python) {
+        Fail "Python 3.10 or newer is needed to uninstall; nothing was changed."
+        return 1
+    }
+
+    # Run the shared steps, showing their lines: "warning: ..." as a warning,
+    # and "error: ..." as the error that stopped them.
+    & $python $core @steps | ForEach-Object {
+        if ($_ -like "warning: *") { Warn $_.Substring(9) }
+        elseif ($_ -like "error: *") { Fail $_.Substring(7) }
+        else { Say $_ }
+    }
+    return $LASTEXITCODE
 }
-& $python $core @steps | ForEach-Object {
-    if ($_ -like "warning: *") { Warn $_.Substring(9) }
-    elseif ($_ -like "error: *") { Fail $_.Substring(7) }
-    else { Say $_ }
+
+# The core writes UTF-8; read it as UTF-8. Both are put back afterwards, since
+# running .\install.ps1 changes the caller's own session.
+$savedOutputEncoding = [Console]::OutputEncoding
+$savedPythonEncoding = $env:PYTHONIOENCODING
+try {
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+    $env:PYTHONIOENCODING = "utf-8"
+    $code = Invoke-Install
+} finally {
+    [Console]::OutputEncoding = $savedOutputEncoding
+    if ($null -eq $savedPythonEncoding) {
+        Remove-Item -Path Env:PYTHONIOENCODING -ErrorAction SilentlyContinue
+    } else {
+        $env:PYTHONIOENCODING = $savedPythonEncoding
+    }
 }
-exit $LASTEXITCODE
+exit $code

@@ -4,8 +4,10 @@ WSL, which runs the same wevtutil.exe through interop.
 
 - Restart (or power off): from the boot's last "initiated the restart"
   (User32 1074) to "the operating system is shutting down" (Kernel-General
-  13). After a crash or power cut there's neither: the restart starts at the
-  boot's last logged event.
+  13). After a crash or power cut there's no 13: the restart ends at the
+  boot's last logged event, and starts there too unless a 1074 came shortly
+  before. A 1074 long before the end (a shutdown scheduled for later, or
+  one called off) isn't the one that ended the boot.
 - Shutting down with Fast Startup: "power off" (1074) and then, instead of
   shutting down, hibernating (Kernel-Power 42, "entering sleep"). The boot
   goes on after it (no Kernel-General 13 or 12, and the same BootId), but
@@ -41,6 +43,18 @@ _FAST_STARTUP_GAP = 120
 # How far before a Claude started to look: a restart can't have closed it
 # before then, but its boot's last events can come just before a record.
 _BEFORE = 60
+# The first query reaches back this far, so one query serves every record:
+# a record waits at most restart.KEEP (7 days) to be decided.
+_LOOKBACK = 8 * 86400
+# `shutdown /t` schedules a restart for up to 10 years later, and
+# `shutdown /a` calls one off; either leaves a 1074 long before the boot
+# ends. Windows takes seconds from a 1074 to shutting down (4 s in the VM),
+# or as long as the user takes to answer a program that won't close, so a
+# 1074 more than this before the end didn't start it.
+_BEGUN_MAX = 600
+# And a restart's window runs at most this long before the end: tabs closed
+# by hand while a restart waited to happen weren't closed by it.
+_SPAN_MAX = 120
 _TIME = re.compile(r"(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)(?:\.(\d+))?Z?")
 
 
@@ -104,11 +118,15 @@ def _one(provider: str, *ids: int) -> str:
 
 
 class EventLog:
-    """The System log, through wevtutil. Each query runs once per picker run."""
+    """The System log, through wevtutil. Each query runs once per picker run,
+    and `since` once for every record (in WSL each run goes through interop,
+    which can be slow)."""
 
-    def __init__(self, run: Callable[[Sequence[str]], str | None] = _wevtutil):
+    def __init__(self, run: Callable[[Sequence[str]], str | None] = _wevtutil, now: Callable[[], float] = time.time):
         self._run = run
+        self._now = now
         self._cache: dict[tuple, list[LogEvent] | None] = {}
+        self._since: tuple[float, list[LogEvent] | None] | None = None
 
     def query(self, xpath: str, newest_first: bool = False, count: int | None = None) -> list[LogEvent] | None:
         key = (xpath, newest_first, count)
@@ -126,11 +144,18 @@ class EventLog:
         return self._cache[key]
 
     def since(self, t: float) -> list[LogEvent] | None:
-        """The boots, restarts and logoffs from `t` on, oldest first."""
-        kinds = " or ".join(
-            [_one(KERNEL, BOOTED, SHUTTING_DOWN), _one(*RESTART_BEGUN), _one(*LOGOFF), _one(*HIBERNATING)]
-        )
-        return self.query(f"*[System[({kinds}) and TimeCreated[@SystemTime>='{format_time(t)}']]]")
+        """The boots, restarts and logoffs from `t` on, in the log's order.
+        Queried once from `_LOOKBACK` ago (or `t`, if earlier), then served
+        from that."""
+        if self._since is None or t < self._since[0]:
+            start = min(t, self._now() - _LOOKBACK)
+            kinds = " or ".join(
+                [_one(KERNEL, BOOTED, SHUTTING_DOWN), _one(*RESTART_BEGUN), _one(*LOGOFF), _one(*HIBERNATING)]
+            )
+            found = self.query(f"*[System[({kinds}) and TimeCreated[@SystemTime>='{format_time(start)}']]]")
+            self._since = (start, found)
+        found = self._since[1]
+        return None if found is None else [e for e in found if e.at >= t]
 
     def last_before(self, t: float) -> LogEvent | None:
         """The last event of any kind before `t`: where a boot that crashed ended."""
@@ -171,6 +196,13 @@ class WindowsEvents:
     def __init__(self, log: EventLog, sid: Callable[[], str | None] = user_sid):
         self.log = log
         self._sid = sid
+        self._sid_value: str | None = None
+        self._sid_asked = False
+
+    def sid(self) -> str | None:
+        if not self._sid_asked:
+            self._sid_value, self._sid_asked = self._sid(), True
+        return self._sid_value
 
     def events(self, record, same_boot: bool) -> list[Event] | None:
         found = self.log.since(record.started - _BEFORE)
@@ -183,7 +215,7 @@ class WindowsEvents:
         boots = [e.at for e in found if (e.provider, e.id) == (KERNEL, BOOTED) and e.at > record.started]
         next_boot = boots[0] if boots else None
         in_boot = [e for e in found if next_boot is None or e.at < next_boot]
-        sid = self._sid()
+        sid = self.sid()
         events = [
             Event(e.at, e.at, "logout")
             for e in in_boot
@@ -196,12 +228,16 @@ class WindowsEvents:
         return events
 
     def _restart(self, in_boot: list[LogEvent], next_boot: float, fast: set[float]) -> Event:
-        begun = [e.at for e in in_boot if (e.provider, e.id) == RESTART_BEGUN and e.at not in fast]
         ended = [e.at for e in in_boot if (e.provider, e.id) == (KERNEL, SHUTTING_DOWN)]
-        if begun:
-            start = begun[-1]
+        if ended:
+            end = ended[-1]
         else:  # a crash or power cut: the boot's last logged event
             last = self.log.last_before(next_boot)
-            start = last.at if last else (ended[-1] if ended else next_boot)
-        end = max([start, *(t for t in ended if t >= start)])
+            end = last.at if last else next_boot
+        begun = [
+            e.at
+            for e in in_boot
+            if (e.provider, e.id) == RESTART_BEGUN and e.at not in fast and end - _BEGUN_MAX <= e.at <= end
+        ]
+        start = max(begun[-1] if begun else end, end - _SPAN_MAX)
         return Event(start, end, "restart")

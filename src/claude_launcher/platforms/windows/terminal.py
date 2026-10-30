@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ...theme import Theme
+from . import local_app_data
 
 APP = "claude-launcher"
 PROFILE_NAME = "Claude Code"
@@ -28,8 +29,7 @@ _ANSI = (*_NAMES, *(f"bright{n.capitalize()}" for n in _NAMES))
 
 
 def fragments_dir(env: Mapping[str, str] = os.environ, app: str = APP) -> Path:
-    local = env.get("LOCALAPPDATA") or os.path.join(env.get("USERPROFILE") or str(Path.home()), "AppData", "Local")
-    return fragments_root(Path(local)) / app
+    return fragments_root(local_app_data(env)) / app
 
 
 def fragments_root(local_app_data: Path) -> Path:
