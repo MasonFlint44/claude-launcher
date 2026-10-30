@@ -4,7 +4,8 @@ or WSL stopping when idle). All three close Claude:
 
 - Windows' restarts and logoffs, from its System log through interop
   (platforms/windows/eventlog.py), as on native Windows.
-- WSL stopping on its own ("wsl-stop"), at this WSL boot's start:
+- WSL, or this distro, stopping on its own ("wsl-stop"), at this distro's
+  start (the host's boot_start: see platforms/linux/host.py):
   Claude was killed, so its record has no end, and a record without one is
   closed by the first event after it started. A tab closed before then has
   its end, long before this, and isn't counted.
@@ -16,12 +17,17 @@ import time
 
 from ..base import Event
 from ..windows.eventlog import EventLog, WindowsEvents
+from .interop import Interop
 
 
 class WslEvents:
-    def __init__(self, host, windows: WindowsEvents | None = None, now=time.time):
+    def __init__(self, host, windows: WindowsEvents | None = None, now=time.time, interop: Interop | None = None):
         self.host = host
-        self.windows = windows or WindowsEvents(EventLog())
+        if windows is None:
+            # By full path: wevtutil.exe and whoami.exe may not be on PATH.
+            interop = interop or Interop()
+            windows = WindowsEvents(EventLog(run=interop.wevtutil), sid=interop.user_sid)
+        self.windows = windows
         self.now = now
 
     def events(self, record, same_boot: bool) -> list[Event] | None:
