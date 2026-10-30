@@ -74,6 +74,9 @@ def test_up_a_level(query, expected):
         ("D:\\a\\..\\b", "D:\\b"),
         ("\\\\srv\\share\\x\\", "\\\\srv\\share\\x"),
         ("//srv/share/x", "\\\\srv\\share\\x"),
+        ("\\\\srv\\share", "\\\\srv\\share\\"),  # a share's root ends in a separator, as C:\\ does
+        ("\\\\srv\\share\\", "\\\\srv\\share\\"),
+        ("//srv/share/", "\\\\srv\\share\\"),
     ],
 )
 def test_normal(path, expected):
@@ -95,6 +98,14 @@ def test_normal(path, expected):
 )
 def test_is_inside(path, directory, inside):
     assert w.is_inside(path, directory) is inside
+
+
+@pytest.mark.parametrize("root", ["\\\\srv\\share", "\\\\srv\\share\\", "//srv/share/"])
+def test_a_share_root_with_or_without_its_separator(root):
+    assert w.same(root, "\\\\srv\\share\\")
+    assert w.below("\\\\srv\\share\\a\\b", root) == "a\\b"
+    assert w.below("\\\\srv\\share", root) == ""
+    assert w.tilde("\\\\srv\\share\\a", root) == "~\\a"
 
 
 def test_below_keeps_the_paths_own_case():
