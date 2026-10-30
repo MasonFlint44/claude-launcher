@@ -55,7 +55,7 @@ from .pathtext import (
     with_sep,
     without_sep,
 )
-from .restart import Group, RestartState
+from .restart import SHARED, Group, Reason, RestartState, reasons, unknown
 from .text import color, pad, truncate, truncate_left
 from .text import width as text_width
 from .theme import Theme
@@ -67,10 +67,7 @@ MAX_WIDTH = 120  # widest the picker gets, in columns
 DIR_COLUMN = 50  # the directory list's first column
 DOUBLE_PRESS_MS = 1000
 HINT_GAP = 8  # the least space between the title and the hints beside it
-# What closed a ↻ session, for the line under the title and for its row, in
-# the order they win (restart.REASONS).
-CLOSED_BY = {"restart": "your computer restarted", "logout": "you logged out", "wsl-stop": "WSL stopped"}
-CLOSED_ROW = {"restart": "restart", "logout": "logout", "wsl-stop": "WSL stop"}
+SAME_EVENT = 1.0  # seconds between closings counted as one restart or logout
 NUDGE_LINES = 3  # events beyond these share one "more" line
 
 # How fzf reads and matches rows, the same in the picker and in `_nth_match`.
@@ -105,6 +102,9 @@ class State:
     shell: str = ""  # fzf's --with-shell
     core: str = ""  # the core's command line, with --run DIR
     listen: str = ""  # fzf's --listen: a socket path, or localhost:0 for a port
+    # What can close a ↻ session, the platform's own included, in the order
+    # they win: [[key, header, row, rank]] (restart.Reason).
+    reasons: list = field(default_factory=lambda: _reason_texts(SHARED))
 
 
 @dataclass
@@ -160,6 +160,10 @@ class Picker:
         self.state.shell = platform.fzf_shell
         self.state.core = platform.core_command(["--run", str(self.run)])
         self.state.listen = str(self._file("fzf.sock")) if platform.fzf_listen == "socket" else "localhost:0"
+        self.state.reasons = _reason_texts(reasons(platform.reasons))
+
+    def _reason(self, key: str) -> Reason:
+        return next((Reason(*r) for r in self.state.reasons if r[0] == key), None) or unknown(key)
 
     # --- State ---------------------------------------------------------------
 
@@ -263,7 +267,8 @@ class Picker:
             lines = []
             for why, at, count in events[: NUDGE_LINES if len(events) <= NUDGE_LINES else NUDGE_LINES - 1]:
                 what = "1 session was" if count == 1 else f"{count} sessions were"
-                lines.append(self._accent(f"↻ {what} open when {CLOSED_BY[why]} ({text.clock(at, self.now())})"))
+                said = self._reason(why).header
+                lines.append(self._accent(f"↻ {what} open when {said} ({text.clock(at, self.now())})"))
             if len(events) > NUDGE_LINES:
                 more = sum(count for _, _, count in events[NUDGE_LINES - 1 :])
                 lines.append(self._accent(f"↻ {more} more from earlier"))
@@ -272,7 +277,7 @@ class Picker:
             return lines
         if self.state.has_group_rows:
             shown = {r["closed"][0] for r in self._sessions() if r["group"] and r.get("closed")}
-            said = [CLOSED_BY[why] for why in CLOSED_BY if why in shown]
+            said = [r.header for r in sorted(map(self._reason, shown), key=lambda r: (r.rank, r.key))]
             if not said:
                 return []
             joined = said[0] if len(said) == 1 else ", ".join(said[:-1]) + " or " + said[-1]
@@ -451,24 +456,31 @@ class Picker:
 
     def sessions_rows(self) -> list[str]:
         """The Sessions view, header row first. A session whose directory isn't
-        here (deleted, or only inside a devcontainer) has it dimmed and marked."""
-        title_width = self.state.width - 43
+        here (deleted, or only inside a devcontainer) has it dimmed and marked.
+        The first column is a session's age, or for a ↻ session the day and
+        what closed it ("yesterday logout"), as wide as the rows need."""
         now = self.now()
-        out = ["\t" + self._dim("  " + pad("Last active", 12) + " " + pad("Directory", 24) + " Session")]
+        sessions = self._sessions()
+        whens = []
+        for r in sessions:
+            closed = r.get("closed") if r["group"] else None
+            whens.append(
+                _day(closed[1], now) + " " + self._reason(closed[0]).row if closed else text.age(r["active"], now)
+            )
+        grouped = any(r["group"] for r in sessions)
+        heading = "When" if grouped else "Last active"  # a ↻ row says when it closed, not when it was last used
+        column = max([len("Last active") + 1, *(text_width(w) for w in whens)])
+        title_width = self.state.width - 31 - column
+        out = ["\t" + self._dim("  " + pad(heading, column) + " " + pad("Directory", 24) + " Session")]
         if self.state.view == "directory":
             out.append(f"{NEW_SESSION}{self.state.dir}\t \t{self._accent('+ New session')}")
-        for r in self._sessions():
+        for r, when in zip(sessions, whens, strict=True):
             cwd = r["cwd"]
             missing = not os.path.isdir(cwd)
             note = " (missing)" if missing else ""
             directory = truncate_left(self._session_dir(cwd), 24 - len(note)) + note
             directory = pad(self._dim(directory) if missing else directory, 24)
-            closed = r.get("closed") if r["group"] else None
-            if closed:  # what closed it, and the day: "Mon restart"
-                when = time.strftime("%a ", time.localtime(closed[1])) + CLOSED_ROW.get(closed[0], "")
-            else:
-                when = text.age(r["active"], now)
-            when = pad(when, 12)
+            when = pad(when, column)
             if r["group"]:
                 mark, when = self._accent("↻") + " ", self._accent(when)
             else:
@@ -790,13 +802,33 @@ def _platform() -> Platform:
     return current()
 
 
+def _reason_texts(found: tuple[Reason, ...]) -> list:
+    return [[r.key, r.header, r.row, r.rank] for r in found]
+
+
 def _restored(group: Group) -> list:
     """The group by what closed it: [[why, at, count]], newest first. The
-    sessions one restart or logout closed share its time."""
-    counts: dict[tuple[str, float], int] = {}
-    for c in group.sessions.values():
-        counts[(c.why, c.at)] = counts.get((c.why, c.at), 0) + 1
-    return [[why, at, n] for (why, at), n in sorted(counts.items(), key=lambda kv: kv[0][1], reverse=True)]
+    sessions one restart or logout closed share its time, or nearly: a time
+    worked out from the uptime moves a little between reads."""
+    events: list[list] = []
+    for c in sorted(group.sessions.values(), key=lambda c: c.at, reverse=True):
+        same = next((e for e in events if e[0] == c.why and e[1] - c.at <= SAME_EVENT), None)
+        if same:
+            same[2] += 1
+        else:
+            events.append([c.why, c.at, 1])
+    return events
+
+
+def _day(then: float, now: float) -> str:
+    """The day `then` was: today, yesterday, or its weekday ("Mon"), which
+    is enough for a ↻ row: they're at most KEEP (a week) old."""
+    t, today = time.localtime(then), time.localtime(now)
+    if t[:3] == today[:3]:
+        return "today"
+    if t[:3] == time.localtime(time.mktime((*today[:2], today[2] - 1, 12, 0, 0, 0, 0, -1)))[:3]:
+        return "yesterday"
+    return time.strftime("%a", t)
 
 
 def _action(name: str, arg: str) -> str:

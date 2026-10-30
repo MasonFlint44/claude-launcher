@@ -1,4 +1,4 @@
-"""The platform the launcher runs on: platforms/linux for now.
+"""The platform the launcher runs on: Linux, WSL or Windows.
 
 `current()` picks it once per run, and imports only that platform's code. A
 fork that adds a platform of its own can put a `fork.py` here with a
@@ -13,9 +13,9 @@ import importlib
 import importlib.util
 import sys
 
-from .base import Event, EventSource, Host, Platform, Setup
+from .base import Event, EventSource, Host, Platform, Reason, Setup
 
-__all__ = ["Event", "EventSource", "Host", "Platform", "Setup", "Unsupported", "current"]
+__all__ = ["Event", "EventSource", "Host", "Platform", "Reason", "Setup", "Unsupported", "current"]
 
 _current: Platform | None = None
 

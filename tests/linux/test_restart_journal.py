@@ -458,8 +458,8 @@ class TestGroup:
         logout = REBOOT - 3000
         record(2, b, started=logout - 600, ended=logout - 1)
         group = make(FakeJournal(sessions=[(LAST_BOOT, "2", "wayland", logout)])).sort()
-        assert group.latest == Closed(REBOOT, "restart")
-        assert group.reasons == {"restart", "logout"}
+        assert group.sessions[a] == Closed(REBOOT, "restart")
+        assert group.sessions[b].why == "logout"
 
     def test_drop_and_drop_all(self, setup):
         make, record, session, _ = setup

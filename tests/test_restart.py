@@ -6,7 +6,7 @@ import json
 import pytest
 
 from claude_launcher.platforms import Event
-from claude_launcher.restart import KEEP, LEAD, TAIL, Closed, RestartState
+from claude_launcher.restart import KEEP, LEAD, SHARED, TAIL, Closed, Reason, RestartState, reasons, unknown
 from conftest import FakeEvents, FakeHost, conversation
 
 NOW = 1_800_000_000.0
@@ -172,3 +172,83 @@ def test_only_loading_never_asks_for_events(setup, claude_home):
     state = RestartState(claude_home.paths, Refuses(), setup.host, now=lambda: NOW)
     state.load()
     state.drop([])
+
+
+class Interrupted(Exception):
+    pass
+
+
+def test_a_sort_cut_short_loses_nothing(setup, claude_home):
+    # A hang-up or TERM can end the picker mid-sort: the records it had
+    # decided stay until the group they joined is saved.
+    a, b = setup.session(), setup.session()
+    setup.record(a, pid=1, ended=NOW - 695)
+    setup.record(b, pid=2, ended=NOW - 695)
+
+    class FailsOnTheSecond:
+        asked = 0
+
+        def events(self, record, same_boot):
+            self.asked += 1
+            if self.asked == 2:
+                raise Interrupted
+            return [RESTART]
+
+    state = RestartState(claude_home.paths, FailsOnTheSecond(), setup.host, now=lambda: NOW)
+    with pytest.raises(Interrupted):
+        state.sort()
+    assert records(claude_home) == [f"{LAST_BOOT}_1", f"{LAST_BOOT}_2"]
+    assert set(setup.make(RESTART).sort().sessions) == {a, b}
+    assert records(claude_home) == []
+
+
+def test_one_restart_one_time_though_the_uptime_moves(setup, claude_home):
+    # Linux works out the boot's start from the uptime, read to 10 ms.
+    jitter = iter([0.0, 0.01, 0.02, 0.03])
+    setup.host.started = lambda now: BOOT_STARTED + next(jitter)
+    ids = [setup.session() for _ in range(3)]
+    for pid, sid in enumerate(ids):
+        setup.record(sid, pid=pid)
+    assert {c.at for c in setup.make().sort().sessions.values()} == {BOOT_STARTED}
+
+
+class TestReasons:
+    STOP = Reason("stop", "it stopped", "stop", 15)  # a platform's own, between restart and logout
+
+    def make(self, claude_home, setup, *events, reasons=None):
+        return RestartState(claude_home.paths, FakeEvents(list(events)), setup.host, now=lambda: NOW, reasons=reasons)
+
+    def test_a_platforms_own_reason_ranks_by_its_rank(self, setup, claude_home):
+        sid = setup.session()
+        stop, logout = Event(NOW - 700, NOW - 690, "stop"), Event(NOW - 701, NOW - 690, "logout")
+        setup.record(sid, ended=NOW - 695)
+        state = self.make(claude_home, setup, logout, stop, RESTART, reasons=reasons([self.STOP]))
+        assert state.sort().sessions == {sid: Closed(RESTART.start, "restart")}
+        other = setup.session()
+        setup.record(other, pid=2, ended=NOW - 695)
+        state = self.make(claude_home, setup, logout, stop, reasons=reasons([self.STOP]))
+        assert state.sort().sessions[other] == Closed(stop.start, "stop")
+
+    def test_an_unknown_reason_is_kept_and_ranks_last(self, setup, claude_home):
+        sid = setup.session()
+        stop, logout = Event(NOW - 700, NOW - 690, "stop"), Event(NOW - 701, NOW - 690, "logout")
+        setup.record(sid, ended=NOW - 695)
+        assert self.make(claude_home, setup, stop, logout, reasons=SHARED).sort().sessions == {
+            sid: Closed(logout.start, "logout")
+        }
+        setup.record(sid, pid=2, ended=NOW - 695, started=NOW - 600)
+        claude_home.paths.restored.write_text(json.dumps({sid: {"at": NOW - 60, "why": "stop"}}))
+        assert self.make(claude_home, setup, reasons=SHARED).load().sessions == {sid: Closed(NOW - 60, "stop")}
+
+    def test_reasons_come_in_rank_order(self):
+        assert [r.key for r in reasons([self.STOP])] == ["restart", "stop", "logout"]
+        assert unknown("x").rank > max(r.rank for r in reasons([self.STOP]))
+
+    def test_the_platforms_reasons_by_default(self, setup, claude_home, monkeypatch):
+        from test_platforms import platform
+
+        from claude_launcher import platforms
+
+        monkeypatch.setattr(platforms, "_current", platform("mine", reasons=(self.STOP,)))
+        state = RestartState(claude_home.paths, FakeEvents([]), setup.host, now=lambda: NOW)
+        assert state.ranks == {"restart": 10, "stop": 15, "logout": 20}

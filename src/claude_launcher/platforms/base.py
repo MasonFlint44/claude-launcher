@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
+from ..restart import Reason
+
 if TYPE_CHECKING:
     from ..restart import Record
 
@@ -60,7 +62,7 @@ class Event:
 
     start: float
     end: float
-    why: str  # "restart", "logout", or "wsl-stop" (WSL alone stopped)
+    why: str  # a Reason's key: "restart", "logout", or one of the platform's own (Platform.reasons)
 
 
 class EventSource(Protocol):
@@ -137,3 +139,6 @@ class Platform:
     fzf_listen: str
     # Where the launcher keeps its own files (the fetched fzf, in bin/).
     data_dir: Callable[[Mapping[str, str]], Path]
+    # What else, beyond a restart or a logout (restart.SHARED), this
+    # platform's events can say closed Claude: WSL stopping, on WSL.
+    reasons: tuple[Reason, ...] = ()
