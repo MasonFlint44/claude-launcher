@@ -18,7 +18,7 @@ The Linux platform, `src/claude_launcher/platforms/linux/`, and the rules for it
 ```bash
 tests/docker/run.sh distro       # in Docker: 8 distros (about 5 min)
 tests/docker/run.sh terminals    # every terminal, live (about 1 min)
-tests/docker/run.sh systemd      # logout and restart, systemd 249 to 262 (about 3 min)
+tests/docker/run.sh systemd      # logout, restart and power-off, systemd 249 to 262 (about 4 min)
 ```
 
 Run the layer a change touches: install or setup (distro), terminals or colors (terminals), the hook or the journal (systemd).

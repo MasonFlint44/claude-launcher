@@ -2,6 +2,9 @@
 container (systemd is PID 1). `check.py before` sets up the sessions, logs
 them out and checks the ↻ group; run.sh then reboots the container (a new
 boot ID each start, see boot.sh) and `check.py after` checks the restart.
+Then the same for powering off: `check.py poweroff-before` leaves a Claude
+open, run.sh powers the container off and starts it again, and `check.py
+poweroff-after` checks the shutdown counts as a restart too.
 
 Each result is one line: RESULT <name> <PASS|FAIL|SKIP|INFO> <detail>.
 """
@@ -322,32 +325,62 @@ def before() -> None:
     (SAVED / "before.json").write_text(json.dumps({"boot": boot, "restart": restart}))
 
 
-# --- after --------------------------------------------------------------------
+# --- after -------------------------------------------------------------------
 
 
-def after() -> None:
-    saved = json.loads((SAVED / "before.json").read_text())
+def shutdown_said(boot: str) -> str:
+    """What logind's shutdown message said in `boot`: "System is rebooting."
+    or "System is powering down." (one MESSAGE_ID for both)."""
+    from claude_launcher.platforms.linux.journal import SHUTDOWN_MESSAGE_ID
+
+    boot = restart_mod.normalize_boot_id(boot)  # journalctl -b takes it without dashes
+    out = sh("journalctl", "-b", boot, f"MESSAGE_ID={SHUTDOWN_MESSAGE_ID}", "-o", "cat", "--no-pager", "-q")
+    return out.stdout.strip() or out.stderr.strip()
+
+
+def after_shutdown(saved_name: str, prefix: str, said: str) -> None:
+    """The Claude left open in the boot before: its record, and the ↻ group
+    filing it as a restart at logind's shutdown message, which said `said`."""
+    saved = json.loads((SAVED / saved_name).read_text())
     old_boot, sid = saved["boot"], saved["restart"]
     boot = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
-    check("new-boot-id", boot != old_boot, f"{old_boot[:8]} -> {boot[:8]}")
+    check(f"{prefix}new-boot-id", boot != old_boot, f"{old_boot[:8]} -> {boot[:8]}")
     rec = records().get(sid, {})
-    check("hook-end-at-shutdown", "ended_at" in rec, "the Claude open at the restart recorded its end")
+    check(f"{prefix}hook-end-at-shutdown", "ended_at" in rec, "the Claude left open recorded its end")
+    message = shutdown_said(old_boot)
+    check(f"{prefix}shutdown-said", said in message, repr(message))
     for group in (False, True):
         tag = "group" if group else "nogroup"
         p = probe(old_boot, group)
-        result(f"journal-old-boot-{tag}", "INFO", json.dumps(p))
+        result(f"{prefix}journal-old-boot-{tag}", "INFO", json.dumps(p))
         if group:
-            check("shutdown-message", p.get("shutdown_message") is not None, 'logind\'s "System is rebooting."')
+            check(f"{prefix}shutdown-message", p.get("shutdown_message") is not None, repr(said))
         g = sort(group)
         if g is None:
-            check(f"sort-after-{tag}", False, "restart.sort failed")
+            check(f"{prefix}sort-after-{tag}", False, "restart.sort failed")
             continue
         got = g.get(sid)
-        check(f"restart-{tag}", bool(got) and got[1] == "restart", f"got {got}")
+        check(f"{prefix}restart-{tag}", bool(got) and got[1] == "restart", f"got {got}")
         if group and got and p.get("shutdown_message"):
-            check("restart-time-is-shutdown-message", abs(got[0] - p["shutdown_message"]) < 0.01)
+            check(f"{prefix}restart-time-is-shutdown-message", abs(got[0] - p["shutdown_message"]) < 0.01)
+
+
+def after() -> None:
+    after_shutdown("before.json", "", "rebooting")
+
+
+def poweroff_before() -> None:
+    boot = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+    sid = start_session("poweroff", "desktop")  # left open for the power-off
+    check("hook-start-poweroff", sid in records(), records().get(sid, {}).get("_file", "no record"))
+    (SAVED / "poweroff.json").write_text(json.dumps({"boot": boot, "restart": sid}))
+
+
+def poweroff_after() -> None:
+    after_shutdown("poweroff.json", "poweroff-", "powering down")
 
 
 if __name__ == "__main__":
-    {"before": before, "after": after}[sys.argv[1]]()
+    phases = {"before": before, "after": after, "poweroff-before": poweroff_before, "poweroff-after": poweroff_after}
+    phases[sys.argv[1]]()
     sys.exit(1 if failed else 0)

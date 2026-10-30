@@ -5,7 +5,7 @@ The test suite runs on this machine's Ubuntu, Python, fzf and terminal. These ru
 ```sh
 ./run.sh distro [IMAGE...]      # install.sh and the test suite, on each distro
 ./run.sh terminals [NAME...]    # every terminal, live on a virtual display
-./run.sh systemd [IMAGE...]     # logout and restart detection under real systemd
+./run.sh systemd [IMAGE...]     # logout, restart and power-off detection under real systemd
 ```
 
 Logs go to `.work/` (gitignored). CI (`.github/workflows/test.yml`) runs all three.
@@ -36,7 +36,7 @@ Colors are read off screenshots and compared with `themes/claude-dark`. A failed
 - a desktop that only logind's session type marks as graphical;
 - an SSH-style session.
 
-Then it reboots the container. After each logout and the reboot, it checks the ↻ group, with and without the systemd-journal group. Each container start is a new boot: `systemd/boot.sh` mounts a fresh boot ID over the kernel's, as systemd-nspawn does.
+Then it reboots the container, leaves another Claude open, and powers the container off and starts it again. After each logout, the reboot and the power-off, it checks the ↻ group (a power-off counts as a restart, from logind's "System is powering down.", the same message ID as "System is rebooting."), with and without the systemd-journal group. Each container start is a new boot: `systemd/boot.sh` mounts a fresh boot ID over the kernel's, as systemd-nspawn does.
 
 It can't test what a real desktop closes first, or a power cut. On systemd 257 and later, logind in a container doesn't name sessions after their audit IDs, so the SSH check is skipped there.
 
