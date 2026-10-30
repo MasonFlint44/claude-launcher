@@ -115,6 +115,8 @@ def utf8_out() -> None:
     system's code page (cp1252, which has no ↻) to a pipe, and \\r\\n,
     unless told otherwise."""
     for stream in (sys.stdout, sys.stderr):
+        if stream is None:  # pythonw, or a detached process
+            continue
         utf8 = (stream.encoding or "").lower().replace("-", "") == "utf8"
         if (not utf8 or sys.platform == "win32") and hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors=stream.errors, newline="\n")
