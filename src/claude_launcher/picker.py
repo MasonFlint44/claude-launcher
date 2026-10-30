@@ -850,14 +850,13 @@ def _nth_match(fzf_path: str, rows: list[str], query: str, pos: int, nth: str = 
     if not query:
         matched = rows
     else:
+        # Bytes: text mode would write \r\n on Windows, and fzf would keep the \r.
         done = subprocess.run(
             [fzf_path, f"--filter={query}", *MATCHING, f"--nth={nth}"],
-            input="".join(r + "\n" for r in rows),
+            input="".join(r + "\n" for r in rows).encode("utf-8", "surrogateescape"),
             capture_output=True,
-            encoding="utf-8",  # fzf's, not the system's (cp1252 on Windows)
-            errors="surrogateescape",
         )
-        matched = done.stdout.splitlines()
+        matched = [line for line in done.stdout.decode("utf-8", "surrogateescape").split("\n") if line]
     if len(matched) < pos:
         return ""
     return matched[pos - 1].split("\t", 1)[0]

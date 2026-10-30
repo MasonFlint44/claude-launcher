@@ -1002,3 +1002,18 @@ def test_title_skipped_on_dumb_terminals():
     assert not title.enabled({}, windows=False)
     assert title.enabled({}, windows=True)  # Windows' consoles never set TERM
     assert not title.enabled({"TERM": "dumb"}, windows=True)
+
+
+def test_nth_match_takes_rows_as_fzf_gives_them():
+    # Only \n ends a row: a title can hold other line breaks (U+2028), and
+    # bytes that aren't UTF-8 come back as they went.
+    import shutil
+
+    from claude_launcher.picker import _nth_match
+
+    fzf = shutil.which("fzf")
+    rows = ["a\tone two", "b\tone", "c\x80\tone\udc80"]
+    rows = [r.encode("utf-8", "surrogateescape").decode("utf-8", "surrogateescape") for r in rows]
+    assert _nth_match(fzf, rows, "one", 1) == "a"
+    assert _nth_match(fzf, rows, "one", 3) == "c\x80"
+    assert _nth_match(fzf, rows, "one", 4) == ""
