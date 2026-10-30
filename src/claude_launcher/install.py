@@ -22,6 +22,8 @@ from pathlib import Path
 from . import fzf, settings
 from .paths import Paths
 
+# What a step that fails raises; the installer shows the message. The
+# platforms' setups catch the same.
 FAILURES = (ValueError, RuntimeError, OSError, subprocess.SubprocessError)
 
 

@@ -7,16 +7,12 @@ from __future__ import annotations
 
 import os
 import shutil
-import subprocess
 import sys
 from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 
 from ...paths import CORE, REPO_DIR, THEME_FILE
 from . import desktop, terminals
-
-# What a step that fails raises; the installer shows the message.
-FAILURES = (ValueError, RuntimeError, OSError, subprocess.SubprocessError)
 
 
 def _context(launcher: str | Path | None = None) -> terminals.Context:
@@ -45,12 +41,31 @@ def link(target: Path, path: Path) -> Iterator[str]:
 
 
 def unlink_ours(link: Path) -> Iterator[str]:
-    if link.is_symlink() and os.readlink(link).startswith(str(REPO_DIR) + os.sep):
+    """Remove `link` if it points into this repo, by whatever path: older
+    installs linked to the repo as reached through a symlink to it."""
+    if not link.is_symlink():
+        return
+    target = os.readlink(link)
+    if target.startswith(str(REPO_DIR) + os.sep) or Path(os.path.realpath(link)).is_relative_to(REPO_DIR):
         link.unlink()
         yield f"Removed {link}"
 
 
 COMMANDS = ("claude-launcher", "claude-session-hook")
+
+
+def link_commands(env: Mapping[str, str] = os.environ) -> Iterator[str]:
+    """The launcher and its hook in ~/.local/bin: links, so `git pull` updates them."""
+    commands_dir = bin_dir(env)
+    for name in COMMANDS:
+        yield from link(REPO_DIR / "bin" / name, commands_dir / name)
+    if str(commands_dir) not in env.get("PATH", "").split(os.pathsep):
+        yield f"warning: {commands_dir} is not on your PATH"
+
+
+def unlink_commands(env: Mapping[str, str] = os.environ) -> Iterator[str]:
+    for name in COMMANDS:
+        yield from unlink_ours(bin_dir(env) / name)
 
 
 class LinuxSetup:
@@ -62,33 +77,28 @@ class LinuxSetup:
         return bin_dir() / "claude-session-hook"
 
     def install(self, terminal_names: str | None, icon: str | None) -> Iterator[str]:
-        # The launcher and its hook: links, so `git pull` updates them.
-        commands_dir = bin_dir()
-        for name in COMMANDS:
-            yield from link(REPO_DIR / "bin" / name, commands_dir / name)
-        if str(commands_dir) not in os.environ.get("PATH", "").split(os.pathsep):
-            yield f"warning: {commands_dir} is not on your PATH"
+        yield from link_commands()
         # The theme, so any Ghostty window can use it: theme = claude-dark
         yield from link(THEME_FILE, _ghostty_themes() / "claude-dark")
-        ctx = _context(commands_dir / "claude-launcher")
+        ctx = _context(bin_dir() / "claude-launcher")
         yield desktop.install_icon(ctx, icon)
         names = [n for n in terminal_names.split(",") if n] if terminal_names else None
         yield from desktop.install_terminals(ctx, names)
 
     def uninstall(self) -> Iterator[str]:
-        """Takes out what install() set up, going on past a part that fails."""
-        for name in COMMANDS:
-            yield from unlink_ours(bin_dir() / name)
+        """Takes out what install() set up, going on past a part that fails,
+        for any reason: what's left is harder to find later."""
+        yield from unlink_commands()
         yield from unlink_ours(_ghostty_themes() / "claude-dark")
         ctx = _context()
         try:
             for path in desktop.remove_terminals(ctx):
                 yield f"Removed {path}"
-        except FAILURES as e:
+        except Exception as e:
             yield f"warning: could not remove every desktop entry and profile: {e}"
         try:
             desktop.remove_icon(ctx)
-        except FAILURES as e:
+        except Exception as e:
             yield f"warning: could not remove the app icon: {e}"
 
     @property
@@ -97,7 +107,11 @@ class LinuxSetup:
 
 
 def _terminal(args: list[str]) -> int:
-    """terminal open NAME [LAUNCHER]: what a drop-down terminal's desktop entry runs."""
+    """terminal open NAME [LAUNCHER]: what a drop-down terminal's desktop entry
+    runs. terminal list: the names --terminal takes, for install.sh --help."""
+    if args == ["list"]:
+        print(" ".join(terminals.TERMINALS))
+        return 0
     term = terminals.TERMINALS.get(args[1]) if len(args) > 1 else None
     if args[:1] != ["open"] or not isinstance(term, terminals.Guake):
         print(f"can't open {' '.join(args[1:])}", file=sys.stderr)
