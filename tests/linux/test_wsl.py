@@ -13,7 +13,7 @@ from claude_launcher.platforms.windows import terminal
 from claude_launcher.platforms.wsl import is_wsl
 from claude_launcher.platforms.wsl.events import WslEvents
 from claude_launcher.platforms.wsl.setup import WslSetup
-from claude_launcher.restart import RestartState
+from claude_launcher.restart import Closed, Record, RestartState
 from conftest import FakeHost, conversation
 
 NOW = 1_800_000_000.0
@@ -63,18 +63,18 @@ def test_same_boot_is_windows_logoffs_only():
 def test_another_boot_adds_wsl_stopping():
     assert source([WINDOWS_RESTART]).events(None, same_boot=False) == [
         WINDOWS_RESTART,
-        Event(WSL_STARTED, WSL_STARTED, "restart"),
+        Event(WSL_STARTED, WSL_STARTED, "wsl-stop"),
     ]
 
 
 def test_without_interop_wsl_stopping_still_counts():
-    assert source(None).events(None, same_boot=False) == [Event(WSL_STARTED, WSL_STARTED, "restart")]
+    assert source(None).events(None, same_boot=False) == [Event(WSL_STARTED, WSL_STARTED, "wsl-stop")]
     assert source(None).events(None, same_boot=True) is None
 
 
 @pytest.fixture
 def sort(claude_home):
-    def run(*records):
+    def run(*records, windows=()):
         claude_home.paths.open_records.mkdir(parents=True, exist_ok=True)
         ids = []
         for i, ended in enumerate(records):
@@ -90,7 +90,7 @@ def sort(claude_home):
                 rec.update(end_reason="other", ended_at=ended)
             (claude_home.paths.open_records / f"{LAST_BOOT}_{100 + i}").write_text(json.dumps(rec))
             ids.append(sid)
-        s = source([])
+        s = source(windows)
         state = RestartState(claude_home.paths, s, s.host, now=lambda: NOW)
         return ids, state.sort()
 
@@ -100,7 +100,22 @@ def sort(claude_home):
 def test_wsl_shutdown_brings_back_what_was_running(sort):
     # wsl --shutdown kills Claude, so the record never got an end.
     (killed,), group = sort(None)
-    assert killed in group.sessions and group.sessions[killed].why == "restart"
+    assert killed in group.sessions and group.sessions[killed] == Closed(WSL_STARTED, "wsl-stop")
+
+
+def test_a_windows_restart_is_said_over_wsl_stopping(sort):
+    # It stopped WSL too; it came first.
+    (killed,), group = sort(None, windows=[WINDOWS_RESTART])
+    assert group.sessions[killed] == Closed(WINDOWS_RESTART.start, "restart")
+
+
+def test_a_logoff_is_said_over_wsl_stopping(claude_home):
+    # A Claude that ended at a logoff, with WSL starting again moments later.
+    logoff = Event(NOW - 3000, NOW - 3000, "logout")
+    host = FakeHost(boot=THIS_BOOT, started=lambda now: NOW - 2999)
+    state = RestartState(claude_home.paths, WslEvents(host, FakeWindows([logoff]), now=lambda: NOW), host)
+    record = Record("s", 1, LAST_BOOT, "", NOW - 3600, ended=NOW - 3001)
+    assert state._closed_by(record, False, NOW) == Closed(logoff.start, "logout")
 
 
 def test_a_tab_closed_before_isnt_brought_back(sort):

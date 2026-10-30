@@ -499,6 +499,17 @@ class TestHeader:
         p.on_sessions()
         assert "↻ open when your session ended" in strip_ansi(p.make_header())
 
+    def test_wsl_stop_nudge(self, env):
+        a = env.log("/tmp", conversation("a", "/tmp"))
+        b = env.log("/tmp", conversation("b", "/tmp"))
+        env.paths.state.mkdir(parents=True)
+        env.paths.restored.write_text(json.dumps({a: closed(NOW - 300, "wsl-stop")}))
+        p, _ = start(env)
+        assert "1 session was open when WSL stopped" in strip_ansi(p.make_header())
+        env.paths.restored.write_text(json.dumps({a: closed(NOW - 300, "wsl-stop"), b: closed(NOW - 600)}))
+        p, _ = start(env)
+        assert "closed when WSL stopped, or by a restart or logout" in strip_ansi(p.make_header())
+
     def test_mixed_nudge(self, env):
         a = env.log("/tmp", conversation("a", "/tmp"))
         b = env.log("/tmp", conversation("b", "/tmp"))

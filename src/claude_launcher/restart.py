@@ -11,12 +11,13 @@ with a start and an end, which the platform's event source provides (on
 Linux, the systemd journal: platforms/linux/journal.py).
 
 A Claude that ended between LEAD seconds before an event started and TAIL
-seconds after it ended was closed by it; a restart wins over a logout. One
+seconds after it ended was closed by it; a restart wins over a logout, and
+a logout over WSL stopping (which both of them also do). One
 that never recorded an end (the power was cut, or the hook never got to run)
 was closed by the first event after it started.
 
 Those join the group in restored.json, {session id: {"at": time, "why":
-"restart" | "logout"}}, for KEEP seconds, or until resumed or dismissed. Any
+"restart" | "logout" | "wsl-stop"}}, for KEEP seconds, or until resumed or dismissed. Any
 other record is deleted once its Claude has gone.
 
 This module is the same on every platform; the record and restored.json
@@ -58,14 +59,14 @@ KEEP = 7 * 86400  # how long closed sessions stay in the group
 # a session the logout closed is missing from the list.
 LEAD = 30
 TAIL = 10
-REASONS = ("restart", "logout")
+REASONS = ("restart", "logout", "wsl-stop")  # in the order they win
 _UNDECIDED = object()
 
 
 @dataclass(frozen=True)
 class Closed:
     at: float  # when the restart or logout happened
-    why: str  # "restart" or "logout"
+    why: str  # one of REASONS
 
 
 @dataclass(frozen=True)
@@ -244,7 +245,7 @@ class RestartState:
         matches = [e for e in events if closes(e, record.ended)]
         if not matches:
             return None
-        best = min(matches, key=lambda e: (e.why != "restart", e.start))
+        best = min(matches, key=lambda e: (REASONS.index(e.why) if e.why in REASONS else len(REASONS), e.start))
         return Closed(best.start, best.why)
 
     def drop(self, session_ids: Iterable[str]) -> Group:

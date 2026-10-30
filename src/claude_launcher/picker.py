@@ -256,6 +256,10 @@ class Picker:
             return "open when your computer restarted"
         if reasons == {"logout"}:
             return "open when your session ended"
+        if reasons == {"wsl-stop"}:
+            return "open when WSL stopped"
+        if "wsl-stop" in reasons:
+            return "closed when WSL stopped, or by a restart or logout"
         return "closed by a restart or logout"
 
     def _nudge(self) -> str:

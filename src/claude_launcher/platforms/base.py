@@ -60,7 +60,7 @@ class Event:
 
     start: float
     end: float
-    why: str  # "restart" or "logout"
+    why: str  # "restart", "logout", or "wsl-stop" (WSL alone stopped)
 
 
 class EventSource(Protocol):

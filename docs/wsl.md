@@ -4,7 +4,7 @@ Claude Code inside a WSL distro, opened from Windows Terminal. For the picker it
 
 ## Install
 
-Inside your distro (tested with Ubuntu 26.04 on WSL 2), with Python 3.10+ and [Claude Code](https://docs.claude.com/en/docs/claude-code) installed there:
+Inside your distro (WSL 2; tested with Ubuntu 26.04), with Python 3.10+ and [Claude Code](https://docs.claude.com/en/docs/claude-code) installed there:
 
 ```bash
 git clone https://github.com/MasonFlint44/claude-launcher.git ~/git/claude-launcher
@@ -20,4 +20,4 @@ Updating and uninstalling are as on Linux: `git pull`, and `install.sh --uninsta
 As on Linux, the session hook keeps a record for each interactive Claude. When the picker opens it checks them against:
 
 - **Windows' restarts, shutdowns and logoffs**, from Windows' System event log (through interop), as on [Windows](windows.md#how-it-knows-what-a-restart-or-logoff-closed).
-- **WSL stopping on its own**: `wsl --shutdown`, or WSL shutting down when idle. Claude was still running then, so its session is listed. A tab you closed before that isn't.
+- **WSL stopping on its own**, as with `wsl --shutdown` or `wsl --update`. Claude was still running then, so its session is listed, as "open when WSL stopped". A tab you closed before that isn't. (WSL also stops when it's idle, but only once nothing is running in it.)

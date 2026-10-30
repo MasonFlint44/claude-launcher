@@ -4,7 +4,7 @@ or WSL stopping when idle). All three close Claude:
 
 - Windows' restarts and logoffs, from its System log through interop
   (platforms/windows/eventlog.py), as on native Windows.
-- WSL stopping on its own counts as a restart, at this WSL boot's start:
+- WSL stopping on its own ("wsl-stop"), at this WSL boot's start:
   Claude was killed, so its record has no end, and a record without one is
   closed by the first event after it started. A tab closed before then has
   its end, long before this, and isn't counted.
@@ -31,4 +31,4 @@ class WslEvents:
         if same_boot:
             return found
         stopped = self.host.boot_start(self.now())
-        return [*(found or []), Event(stopped, stopped, "restart")]
+        return [*(found or []), Event(stopped, stopped, "wsl-stop")]
