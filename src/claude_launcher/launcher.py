@@ -179,6 +179,9 @@ def _claude_command(
 
 def _claude(signals: _Signals, directory: str, args: Sequence[str]) -> int | None:
     """Run claude in `directory`. Its exit code, or None if it couldn't start."""
+    if not os.path.isdir(directory):  # Windows says "directory name is invalid", not "not found"
+        print(f"No such directory: {directory}", file=sys.stderr)
+        return None
     env = None
     if os.name != "nt":  # as a shell's cd would: cwd alone leaves PWD naming where the launcher started
         env = {**os.environ, "PWD": directory}

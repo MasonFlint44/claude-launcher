@@ -19,8 +19,9 @@ main(sys.argv[2:])
 print(json.dumps(sorted(sys.modules)), file=sys.stderr)
 """
 NOT_ON_A_KEY_PRESS = ("claude_launcher.platforms", "claude_launcher.settings")
-# Only fetching fzf needs these, and they cost about 12 ms.
-FETCHING = ("urllib", "hashlib", "tarfile", "zipfile")
+# Only fetching fzf needs these, and they cost about 12 ms. (Not all of
+# urllib: Python 3.10's pathlib imports urllib.parse itself.)
+FETCHING = ("urllib.request", "hashlib", "tarfile", "zipfile")
 
 
 @pytest.mark.parametrize(
@@ -50,4 +51,4 @@ def test_key_actions_stay_light(tmp_path, claude_home, action):
     )
     loaded = json.loads(done.stderr.strip().splitlines()[-1])
     assert [m for m in loaded if m.startswith(NOT_ON_A_KEY_PRESS)] == []
-    assert [m for m in loaded if m.split(".")[0] in FETCHING] == []
+    assert [m for m in loaded if m.startswith(FETCHING)] == []
