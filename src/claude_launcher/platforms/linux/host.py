@@ -27,14 +27,45 @@ def is_claude(argv: list[str]) -> bool:
     )
 
 
+# How many hex digits of the boot ID a shared kernel's boot keeps; the rest
+# are pid 1's start, in clock ticks (12 hex digits: millennia at 100 Hz).
+# The whole stays 32 hex digits, the size of any other boot ID.
+_KEPT = 20
+
+
 class LinuxHost:
+    def __init__(self, proc: str = "/proc"):
+        self.proc = proc  # another for tests
+
+    def _read(self, name: str) -> str:
+        with open(f"{self.proc}/{name}") as f:
+            return f.read()
+
+    def _init_start(self) -> int | None:
+        """When pid 1 started, in clock ticks since the kernel did, under WSL's
+        kernel; else None. Every WSL distro (and Docker Desktop's containers)
+        shares one VM and so its boot ID and uptime, but a distro can stop
+        and start again (wsl --terminate) while the VM runs on: its own
+        start is its pid 1's. claude-session-hook does the same."""
+        try:
+            if "microsoft" not in self._read("sys/kernel/osrelease").lower():
+                return None
+            fields = self._read("1/stat").rpartition(") ")[2].split()
+            return int(fields[19])  # field 22, starttime; the first after "(comm) " is 3
+        except (OSError, IndexError, ValueError):
+            return None
+
     def boot_id(self) -> str:
-        with open("/proc/sys/kernel/random/boot_id") as f:
-            return f.read().strip()
+        boot = self._read("sys/kernel/random/boot_id").strip()
+        start = self._init_start()
+        if start is None:
+            return boot
+        return f"{boot.replace('-', '')[:_KEPT]}{start:012x}"
 
     def boot_start(self, now: float) -> float:
-        with open("/proc/uptime") as f:
-            return now - float(f.read().split()[0])
+        start = now - float(self._read("uptime").split()[0])
+        ticks = self._init_start()
+        return start if ticks is None else start + ticks / os.sysconf("SC_CLK_TCK")
 
     def claude_running(self, pid: object) -> bool:
         if not isinstance(pid, int):
