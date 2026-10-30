@@ -5,23 +5,33 @@
 # remembers --terminal and --icon from last time. The steps themselves are in
 # src/claude_launcher/install.py.
 usage() {
+  local names
+  # The platform's terminals, from the core; none on a platform without them.
+  names=$("$core" terminal list 2>/dev/null) || names=
   cat <<'USAGE'
 usage: install.sh [--terminal NAME[,NAME...]] [--icon FILE|default]
        install.sh --uninstall
 
-  --terminal  the terminal(s) "Claude Code" opens; the first gets the plain
-              name. One of: ghostty kitty wezterm ptyxis gnome-terminal
-              konsole guake default. Without it: last time's choice, else the
-              first of those that's installed (guake only when asked for).
-              "auto" goes back to that.
-  --icon      your own app icon (.svg, or a square .png); "default" goes back
-              to the one in share/icons.
 USAGE
+  option --terminal "the terminal(s) \"Claude Code\" opens; the first gets the plain\
+ name.${names:+ One of: $names.} Without it: last time's choice, else the first of\
+ those that's installed (drop-down ones only when asked for). \"auto\" goes back\
+ to that. Linux desktops only."
+  option --icon "your own app icon (.svg, or a square .png; .png for Windows\
+ Terminal); \"default\" goes back to the one in share/icons."
+}
+# An option's help, wrapped to fit 80 columns.
+option() {
+  printf '%s\n' "$2" | fold -s -w 62 | sed 's/ *$//' | {
+    IFS= read -r line && printf '  %-10s  %s\n' "$1" "$line"
+    while IFS= read -r line; do printf '%14s%s\n' "" "$line"; done
+  }
 }
 set -euo pipefail
 
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 core=$repo/libexec/claude-launcher-core
+
 
 say()  { printf '\e[1;38;2;215;119;87m==>\e[0m %s\n' "$*"; }
 warn() { printf '\e[1;33mwarning:\e[0m %s\n' "$*" >&2; }
@@ -59,8 +69,10 @@ done
 python3 -c 'import sys; sys.exit(sys.version_info < (3, 10))' 2>/dev/null ||
   { error "claude-launcher needs Python 3.10 or newer"; exit 1; }
 if [[ $action == uninstall ]]; then
-  run undo
-  exit 0  # goes on past a step that fails, and says so
+  # The steps go on past one that fails, and say so; if Python itself
+  # failed, say that plainly too. Either way, as before, it exits 0.
+  run undo || warn "the uninstall stopped partway (see above); some of claude-launcher may still be installed"
+  exit 0
 fi
 if [[ -n $icon && $icon != default ]]; then
   icon=$(realpath "$icon")
