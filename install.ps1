@@ -63,23 +63,23 @@ function Import-MachineAndUserPath {
 }
 
 # The install or uninstall; returns the exit code.
-function Invoke-Install {
+function Invoke-Install([string]$IconFile, [switch]$Remove) {
     $steps = @("install", "run")
-    if ($Uninstall) {
+    if ($Remove) {
         $steps = @("install", "undo")
-    } elseif ($Icon -eq "default") {  # -eq ignores case
+    } elseif ($IconFile -eq "default") {  # -eq ignores case
         $steps += @("--icon", "default")
-    } elseif ($Icon) {
+    } elseif ($IconFile) {
         # -LiteralPath: [ and ] are wildcards to plain -Path.
-        if (-not (Test-Path -LiteralPath $Icon -PathType Leaf)) {
-            Fail "No such file: $Icon"
+        if (-not (Test-Path -LiteralPath $IconFile -PathType Leaf)) {
+            Fail "No such file: $IconFile"
             return 1
         }
-        $steps += @("--icon", (Resolve-Path -LiteralPath $Icon).ProviderPath)
+        $steps += @("--icon", (Resolve-Path -LiteralPath $IconFile).ProviderPath)
     }
 
     $python = Find-Python
-    if (-not $python -and -not $Uninstall) {
+    if (-not $python -and -not $Remove) {
         Warn "claude-launcher needs Python 3.10 or newer, and there isn't one."
         if (-not (Get-Command -Name winget -ErrorAction SilentlyContinue)) {
             Fail "Install Python from https://www.python.org/downloads/, then run this again."
@@ -120,7 +120,7 @@ $savedPythonEncoding = $env:PYTHONIOENCODING
 try {
     [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
     $env:PYTHONIOENCODING = "utf-8"
-    $code = Invoke-Install
+    $code = Invoke-Install -IconFile $Icon -Remove:$Uninstall
 } finally {
     [Console]::OutputEncoding = $savedOutputEncoding
     if ($null -eq $savedPythonEncoding) {
