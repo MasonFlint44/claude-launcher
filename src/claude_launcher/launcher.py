@@ -177,7 +177,7 @@ def _claude_command(
     # System32's cmd.exe, not %ComSpec%, which can be another shell (TCC)
     # that reads these switches its own way.
     if comspec is None:
-        root = os.environ.get("SystemRoot")
+        root = os.environ.get("SYSTEMROOT")  # os.environ ignores case on Windows
         comspec = os.path.join(root, "System32", "cmd.exe") if root else "cmd.exe"
     return f'"{comspec}" /d /e:on /v:off /s /c "{line}"'
 
