@@ -9,6 +9,14 @@ or WSL stopping when idle). All three close Claude:
   Claude was killed, so its record has no end, and a record without one is
   closed by the first event after it started. A tab closed before then has
   its end, long before this, and isn't counted.
+
+A record from two or more of the distro's boots back (the picker wasn't
+opened in between) gets this boot's start too, though its WSL stopped
+earlier: the stop itself leaves no trace (WSL kills everything, the hook
+included), and the record knows only its own start. So its ↻ day can be
+later than the stop, and it stays in the group up to that much longer
+than KEEP; nothing is lost. A Windows restart or logoff in between is
+still found at its own time.
 """
 
 from __future__ import annotations
