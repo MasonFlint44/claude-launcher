@@ -170,7 +170,6 @@ class PathText:
 
 
 _here = PathText()
-SEP = _here.sep
 with_sep = _here.with_sep
 join = _here.join
 without_sep = _here.without_sep
