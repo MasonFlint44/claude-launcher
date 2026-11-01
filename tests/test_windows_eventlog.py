@@ -159,7 +159,15 @@ def test_power_off_counts_as_a_restart():
 
 def test_only_the_records_own_boot():
     # A later boot's restart closed nothing this record had open.
-    found = events([RESTART(T + 100), SHUTTING_DOWN(T + 110), BOOTED(T + 130), RESTART(T + 900), BOOTED(T + 950)])
+    log = [
+        RESTART(T + 100),
+        SHUTTING_DOWN(T + 110),
+        BOOTED(T + 130),
+        LOGOFF(T + 920),
+        RESTART(T + 900),
+        BOOTED(T + 950),
+    ]
+    found = events(log)
     assert [e.start for e in found] == [T + 100]
 
 
@@ -178,6 +186,13 @@ def test_not_the_boot_before_a_claude_started_just_after_boot():
 def test_a_boot_just_before_the_record_is_its_own():
     found = events([BOOTED(T - 30), RESTART(T + 100), SHUTTING_DOWN(T + 110), BOOTED(T + 130)])
     assert found == [Event(T + 100, T + 110, "restart")]
+
+
+def test_no_later_boot_in_the_log_means_no_restart_yet():
+    # Another boot than the record's, but its start isn't in the log (cleared,
+    # or older than the lookback): only what this boot's events show.
+    found = events([RESTART(T + 100), LOGOFF(T + 103), SHUTTING_DOWN(T + 110)])
+    assert found == [Event(T + 103, T + 103, "logout")]
 
 
 def test_the_last_restart_of_the_boot():
@@ -227,6 +242,8 @@ def test_same_boot_has_no_restart_yet():
 def test_only_my_logoffs():
     assert events([LOGOFF(T + 100, OTHER)], same_boot=True) == []
     assert events([LOGOFF(T + 100)], same_boot=True, sid=None) == []  # can't tell whose
+    no_sid = xml("Microsoft-Windows-Winlogon", 7002, T + 100, TSId=1)
+    assert events([no_sid], same_boot=True, sid=None) == []
 
 
 def test_a_log_that_cant_be_read_says_so():
@@ -296,6 +313,10 @@ def test_fast_startup_is_a_restart_in_the_same_boot():
     found = events([RESTART(T + 100, "power off"), LOGOFF(T + 100.5), HIBERNATING(T + 101)], same_boot=True)
     assert Event(T + 100, T + 101, "restart") in found
     assert Event(T + 100.5, T + 100.5, "logout") in found  # the restart wins in restart.py
+
+
+def test_shutting_down_before_hibernating_isnt_fast_startup():
+    assert events([RESTART(T + 100, "power off"), SHUTTING_DOWN(T + 101), HIBERNATING(T + 102)], same_boot=True) == []
 
 
 def test_hibernating_alone_isnt_a_restart():
