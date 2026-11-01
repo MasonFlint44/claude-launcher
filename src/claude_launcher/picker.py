@@ -73,6 +73,13 @@ NUDGE_LINES = 3  # events beyond these share one "more" line
 # How fzf reads and matches rows, the same in the picker and in `_nth_match`.
 MATCHING = ["--ansi", "--tiebreak=index", "--delimiter=\t", "--with-nth=2.."]
 # The field fzf matches, after the key: the path, or a session's directory and title.
+
+# How a view switch (or a dismiss) reloads: not reload-sync, which in fzf
+# 0.70 and newer can keep the old view's header row ("Directory  Last used"
+# over a Sessions view) when the new rows come in more than one read. Its
+# rows show no gap either way. Typing in path mode keeps reload-sync: the
+# list's header row is the same there.
+RELOAD_VIEW = "reload"
 NTH = {"projects": "1", "sessions": "2"}
 
 PROJECTS_PROMPT = "project> "
@@ -541,7 +548,7 @@ class Picker:
         wait = "rebind(result)+" if self.state.pending_pos else ""
         nth = NTH["projects" if view == "projects" else "sessions"]
         return (
-            f"{wait}{query_action}+change-prompt({prompt})+change-nth({nth})+reload-sync({self.core} ui menu)+first"
+            f"{wait}{query_action}+change-prompt({prompt})+change-nth({nth})+{RELOAD_VIEW}({self.core} ui menu)+first"
             f"+change-header:{header}"
         )
 
@@ -689,7 +696,7 @@ class Picker:
         self.state.key = None
         header = self._set_header()
         self._save_state()
-        return f"reload-sync({self.core} ui menu)+change-header:{header}"
+        return f"{RELOAD_VIEW}({self.core} ui menu)+change-header:{header}"
 
     def on_key(self, key: str, query: str) -> str:
         """Esc, Ctrl-C, Ctrl-D and Alt-X.

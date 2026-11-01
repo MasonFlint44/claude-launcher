@@ -296,6 +296,22 @@ def test_enter_shows_a_directorys_sessions_and_enter_again_starts_a_new_one(laun
     assert launch.calls() == [(str(proj), "")]
 
 
+def test_each_view_shows_its_own_header_row(launch, claude_home):
+    # fzf 0.70+ with reload-sync could keep the old view's header row; it
+    # depends on timing, so switch a few times.
+    project_with_a_session(claude_home, claude_home.paths.home)
+    t = launch()
+    t.wait_for("Select a project directory for Claude")
+    for _ in range(3):
+        t.send("enter")
+        t.wait_for("an earlier session")
+        t.wait_for("Last active")
+        assert "Last used" not in t.text()
+        t.send("esc")
+        t.wait_for("Last used")
+        assert "Last active" not in t.text()
+
+
 def test_two_enters_at_once_start_a_new_session(launch, claude_home, tmp_path):
     proj = tmp_path / "proj"
     project_with_a_session(claude_home, proj)

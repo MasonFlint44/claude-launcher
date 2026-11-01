@@ -645,7 +645,7 @@ class TestSessions:
         env.log("/tmp", conversation("hello", "/tmp"))
         p, _ = start(env)
         out = p.on_sessions()
-        assert out.startswith("clear-query+change-prompt(session> )+change-nth(2)+reload-sync(")
+        assert out.startswith("clear-query+change-prompt(session> )+change-nth(2)+reload(")
         assert "Recent Claude sessions" in out
         assert displayed(p.rows())[1].split()[-1] == "hello"
         assert "Select a project directory" in env.picker().on_sessions()
@@ -897,7 +897,7 @@ class TestDirectorySessions:
         start(env)
         self.enter(env, monkeypatch, b, "proj", pos=2)
         out = env.picker().on_key("esc", "")
-        assert out.startswith("rebind(result)+change-query(proj)+change-prompt(project> )+change-nth(1)+reload-sync(")
+        assert out.startswith("rebind(result)+change-query(proj)+change-prompt(project> )+change-nth(1)+reload(")
         assert env.picker().state.query == "proj"
         # The cursor goes back once the list's rows are in, not a Sessions view's.
         assert env.picker().on_result(sid_in(env, b)) == ""
@@ -1029,7 +1029,7 @@ class TestKeys:
         p.on_sessions()
         env.picker().on_key("alt-x", "")
         out = env.picker().on_key("alt-x", "")
-        assert out.startswith("reload-sync(")
+        assert out.startswith("reload(")
         assert json.loads(env.paths.restored.read_text()) == {}
         assert "↻" not in "".join(displayed(env.picker().rows()))
 
@@ -1044,7 +1044,7 @@ class TestKeys:
         env.paths.restored.write_text(json.dumps({a: closed(NOW - 300), b: closed(NOW - 300)}))
         p, _ = start(env)
         p.on_sessions()
-        assert env.picker().on_dismiss(a).startswith("reload-sync(")
+        assert env.picker().on_dismiss(a).startswith("reload(")
         assert list(json.loads(env.paths.restored.read_text())) == [b]
 
 
