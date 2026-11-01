@@ -355,3 +355,9 @@ def test_installer_round_trip(windows, home, claude_home, fzf_found, tmp_path):
     list(install.uninstall(FakePlatform(make(windows, home), tmp_path / "data")))
     assert "hooks" not in json.loads((claude_home.paths.config / "settings.json").read_text())
     assert not fragment_dir(windows).exists()
+
+
+def test_the_profiles_user_is_the_hosts(tmp_path):
+    from claude_launcher.platforms.linux.host import LinuxHost
+
+    assert WslSetup({"HOME": str(tmp_path)}).user() == LinuxHost().user()

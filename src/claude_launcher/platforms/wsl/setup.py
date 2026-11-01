@@ -8,7 +8,6 @@ profile is skipped with a warning rather than failing the install."""
 from __future__ import annotations
 
 import os
-import pwd
 import shutil
 import uuid
 from collections.abc import Callable, Iterator, Mapping
@@ -18,14 +17,11 @@ from ...install import FAILURES
 from ...paths import THEME_FILE
 from ...theme import Theme
 from ..linux import data_dir as linux_data_dir
+from ..linux.host import LinuxHost
 from ..linux.setup import bin_dir, link_commands, unlink_commands
 from ..windows import terminal
 from ..windows.setup import DEFAULT_ICON
 from . import interop
-
-
-def _user() -> str:
-    return pwd.getpwuid(os.getuid()).pw_name
 
 
 class WslSetup:
@@ -36,12 +32,12 @@ class WslSetup:
         env: Mapping[str, str] = os.environ,
         run: Callable[..., bytes] = interop.run,
         mounts: str = "/proc/mounts",
-        user: Callable[[], str] = _user,
+        user: Callable[[], str] | None = None,
     ):
         self.env = env
         self.run = run  # a program's output; raises if it fails
         self.windows = interop.Interop(env, mounts, run)
-        self.user = user
+        self.user = user or LinuxHost().user  # WSL's host is Linux's
         self.data_dir = linux_data_dir(env)
         self._distro: str | None = None
         self.skipped = False  # the profile, this run

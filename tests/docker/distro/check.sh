@@ -44,7 +44,7 @@ fi
 
 step "pytest"
 # The tests run whichever fzf comes first, so put the launcher's first.
-PATH=$(dirname "$fzf_path"):$PATH /opt/venv/bin/python -m pytest -q -p no:cacheprovider "$repo"
+PATH=$(dirname "$fzf_path"):$PATH /opt/venv/bin/python -m pytest -q -rs -p no:cacheprovider "$repo"
 
 step "install.sh --uninstall"
 "$repo/install.sh" --uninstall

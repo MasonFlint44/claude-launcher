@@ -33,10 +33,12 @@ class Host(Protocol):
         """When this boot began, as a Unix time."""
         ...
 
-    def claude_running(self, pid: object, started: float | None = None) -> bool:
-        """Whether process `pid` is a Claude Code that's still running, and,
-        given `started` (when its record says it started), the same process
-        rather than a new one that got the pid since."""
+    def claude_running(self, pid: object, started: float | None = None, start_ticks: int | None = None) -> bool:
+        """Whether process `pid` is a Claude Code that's still running, and
+        the record's own process rather than a new one that got the pid
+        since: by `start_ticks` (when the process started, in the platform's
+        own units, from the record) matched exactly when the record has it,
+        else by `started` (when the record says it started) with a margin."""
         ...
 
     def user(self) -> str:

@@ -4,6 +4,7 @@ for the package: a line saying so, not a traceback."""
 from __future__ import annotations
 
 import ast
+import os
 import shutil
 import subprocess
 import sys
@@ -36,12 +37,22 @@ def test_the_check_is_old_syntax(script):
     ast.parse(head, feature_version=(3, 4))
 
 
-OLD = [p for p in ("python3.9", "python3.8", "python3.7", "python3.6", "python2") if shutil.which(p)]
+# CI names one it installed, so that run fails rather than skips if it's missing.
+NAMED = os.environ.get("CLAUDE_LAUNCHER_TEST_OLD_PYTHON")
+OLD = (
+    [NAMED]
+    if NAMED
+    else [p for p in ("python3.9", "python3.8", "python3.7", "python3.6", "python2") if shutil.which(p)]
+)
 
 
 @pytest.mark.skipif(not OLD, reason="no Python older than 3.10 here")
 @pytest.mark.parametrize("script", SCRIPTS, ids=lambda p: p.name)
 def test_on_a_real_old_python(script):
+    old = subprocess.run(
+        [OLD[0], "-c", "import sys; print(sys.version_info[:2] < (3, 10))"], capture_output=True, text=True
+    )
+    assert old.stdout.strip() == "True", f"{OLD[0]} isn't older than 3.10"
     done = subprocess.run([OLD[0], str(script)], capture_output=True, text=True)
     assert done.returncode == 1
     assert done.stderr.startswith("claude-launcher needs Python 3.10 or newer (this is ")

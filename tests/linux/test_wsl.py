@@ -133,3 +133,14 @@ def test_a_logoff_is_said_over_wsl_stopping(claude_home):
 def test_a_tab_closed_before_isnt_brought_back(sort):
     (closed,), group = sort(NOW - 3000)
     assert closed not in group.sessions
+
+
+def test_one_wsl_stop_for_every_record_though_the_uptime_moves():
+    # boot_start is worked out from the uptime, which moves on between
+    # reads: the sessions one stop closed should share one time.
+    clock = iter([NOW, NOW + 0.7, NOW + 1.4])
+    host = FakeHost(boot=THIS_BOOT, started=lambda now: now - 300)
+    s = WslEvents(host, FakeWindows([]), now=lambda: next(clock))
+    first = s.events(None, same_boot=False)
+    second = s.events(None, same_boot=False)
+    assert first == second == [Event(NOW - 300, NOW - 300, "wsl-stop")]

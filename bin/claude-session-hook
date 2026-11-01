@@ -16,7 +16,9 @@
 # Runs on every session start and end, so it's plain bash, quick, and always
 # exits 0.
 
-LC_ALL=C  # $EPOCHREALTIME has a comma for a decimal point in some locales
+# $EPOCHREALTIME has a comma for a decimal point in some locales. Exported,
+# so nothing this runs sees another locale either.
+export LC_ALL=C
 input=$(cat)
 # Only interactive terminal sessions: not `claude -p`, the SDK or an editor panel.
 [[ ${CLAUDE_CODE_ENTRYPOINT:-} == cli ]] || exit 0
@@ -44,6 +46,15 @@ while (( pid > 1 )); do
 done
 (( pid > 1 )) || exit 0
 [[ $(readlink "/proc/$pid/fd/0") == /dev/pts/* ]] || exit 0  # not in a terminal
+# When Claude started, in clock ticks since the kernel did (field 22 of its
+# stat). The launcher matches it exactly to tell this Claude from one that
+# got the pid since, with no clocks: WSL's VM stands still while Windows
+# sleeps, then its wall clock jumps ahead.
+start_ticks=
+if read -r stat < "/proc/$pid/stat" 2>/dev/null; then
+  read -ra stat <<< "${stat##*) }"
+  [[ ${stat[19]:-} =~ ^[0-9]+$ ]] && start_ticks=${stat[19]}
+fi
 
 uuid='[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 [[ $input =~ \"session_id\"[[:space:]]*:[[:space:]]*\"($uuid)\" ]] || exit 0
@@ -76,6 +87,7 @@ dir=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/state/claude-launcher/open
 record=$dir/${boot_id}_$pid
 fields=$(printf '"session_id":"%s","pid":%d,"boot_id":"%s","login_session":"%s"' \
   "$session_id" "$pid" "$boot_id" "${login_session//[^0-9a-z]/}")
+[[ -n $start_ticks ]] && fields+=",\"start_ticks\":$start_ticks"
 
 write() {  # atomically, so the launcher never reads half a record
   printf '%s\n' "$1" > "$record.tmp" && mv -f "$record.tmp" "$record"
