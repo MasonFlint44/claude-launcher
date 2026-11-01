@@ -1,7 +1,9 @@
 """Windows' host, the parts that aren't Win32 calls, so these run on any OS;
 tests/windows and tests/contract check the calls themselves."""
 
+import errno
 import re
+import sys
 
 import pytest
 
@@ -47,3 +49,34 @@ def test_a_reused_pid_isnt_claude(claude):
     assert claude.claude_running(42)  # without a start, the command line alone
     assert not claude.claude_running(7, started=1005.0)
     assert not claude.claude_running(True) and not claude.claude_running("42")
+
+
+class FakeMsvcrt:
+    LK_UNLCK, LK_NBLCK = 0, 2
+
+    def __init__(self, errors):
+        self.errors = list(errors)
+        self.calls = []
+
+    def locking(self, fd, mode, n):
+        self.calls.append(mode)
+        if mode == self.LK_NBLCK and self.errors:
+            raise OSError(self.errors.pop(0), "locked")
+
+
+@pytest.mark.parametrize("busy", [errno.EACCES, errno.EDEADLOCK])
+def test_lock_waits_while_another_process_holds_it(monkeypatch, tmp_path, busy):
+    fake = FakeMsvcrt([busy, busy])
+    monkeypatch.setitem(sys.modules, "msvcrt", fake)
+    monkeypatch.setattr(host.time, "sleep", lambda s: None)
+    with host.WindowsHost().lock(tmp_path / "lock"):
+        pass
+    assert fake.calls == [fake.LK_NBLCK] * 3 + [fake.LK_UNLCK]
+
+
+def test_lock_gives_up_on_other_errors(monkeypatch, tmp_path):
+    fake = FakeMsvcrt([errno.EBADF])
+    monkeypatch.setitem(sys.modules, "msvcrt", fake)
+    monkeypatch.setattr(host.time, "sleep", lambda s: pytest.fail("waited on an error that won't clear"))
+    with pytest.raises(OSError), host.WindowsHost().lock(tmp_path / "lock"):
+        pass

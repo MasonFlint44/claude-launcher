@@ -10,6 +10,7 @@ from __future__ import annotations
 import atexit
 import contextlib
 import ctypes
+import errno
 import functools
 import ntpath
 import os
@@ -246,7 +247,10 @@ class WindowsHost:
                 try:
                     msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
                     break
-                except OSError:
+                except OSError as e:
+                    # Held by another process; anything else won't clear by waiting.
+                    if e.errno not in (errno.EACCES, errno.EDEADLOCK):
+                        raise
                     time.sleep(0.02)
             try:
                 yield
