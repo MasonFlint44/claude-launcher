@@ -21,6 +21,10 @@ import posixpath
 import re
 
 _DRIVE = re.compile(r"[A-Za-z]:")
+# A share's root (\\\\srv\\share), or a server's (\\\\srv) as it's typed on the
+# way to one. Parsed here rather than by ntpath.splitdrive, which reads an
+# incomplete one differently before Python 3.12.
+_UNC_ROOT = re.compile(r"[\\/]{2}[^\\/]*(?:[\\/]+[^\\/]+)?")
 
 
 class PathText:
@@ -38,10 +42,7 @@ class PathText:
         stripped = head.rstrip(self.seps)
         if not stripped:
             return True
-        if not self.windows:
-            return False
-        drive, rest = ntpath.splitdrive(stripped)
-        return bool(drive) and not rest.strip(self.seps)
+        return self.windows and (_DRIVE.fullmatch(stripped) or _UNC_ROOT.fullmatch(stripped)) is not None
 
     def with_sep(self, directory: str) -> str:
         """`directory` ending in a separator, ready for a name: / stays /. On
@@ -63,6 +64,8 @@ class PathText:
 
     def name(self, path: str) -> str:
         """The last part of `path` (the path itself, for a root)."""
+        if self._is_root(path):
+            return path
         return self.path.basename(path.rstrip(self.seps)) or path
 
     def first_part(self, rest: str) -> tuple[str, str]:
@@ -77,14 +80,25 @@ class PathText:
         leading \\\\ is a network share and stays, and a drive on its own
         ends in a separator (C: is C:\\, \\\\srv\\share is \\\\srv\\share\\), so a
         root compares the same either way."""
+        if self.windows and path[:2] and all(c in self.seps for c in path[:2]):
+            return self._normal_unc(path)
         path = self.path.normpath(path)
         if self.windows:
-            drive, rest = ntpath.splitdrive(path)
-            if drive and not rest:
+            if _DRIVE.fullmatch(path):
                 path += self.sep
         elif path.startswith("//"):
             path = "/" + path.lstrip("/")
         return path
+
+    def _normal_unc(self, path: str) -> str:
+        """`normal` for \\\\server\\share\\...: the server and share as typed,
+        and what's below the share tidied. \\\\server on its own (typed on the
+        way to a share) is \\\\server\\, as on any Python."""
+        server, *parts = re.split(r"[\\/]+", path[2:])
+        if not parts or not parts[0]:
+            return "\\\\" + server + ("\\" if server else "")
+        share, rest = parts[0], "\\".join(parts[1:])
+        return "\\\\" + server + "\\" + share + ntpath.normpath("\\" + rest)
 
     def _key(self, path: str) -> str:
         """How two paths compare: Windows ignores case and which slash."""

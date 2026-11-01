@@ -59,6 +59,8 @@ def test_split_path(query, expected):
         ("E:/data/", "E:/"),
         ("\\\\srv\\share\\x\\", "\\\\srv\\share\\"),
         ("\\\\srv\\share\\", ""),
+        ("\\\\srv\\", ""),  # a server, typed on the way to a share
+        ("//srv/", ""),
         ("\\\\wsl.localhost\\Ubuntu\\home\\", "\\\\wsl.localhost\\Ubuntu\\"),
         ("~\\git\\", "~\\"),
         ("~\\", ""),
@@ -79,6 +81,13 @@ def test_up_a_level(query, expected):
         ("\\\\srv\\share", "\\\\srv\\share\\"),  # a share's root ends in a separator, as C:\\ does
         ("\\\\srv\\share\\", "\\\\srv\\share\\"),
         ("//srv/share/", "\\\\srv\\share\\"),
+        ("\\\\srv\\share\\a\\..\\..", "\\\\srv\\share\\"),  # nothing above a share's root
+        # A server on its own, as typed on the way to a share: the same on Python 3.10 and 3.12+,
+        # whose ntpath.splitdrive reads it differently.
+        ("\\\\srv", "\\\\srv\\"),
+        ("\\\\srv\\", "\\\\srv\\"),
+        ("//srv/", "\\\\srv\\"),
+        ("\\\\", "\\\\"),
     ],
 )
 def test_normal(path, expected):
@@ -160,7 +169,16 @@ def test_with_sep(path, expected):
 
 
 @pytest.mark.parametrize(
-    ("path", "expected"), [("C:\\a\\b", "b"), ("C:\\a\\b\\", "b"), ("D:/x/y", "y"), ("C:\\", "C:\\")]
+    ("path", "expected"),
+    [
+        ("C:\\a\\b", "b"),
+        ("C:\\a\\b\\", "b"),
+        ("D:/x/y", "y"),
+        ("C:\\", "C:\\"),
+        ("\\\\srv\\share\\", "\\\\srv\\share\\"),
+        ("\\\\srv\\", "\\\\srv\\"),
+        ("\\\\srv\\share\\x", "x"),
+    ],
 )
 def test_name(path, expected):
     assert w.name(path) == expected
