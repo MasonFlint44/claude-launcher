@@ -78,7 +78,6 @@ SHARED = (
     Reason("restart", "your computer restarted", "restart", 10),
     Reason("logout", "you logged out", "logout", 20),
 )
-REASONS = tuple(r.key for r in SHARED)
 
 
 def unknown(key: str) -> Reason:

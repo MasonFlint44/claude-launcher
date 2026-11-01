@@ -557,8 +557,7 @@ class Picker:
                     f"claude-launcher needs fzf {fzf.show(fzf.MIN_VERSION)} or newer, and found "
                     f"{fzf.show(version)}. Run {_installer()} in the claude-launcher repo to get one."
                 )
-            for name in ("accept", "sessions.json"):
-                self._file(name).unlink(missing_ok=True)
+            self._file("sessions.json").unlink(missing_ok=True)
             group = self.restart.sort()
             self.state = State(restored=_restored(group), fzf=path)
             self._from_platform(platform)
