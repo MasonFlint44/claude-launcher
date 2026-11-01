@@ -70,7 +70,7 @@ class LinuxHost:
         ticks = self._init_start()
         return start if ticks is None else start + ticks / os.sysconf("SC_CLK_TCK")
 
-    def claude_running(self, pid: object, started: float | None = None) -> bool:
+    def claude_running(self, pid: object, started: float | None = None, start_ticks: int | None = None) -> bool:
         if not isinstance(pid, int):
             return False
         try:
@@ -80,18 +80,29 @@ class LinuxHost:
             return False
         if not is_claude([a for a in argv if a]):
             return False
-        # A Claude that started well after the record did got the pid since.
-        began = self._process_start(pid)
-        return started is None or began is None or began <= started + _SAME_PROCESS
-
-    def _process_start(self, pid: int) -> float | None:
-        """When process `pid` started, as a Unix time."""
+        ticks = self._start_ticks(pid)
+        if start_ticks is not None:
+            # The hook's own reading of the same field: no clocks, which
+            # WSL's VM can't keep (it stands still while Windows sleeps,
+            # then its wall clock jumps ahead).
+            return ticks is None or ticks == start_ticks
+        # An older hook's record: a Claude that started well after the
+        # record did got the pid since.
+        if started is None or ticks is None:
+            return True
         try:
-            ticks = int(self._read(f"{pid}/stat").rpartition(") ")[2].split()[19])
             uptime = float(self._read("uptime").split()[0])
         except (OSError, IndexError, ValueError):
+            return True
+        return time.time() - uptime + ticks / os.sysconf("SC_CLK_TCK") <= started + _SAME_PROCESS
+
+    def _start_ticks(self, pid: int) -> int | None:
+        """When process `pid` started, in clock ticks since the kernel did
+        (field 22 of its stat, as the hook reads it)."""
+        try:
+            return int(self._read(f"{pid}/stat").rpartition(") ")[2].split()[19])
+        except (OSError, IndexError, ValueError):
             return None
-        return time.time() - uptime + ticks / os.sysconf("SC_CLK_TCK")
 
     def user(self) -> str:
         return pwd.getpwuid(os.getuid()).pw_name

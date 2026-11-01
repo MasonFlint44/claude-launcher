@@ -5,6 +5,14 @@ interactive Claude. An exit you chose (/exit, /clear, switching with /resume) de
 any other end (closing the tab, or the desktop closing every window) keeps it,
 with the time it ended.
 
+A record is one line of JSON (`Record.load` reads it and ignores keys it
+doesn't know): "session_id", "pid", "boot_id", "login_session" (the login
+session's ID, or ""), "started_at" (a Unix time), and once it ended
+"end_reason" and "ended_at". Optionally "start_ticks", when the process
+started in the platform's own units (Linux: field 22 of /proc/<pid>/stat),
+which the host matches exactly to tell its Claude from one that got the pid
+since; without it, the host compares "started_at" with a margin.
+
 `sort()` runs each time the picker opens and decides, for each record whose
 Claude has gone, whether a restart or a logout closed it. Both are an event
 with a start and an end, which the platform's event source provides (on
@@ -155,12 +163,17 @@ class Record:
     login_session: str
     started: float
     ended: float | None
+    # When the process started, in the platform's own units, matched exactly
+    # (Linux: clock ticks since boot). Optional: older hooks and Windows'
+    # don't write it.
+    start_ticks: int | None = None
 
     @classmethod
     def load(cls, path: Path) -> Record | None:
         data = _load(path) or {}
         try:
             ended = data.get("ended_at")
+            ticks = data.get("start_ticks")
             return cls(
                 session_id=str(data["session_id"]),
                 pid=data.get("pid"),
@@ -168,6 +181,7 @@ class Record:
                 login_session=str(data.get("login_session", "")),
                 started=float(data["started_at"]),
                 ended=None if ended is None else float(ended),
+                start_ticks=ticks if isinstance(ticks, int) and not isinstance(ticks, bool) else None,
             )
         except (KeyError, TypeError, ValueError):
             return None
@@ -256,7 +270,11 @@ class RestartState:
                 decided.append(path)
                 continue
             same_boot = record.boot_id == this_boot
-            if same_boot and record.ended is None and self.host.claude_running(record.pid, record.started):
+            if (
+                same_boot
+                and record.ended is None
+                and self.host.claude_running(record.pid, record.started, record.start_ticks)
+            ):
                 group.pop(record.session_id, None)  # it's open again
                 continue
             closed = self._closed_by(record, same_boot, now)

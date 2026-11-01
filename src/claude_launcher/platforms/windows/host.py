@@ -224,8 +224,9 @@ class WindowsHost:
     def boot_start(self, now: float) -> float:
         return now - _api().GetTickCount64() / 1000
 
-    def claude_running(self, pid: object, started: float | None = None) -> bool:
-        """`started`, the record's, tells a reused pid from its Claude."""
+    def claude_running(self, pid: object, started: float | None = None, start_ticks: int | None = None) -> bool:
+        """`started`, the record's, tells a reused pid from its Claude.
+        `start_ticks` is Linux's; Windows' hook doesn't write it."""
         if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
             return False
         argv = command_line(pid)

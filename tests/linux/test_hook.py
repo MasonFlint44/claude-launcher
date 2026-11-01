@@ -35,7 +35,7 @@ def run_hook(tmp_path):
             f"printf '%s' {shlex.quote(json.dumps(payload))} | {shlex.quote(str(HOOK))} {arg}\n"
             for arg, payload in events
         )
-        script += "echo $$ > pid; echo done\n"
+        script += "echo $$ > pid; cat /proc/$$/stat > stat; echo done\n"
         env = {
             "PATH": "/usr/bin:/bin",
             "HOME": str(tmp_path),
@@ -92,6 +92,20 @@ def test_start_writes_a_record(run_hook):
     assert record["boot_id"] == boot_id()
     assert record["login_session"] == Path("/proc/self/sessionid").read_text().strip().replace("4294967295", "")
     assert "ended_at" not in record
+
+
+def test_start_ticks_are_claudes_own(run_hook, tmp_path):
+    """The record's start_ticks are field 22 of Claude's /proc/<pid>/stat,
+    which LinuxHost matches exactly."""
+    [record] = run_hook(("start", {"session_id": SID})).values()
+    stat = (tmp_path / "stat").read_text()  # Claude's, saved while it ran
+    assert record["start_ticks"] == int(stat.rpartition(") ")[2].split()[19])
+    proc = tmp_path / "proc"
+    (proc / str(record["pid"])).mkdir(parents=True)
+    (proc / str(record["pid"]) / "stat").write_text(stat)
+    from claude_launcher.platforms.linux.host import LinuxHost
+
+    assert LinuxHost(str(proc))._start_ticks(record["pid"]) == record["start_ticks"]
 
 
 def test_closed_tab_keeps_the_record_with_its_end(run_hook):
@@ -174,6 +188,7 @@ def test_records_are_what_the_launcher_reads(run_hook, tmp_path):
     assert record.session_id == SID
     assert record.boot_id == normalize_boot_id(current().host.boot_id())
     assert record.ended is not None and record.started <= record.ended
+    assert record.start_ticks == records[name]["start_ticks"] and isinstance(record.start_ticks, int)
 
 
 VM_BOOT = "5e1c2a7b-0d4f-4e8a-9b3c-6f2d1e0a9c84"

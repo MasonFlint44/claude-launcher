@@ -65,3 +65,24 @@ def test_a_claude_that_got_the_pid_since_isnt_the_records(tmp_path, monkeypatch)
     assert host.claude_running(700)
     assert host.claude_running(700, started=boot + 101)  # its own record, written once it was up
     assert not host.claude_running(700, started=boot + 50)  # a record from before it started
+
+
+def test_a_sleep_in_wsl_doesnt_make_claude_another_process(tmp_path, monkeypatch):
+    # WSL's VM stands still while Windows sleeps (its uptime too), then its
+    # wall clock is stepped ahead: by the clocks, the Claude seems to have
+    # started 20 minutes after its own record.
+    import time
+
+    host = fake_proc(tmp_path)
+    boot = NOW - 5000
+    a_claude(tmp_path, 700, start_ticks=100 * HZ)
+    monkeypatch.setattr(time, "time", lambda: NOW + 1200)
+    assert host.claude_running(700, started=boot + 101, start_ticks=100 * HZ)
+    assert not host.claude_running(700, started=boot + 101)  # an older hook's record: the clocks are all it has
+
+
+def test_start_ticks_tell_a_claude_that_got_the_pid_since(tmp_path):
+    host = fake_proc(tmp_path, release="6.8.0-31-generic")
+    a_claude(tmp_path, 700, start_ticks=100 * HZ)
+    assert host.claude_running(700, started=NOW, start_ticks=100 * HZ)
+    assert not host.claude_running(700, started=NOW, start_ticks=100 * HZ - 1)  # exact, no margin

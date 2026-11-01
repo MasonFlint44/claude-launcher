@@ -252,3 +252,41 @@ class TestReasons:
         monkeypatch.setattr(platforms, "_current", platform("mine", reasons=(self.STOP,)))
         state = RestartState(claude_home.paths, FakeEvents([]), setup.host, now=lambda: NOW)
         assert state.ranks == {"restart": 10, "stop": 15, "logout": 20}
+
+
+@pytest.mark.parametrize(
+    ("extra", "ticks"),
+    [
+        ({"start_ticks": 12345}, 12345),
+        ({}, None),  # an older hook's, or Windows'
+        ({"start_ticks": "12345"}, None),
+        ({"start_ticks": True}, None),
+        ({"start_ticks": 1.5}, None),
+        ({"some_newer_key": [1, 2]}, None),  # keys it doesn't know are left alone
+    ],
+)
+def test_record_loads_start_ticks_if_there(tmp_path, extra, ticks):
+    from claude_launcher.restart import Record
+
+    path = tmp_path / "record"
+    data = {"session_id": "s", "pid": 7, "boot_id": THIS_BOOT, "login_session": "", "started_at": NOW, **extra}
+    path.write_text(json.dumps(data))
+    record = Record.load(path)
+    assert record is not None and record.start_ticks == ticks and record.started == NOW
+
+
+def test_the_host_gets_the_records_start_ticks(setup, claude_home):
+    asked = []
+
+    def running(pid, started=None, start_ticks=None):
+        asked.append((pid, started, start_ticks))
+        return True
+
+    setup.host.claude_running = running
+    sid = setup.session()
+    setup.record(sid, boot=THIS_BOOT, pid=100, started=NOW - 60)
+    path = claude_home.paths.open_records / f"{THIS_BOOT}_100"
+    path.write_text(json.dumps({**json.loads(path.read_text()), "start_ticks": 4321}))
+    setup.make().sort()
+    assert asked == [(100, NOW - 60, 4321)]
+    assert path.exists()  # still running: kept
