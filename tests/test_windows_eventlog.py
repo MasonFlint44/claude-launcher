@@ -163,6 +163,23 @@ def test_only_the_records_own_boot():
     assert [e.start for e in found] == [T + 100]
 
 
+def test_not_the_boot_before_a_claude_started_just_after_boot():
+    # Started 20 s after boot, so the boot before's last events are in the
+    # window read; this boot then crashed.
+    assert events([SHUTTING_DOWN(T - 30), BOOTED(T - 20), other(T + 300), BOOTED(T + 500)]) == [
+        Event(T + 300, T + 300, "restart")
+    ]
+    assert events([RESTART(T - 35), SHUTTING_DOWN(T - 30), BOOTED(T - 20), other(T + 300), BOOTED(T + 500)]) == [
+        Event(T + 300, T + 300, "restart")
+    ]
+    assert events([LOGOFF(T - 40), BOOTED(T - 20)], same_boot=True) == []
+
+
+def test_a_boot_just_before_the_record_is_its_own():
+    found = events([BOOTED(T - 30), RESTART(T + 100), SHUTTING_DOWN(T + 110), BOOTED(T + 130)])
+    assert found == [Event(T + 100, T + 110, "restart")]
+
+
 def test_the_last_restart_of_the_boot():
     # A restart that was begun, then called off, then begun again.
     found = events([RESTART(T + 50), RESTART(T + 100), SHUTTING_DOWN(T + 110), BOOTED(T + 130)])
