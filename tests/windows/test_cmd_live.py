@@ -62,8 +62,8 @@ def probe(tmp_path):
     return cmd
 
 
-def run_probe(cmd, *path):
-    env = {"SystemRoot": os.environ["SYSTEMROOT"], "PATH": os.pathsep.join(str(p) for p in path)}
+def run_probe(cmd, *path, **more):
+    env = {"SystemRoot": os.environ["SYSTEMROOT"], "PATH": os.pathsep.join(str(p) for p in path), **more}
     return subprocess.run(
         f'"{CMD}" /d /c "{cmd}"', env=env, capture_output=True, text=True, encoding="utf-8", timeout=30
     )
@@ -98,6 +98,20 @@ def test_py_before_the_store_python(probe, pythons):
 def test_too_old_then_py(probe, pythons):
     done = run_probe(probe, pythons["old"], py_dir())
     assert done.returncode == 0 and not ran(done, pythons["old"])
+
+
+def test_py_without_a_python_then_the_store_python(probe, pythons):
+    # A py launcher left behind by an uninstalled Python: here, one asked for
+    # a 3.x that isn't there.
+    none = {"PY_PYTHON3": "3.99"}
+    env = {"SystemRoot": os.environ["SYSTEMROOT"], **none}
+    py = os.path.join(py_dir(), "py.exe")
+    if (
+        subprocess.run([py, "-3", "-c", ""], env=env, capture_output=True, timeout=30).returncode
+        != windows_setup.PY_NONE
+    ):
+        pytest.skip("this py launcher doesn't exit 103 for a missing Python")
+    assert ran(run_probe(probe, pythons["store"], py_dir(), **none), pythons["store"])
 
 
 def test_no_python_at_all(probe, tmp_path):

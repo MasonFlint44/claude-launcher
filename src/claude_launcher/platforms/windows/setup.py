@@ -35,6 +35,11 @@ MIN_PYTHON = (3, 10)
 # An entry script's exit code when its Python is too old: the .cmd tries the
 # next Python. Unlike any code Claude or Python exits with.
 TOO_OLD = 9310
+# The py launcher's exit code when it has no Python to run ("No suitable
+# Python runtime found": a launcher left behind by an uninstalled Python).
+# The .cmd tries the next Python then, as on TOO_OLD. A script of ours that
+# exits 103 itself would run again with the next Python; Claude never has.
+PY_NONE = 103
 # Set while there's another Python left to try, so a too-old one says nothing.
 _FALLBACK = "CLAUDE_LAUNCHER_FALLBACK"
 _SHIM_MARK = "rem claude-launcher: "
@@ -45,14 +50,15 @@ _SHIM_MARK = "rem claude-launcher: "
 # or install-manager Python's alias), then the py launcher, then that
 # WindowsApps python.exe after all (whose message, if it's the stand-in, says
 # how to get Python). A Python the entry script finds too old exits TOO_OLD,
-# and the next one is tried; only that costs a second Python start. "-"
-# stands for none: cmd can't take part of a variable that isn't set.
+# and the next one is tried; so is the next after a py launcher with no Python
+# (PY_NONE). Only those cost a second Python start. "-" stands for none: cmd
+# can't take part of a variable that isn't set. E is the last exit code.
 # DisableDelayedExpansion: it may be on by default (the registry), or from
 # the hook's cmd /v:on, and would eat a "!" in a path.
 _RUN = """@echo off
 {mark}runs {name} beside it with Python {major}.{minor} or newer
 setlocal DisableDelayedExpansion
-set "A=-" & set "B=-" & set "C=-"
+set "A=-" & set "B=-" & set "C=-" & set "E=-"
 for %%P in (python.exe) do if not "%%~$PATH:P"=="" set "A=%%~$PATH:P"
 if /i not "%A:\\WindowsApps\\=%"=="%A%" (set "C=%A%" & set "A=-")
 for %%P in (py.exe) do if not "%%~$PATH:P"=="" set "B=%%~$PATH:P"
@@ -60,20 +66,22 @@ set "{fallback}="
 if not "%B%%C%"=="--" set "{fallback}=1"
 if "%A%"=="-" goto py
 "%A%" {options}"%~dp0{name}" %*
-if not "%errorlevel%"=="{too_old}" exit /b %errorlevel%
+set "E=%errorlevel%"
+if not "%E%"=="{too_old}" exit /b %E%
 :py
 set "{fallback}="
 if not "%C%"=="-" set "{fallback}=1"
 if "%B%"=="-" goto store
 "%B%" -3 {options}"%~dp0{name}" %*
-if not "%errorlevel%"=="{too_old}" exit /b %errorlevel%
+set "E=%errorlevel%"
+if not "%E%"=="{too_old}" if not "%E%"=="{py_none}" exit /b %E%
 :store
 set "{fallback}="
 if "%C%"=="-" goto none
 "%C%" {options}"%~dp0{name}" %*
 exit /b %errorlevel%
 :none
-if not "%A%%B%"=="--" exit /b {too_old}
+if "%E%"=="{too_old}" exit /b {too_old}
 echo claude-launcher needs Python {major}.{minor} or newer: https://www.python.org/downloads/ 1>&2
 exit /b 9009
 """
@@ -131,6 +139,7 @@ def run_cmd(name: str, options: str = "") -> str:
         minor=MIN_PYTHON[1],
         fallback=_FALLBACK,
         too_old=TOO_OLD,
+        py_none=PY_NONE,
     )
     return text.replace("\n", "\r\n")
 

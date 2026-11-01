@@ -89,6 +89,7 @@ def test_nothing_names_a_python(installed):
         assert "python.exe" in text and "py.exe" in text and "\\WindowsApps\\" in text
         assert f'"%A%" {options}"%~dp0{name}.py" %*' in text
         assert f'"%B%" -3 {options}"%~dp0{name}.py" %*' in text
+        assert f'if not "%E%"=="{TOO_OLD}" if not "%E%"=="{windows_setup.PY_NONE}" exit /b %E%' in text
         assert "setlocal DisableDelayedExpansion" in text
         script = (installed.data_dir / f"{name}.py").read_bytes().decode("ascii")
         assert ascii(str(entry)) in script and sys.executable not in script
