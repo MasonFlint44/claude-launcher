@@ -208,13 +208,17 @@ class WindowsEvents:
         found = self.log.since(record.started - _BEFORE)
         if found is None:
             return None
-        # The record's boot ends where the next one starts. By time, not by
-        # the log's order: a clock set wrong, then right, leaves events from
-        # "later" earlier in the log.
+        # The record's boot runs from the last start at or before it to the
+        # next one: a Claude started just after boot mustn't see the boot
+        # before's shutdown. By time, not by the log's order: a clock set
+        # wrong, then right, leaves events from "later" earlier in the log.
         found = sorted(found, key=lambda e: e.at)
-        boots = [e.at for e in found if (e.provider, e.id) == (KERNEL, BOOTED) and e.at > record.started]
-        next_boot = boots[0] if boots else None
-        in_boot = [e for e in found if next_boot is None or e.at < next_boot]
+        boots = [e.at for e in found if (e.provider, e.id) == (KERNEL, BOOTED)]
+        this_boot = max((at for at in boots if at <= record.started), default=None)
+        next_boot = min((at for at in boots if at > record.started), default=None)
+        in_boot = [
+            e for e in found if (this_boot is None or e.at >= this_boot) and (next_boot is None or e.at < next_boot)
+        ]
         sid = self.sid()
         events = [
             Event(e.at, e.at, "logout")

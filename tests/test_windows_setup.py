@@ -3,6 +3,7 @@ Files only, so these run on any OS."""
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -87,11 +88,30 @@ def test_nothing_names_a_python(installed):
     for name, entry, options in (("claude-launcher", LAUNCHER, ""), ("claude-session-hook", HOOK, "-I ")):
         text = (installed.data_dir / f"{name}.cmd").read_text()
         assert "python.exe" in text and "py.exe" in text and "\\WindowsApps\\" in text
-        assert f'"%A%" {options}"%~dp0{name}.py" %*' in text
-        assert f'"%B%" -3 {options}"%~dp0{name}.py" %*' in text
+        assert f'"%CLAUDE_LAUNCHER_PYTHON%" {options}"%~dp0{name}.py" %*' in text
+        assert f'"%CLAUDE_LAUNCHER_PY%" -3 {options}"%~dp0{name}.py" %*' in text
+        assert f'"%CLAUDE_LAUNCHER_STORE%" {options}"%~dp0{name}.py" %*' in text
+        assert 'if not "%CLAUDE_LAUNCHER_EXIT%"=="9310" if not "%CLAUDE_LAUNCHER_EXIT%"=="103" exit' in text
         assert "setlocal DisableDelayedExpansion" in text
         script = (installed.data_dir / f"{name}.py").read_bytes().decode("ascii")
         assert ascii(str(entry)) in script and sys.executable not in script
+
+
+def test_the_cmds_own_variables_never_reach_python(installed):
+    # Each line that runs Python empties them first: its %...% were already
+    # expanded when cmd read it. And each is unmistakably ours.
+    list(installed.install(None, None))
+    for name in ("claude-launcher", "claude-session-hook"):
+        lines = (installed.data_dir / f"{name}.cmd").read_text().splitlines()
+        names = set(re.findall(r'set "([A-Za-z_]+)=', "\n".join(lines)))
+        assert names and all(n.startswith("CLAUDE_LAUNCHER_") for n in names)
+        helpers = names - {"CLAUDE_LAUNCHER_FALLBACK"}  # for the entry script, which takes it out
+        runs = [line for line in lines if '"%~dp0' in line]
+        assert len(runs) == 3
+        for line in runs:
+            cleared, command = line.split(' & "%', 1)
+            assert set(re.findall(r'set "([A-Za-z_]+)="', cleared)) == helpers
+            assert "set " not in command
 
 
 def test_the_hook_names_its_cmd_by_localappdata(installed):
@@ -172,6 +192,15 @@ def test_a_python_too_old_says_so_unless_another_is_left(tmp_path, monkeypatch):
     assert quiet.returncode == EXIT_TOO_OLD and quiet.stderr == ""
 
 
+@pytest.mark.parametrize("code", [TOO_OLD, windows_setup.PY_NONE])
+def test_a_script_that_ran_never_exits_with_a_retry_code(tmp_path, code):
+    # The .cmd would run it again with the next Python.
+    target = tmp_path / "probe.py"
+    target.write_text(f"import sys\nprint('ran')\nsys.exit({code})\n")
+    done = run_entry(tmp_path, target)
+    assert done.returncode == windows_setup.RAN_INSTEAD and done.stdout == "ran\n"
+
+
 def test_profile_guid_never_changes(setup, env):
     # Windows Terminal keeps the user's own changes to the profile under it.
     list(setup.install(None, None))
@@ -191,7 +220,7 @@ def test_own_icon_kept_until_default(setup, env, tmp_path):
 
 
 def test_icon_must_be_a_png(setup, tmp_path):
-    with pytest.raises(ValueError, match="png"):
+    with pytest.raises(ValueError, match="^the icon for Windows Terminal must be a .png$"):
         list(setup.install(None, str(tmp_path / "x.svg")))
 
 
@@ -214,4 +243,15 @@ def test_uninstall_takes_it_all_out(setup, env):
 
 
 def test_terminal_option_is_for_linux(setup):
-    assert any("--terminal is for Linux" in line for line in setup.install("ghostty", None))
+    assert any("--terminal is for Linux desktops; on Windows" in line for line in setup.install("ghostty", None))
+
+
+def test_icon_can_be_the_copy_already_made(setup, env, tmp_path):
+    # Run again with --icon naming the installed copy, or the profile's own.
+    mine = tmp_path / "mine.png"
+    mine.write_bytes(b"png")
+    list(setup.install(None, str(mine)))
+    list(setup.install(None, str(setup.data_dir / "icon.png")))
+    shown = Path(fragment(env)["profiles"][0]["icon"])
+    list(setup.install(None, str(shown)))
+    assert Path(fragment(env)["profiles"][0]["icon"]).read_bytes() == b"png"

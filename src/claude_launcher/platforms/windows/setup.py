@@ -20,7 +20,6 @@ from __future__ import annotations
 import ntpath
 import os
 import re
-import shutil
 from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 
@@ -35,6 +34,15 @@ MIN_PYTHON = (3, 10)
 # An entry script's exit code when its Python is too old: the .cmd tries the
 # next Python. Unlike any code Claude or Python exits with.
 TOO_OLD = 9310
+# The py launcher's exit code when it has no Python to run ("No suitable
+# Python runtime found": one left behind by an uninstalled Python). The .cmd
+# tries the next Python then too.
+PY_NONE = 103
+# So the .cmd never runs a script a second time, the entry script exits this
+# instead of TOO_OLD or PY_NONE once its target has run (the launcher passes
+# on Claude's exit code, which could be either). Still a failure to Windows
+# Terminal, and the hook always exits 0.
+RAN_INSTEAD = 1
 # Set while there's another Python left to try, so a too-old one says nothing.
 _FALLBACK = "CLAUDE_LAUNCHER_FALLBACK"
 _SHIM_MARK = "rem claude-launcher: "
@@ -45,38 +53,56 @@ _SHIM_MARK = "rem claude-launcher: "
 # or install-manager Python's alias), then the py launcher, then that
 # WindowsApps python.exe after all (whose message, if it's the stand-in, says
 # how to get Python). A Python the entry script finds too old exits TOO_OLD,
-# and the next one is tried; only that costs a second Python start. "-"
-# stands for none: cmd can't take part of a variable that isn't set.
+# and the next one is tried; so is the next after a py launcher with no Python
+# (PY_NONE). Only those cost a second Python start. "-" stands for none: cmd
+# can't take part of a variable that isn't set.
+# The helper variables are ours by name and never reach Python (or Claude):
+# the line that runs Python empties them first, but its %...% were expanded
+# when cmd read the line, before any of it ran. So they're found again
+# ({find}, a PATH search: no process) after a Python that was too old.
 # DisableDelayedExpansion: it may be on by default (the registry), or from
 # the hook's cmd /v:on, and would eat a "!" in a path.
+_FIND = """set "{a}=-" & set "{b}=-" & set "{c}=-"
+for %%P in (python.exe) do if not "%%~$PATH:P"=="" set "{a}=%%~$PATH:P"
+if /i not "%{a}:\\WindowsApps\\=%"=="%{a}%" (set "{c}=%{a}%" & set "{a}=-")
+for %%P in (py.exe) do if not "%%~$PATH:P"=="" set "{b}=%%~$PATH:P"
+"""
+_CLEAR = 'set "{a}=" & set "{b}=" & set "{c}=" & set "{e}=" & '
 _RUN = """@echo off
 {mark}runs {name} beside it with Python {major}.{minor} or newer
 setlocal DisableDelayedExpansion
-set "A=-" & set "B=-" & set "C=-"
-for %%P in (python.exe) do if not "%%~$PATH:P"=="" set "A=%%~$PATH:P"
-if /i not "%A:\\WindowsApps\\=%"=="%A%" (set "C=%A%" & set "A=-")
-for %%P in (py.exe) do if not "%%~$PATH:P"=="" set "B=%%~$PATH:P"
+set "{e}="
+{find}set "{fallback}="
+if not "%{b}%%{c}%"=="--" set "{fallback}=1"
+if "%{a}%"=="-" goto py
+{clear}"%{a}%" {options}"%~dp0{name}" %*
+set "{e}=%errorlevel%"
+if not "%{e}%"=="{too_old}" exit /b %{e}%
+{find}:py
 set "{fallback}="
-if not "%B%%C%"=="--" set "{fallback}=1"
-if "%A%"=="-" goto py
-"%A%" {options}"%~dp0{name}" %*
-if not "%errorlevel%"=="{too_old}" exit /b %errorlevel%
-:py
+if not "%{c}%"=="-" set "{fallback}=1"
+if "%{b}%"=="-" goto store
+{clear}"%{b}%" -3 {options}"%~dp0{name}" %*
+set "{e}=%errorlevel%"
+if not "%{e}%"=="{too_old}" if not "%{e}%"=="{py_none}" exit /b %{e}%
+{find}:store
 set "{fallback}="
-if not "%C%"=="-" set "{fallback}=1"
-if "%B%"=="-" goto store
-"%B%" -3 {options}"%~dp0{name}" %*
-if not "%errorlevel%"=="{too_old}" exit /b %errorlevel%
-:store
-set "{fallback}="
-if "%C%"=="-" goto none
-"%C%" {options}"%~dp0{name}" %*
+if "%{c}%"=="-" goto none
+{clear}"%{c}%" {options}"%~dp0{name}" %*
 exit /b %errorlevel%
 :none
-if not "%A%%B%"=="--" exit /b {too_old}
+if "%{e}%"=="{too_old}" exit /b {too_old}
 echo claude-launcher needs Python {major}.{minor} or newer: https://www.python.org/downloads/ 1>&2
 exit /b 9009
 """
+# The helper variables' names: the first python.exe, py.exe, the
+# WindowsApps python.exe, and the last exit code.
+_VARS = {
+    "a": "CLAUDE_LAUNCHER_PYTHON",
+    "b": "CLAUDE_LAUNCHER_PY",
+    "c": "CLAUDE_LAUNCHER_STORE",
+    "e": "CLAUDE_LAUNCHER_EXIT",
+}
 
 # The entry script: as old a Python as can run it says what's wrong (or lets
 # the .cmd try the next one), then the repo's script runs as __main__ with its
@@ -96,7 +122,13 @@ os.environ.pop("{fallback}", None)
 TARGET = {target}
 with open(TARGET, "rb") as f:
     code = compile(f.read(), TARGET, "exec")
-exec(code, {{"__name__": "__main__", "__file__": TARGET}})
+try:
+    exec(code, {{"__name__": "__main__", "__file__": TARGET}})
+except SystemExit as e:
+    # The .cmd would run it again with the next Python.
+    if e.code in ({too_old}, {py_none}):
+        sys.exit({ran_instead})
+    raise
 """
 
 # claude-launcher.cmd on PATH: hands over to the one in the data directory,
@@ -124,6 +156,9 @@ def run_cmd(name: str, options: str = "") -> str:
     """A .cmd that runs the entry script `name` beside it with Python 3.10+.
     Python's `options` (like "-I") go before the script. Marked as ours."""
     text = _RUN.format(
+        find=_FIND.format(**_VARS),
+        clear=_CLEAR.format(**_VARS),
+        **_VARS,
         mark=_SHIM_MARK,
         name=name,
         options=options + " " if options else "",
@@ -131,6 +166,7 @@ def run_cmd(name: str, options: str = "") -> str:
         minor=MIN_PYTHON[1],
         fallback=_FALLBACK,
         too_old=TOO_OLD,
+        py_none=PY_NONE,
     )
     return text.replace("\n", "\r\n")
 
@@ -144,6 +180,8 @@ def entry_script(target: Path) -> str:
         minor=MIN_PYTHON[1],
         fallback=_FALLBACK,
         too_old=TOO_OLD,
+        py_none=PY_NONE,
+        ran_instead=RAN_INSTEAD,
     )
 
 
@@ -231,7 +269,7 @@ class WindowsSetup:
 
     def install(self, terminal_names: str | None, icon: str | None) -> Iterator[str]:
         if terminal_names:
-            yield "warning: --terminal is for Linux; on Windows the launcher opens in Windows Terminal"
+            yield "warning: --terminal is for Linux desktops; on Windows the launcher opens in Windows Terminal"
         self.data_dir.mkdir(parents=True, exist_ok=True)
         files = {
             "claude-session-hook.py": entry_script(HOOK),
@@ -268,9 +306,9 @@ class WindowsSetup:
             kept.unlink(missing_ok=True)
         elif icon:
             if not icon.lower().endswith(".png"):
-                raise ValueError("on Windows, --icon takes a .png")
+                raise ValueError("the icon for Windows Terminal must be a .png")
             kept.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(icon, kept)
+            terminal.copy_icon(icon, kept)
         return kept if kept.is_file() else DEFAULT_ICON
 
     def check(self) -> None:

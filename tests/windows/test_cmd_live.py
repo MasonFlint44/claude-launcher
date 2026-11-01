@@ -62,8 +62,8 @@ def probe(tmp_path):
     return cmd
 
 
-def run_probe(cmd, *path):
-    env = {"SystemRoot": os.environ["SYSTEMROOT"], "PATH": os.pathsep.join(str(p) for p in path)}
+def run_probe(cmd, *path, **more):
+    env = {"SystemRoot": os.environ["SYSTEMROOT"], "PATH": os.pathsep.join(str(p) for p in path), **more}
     return subprocess.run(
         f'"{CMD}" /d /c "{cmd}"', env=env, capture_output=True, text=True, encoding="utf-8", timeout=30
     )
@@ -98,6 +98,53 @@ def test_py_before_the_store_python(probe, pythons):
 def test_too_old_then_py(probe, pythons):
     done = run_probe(probe, pythons["old"], py_dir())
     assert done.returncode == 0 and not ran(done, pythons["old"])
+
+
+def test_py_without_a_python_then_the_store_python(probe, pythons):
+    # A py launcher left behind by an uninstalled Python: here, one asked for
+    # a 3.x that isn't there.
+    none = {"PY_PYTHON3": "3.99"}
+    env = {"SystemRoot": os.environ["SYSTEMROOT"], **none}
+    py = os.path.join(py_dir(), "py.exe")
+    if (
+        subprocess.run([py, "-3", "-c", ""], env=env, capture_output=True, timeout=30).returncode
+        != windows_setup.PY_NONE
+    ):
+        pytest.skip("this py launcher doesn't exit 103 for a missing Python")
+    assert ran(run_probe(probe, pythons["store"], py_dir(), **none), pythons["store"])
+
+
+def test_a_script_that_exits_103_runs_once(tmp_path, pythons):
+    # py runs it and passes on its 103, which the .cmd must not take for py
+    # having no Python: it would run it again with the store's python.exe.
+    ran_log = tmp_path / "ran.txt"
+    target = tmp_path / "target.py"
+    target.write_text(
+        f"import sys\nopen({str(ran_log)!r}, 'a').write('ran\\n')\nsys.exit({windows_setup.PY_NONE})\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "entry.py").write_text(windows_setup.entry_script(target), encoding="ascii")
+    cmd = tmp_path / "entry.cmd"
+    cmd.write_text(windows_setup.run_cmd("entry.py"), encoding="ascii", newline="")
+    done = run_probe(cmd, pythons["store"], py_dir())
+    assert done.returncode == windows_setup.RAN_INSTEAD, done.stderr
+    assert ran_log.read_text() == "ran\n"
+
+
+def test_the_cmds_own_variables_stay_out_of_pythons_environment(tmp_path, pythons):
+    (tmp_path / "env.py").write_text(
+        "import os, sys\n"
+        f"if os.sep + 'old' + os.sep in sys.executable: sys.exit({windows_setup.TOO_OLD})\n"
+        "print(sorted(k for k in os.environ if k.upper().startswith('CLAUDE_LAUNCHER_')))\n",
+        encoding="utf-8",
+    )
+    cmd = tmp_path / "env.cmd"
+    cmd.write_text(windows_setup.run_cmd("env.py"), encoding="ascii", newline="")
+    # Run by each of the three, two of them after a Python that was too old.
+    for path in ([pythons["real"]], [pythons["old"], py_dir()], [pythons["old"], pythons["store"]]):
+        done = run_probe(cmd, *path)
+        assert done.returncode == 0, done.stderr
+        assert done.stdout.strip() in ("[]", "['CLAUDE_LAUNCHER_FALLBACK']")
 
 
 def test_no_python_at_all(probe, tmp_path):

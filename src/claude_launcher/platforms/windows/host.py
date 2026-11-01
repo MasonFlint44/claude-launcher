@@ -10,6 +10,7 @@ from __future__ import annotations
 import atexit
 import contextlib
 import ctypes
+import errno
 import functools
 import ntpath
 import os
@@ -99,9 +100,9 @@ def _declare(dll, name: str, restype, *argtypes):
 
 @functools.cache
 def _api() -> SimpleNamespace:
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32")
     ntdll = ctypes.WinDLL("ntdll")
-    shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+    shell32 = ctypes.WinDLL("shell32")
     dword_p, filetime_p = ctypes.POINTER(wintypes.DWORD), ctypes.POINTER(wintypes.FILETIME)
     return SimpleNamespace(
         OpenProcess=_declare(kernel32, "OpenProcess", _HANDLE, wintypes.DWORD, wintypes.BOOL, wintypes.DWORD),
@@ -215,11 +216,11 @@ _KEY_EVENT = 0x0001
 
 
 class WindowsHost:
-    def boot_id(self) -> str:
-        return boot_id()
-
     def __init__(self) -> None:
         self._output_mode: int | None = None  # the console's, before open_tty changed it
+
+    def boot_id(self) -> str:
+        return boot_id()
 
     def boot_start(self, now: float) -> float:
         return now - _api().GetTickCount64() / 1000
@@ -246,7 +247,10 @@ class WindowsHost:
                 try:
                     msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
                     break
-                except OSError:
+                except OSError as e:
+                    # Held by another process; anything else won't clear by waiting.
+                    if e.errno not in (errno.EACCES, errno.EDEADLOCK):
+                        raise
                     time.sleep(0.02)
             try:
                 yield
