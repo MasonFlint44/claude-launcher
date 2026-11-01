@@ -8,7 +8,6 @@ profile is skipped with a warning rather than failing the install."""
 from __future__ import annotations
 
 import os
-import shutil
 import uuid
 from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
@@ -116,7 +115,7 @@ class WslSetup:
             if not os.path.isfile(icon):
                 raise ValueError(f"not a file: {icon}")
             kept.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(icon, kept)
+            terminal.copy_icon(icon, kept)
         return kept if kept.is_file() else DEFAULT_ICON
 
     def install(self, terminal_names: str | None, icon: str | None) -> Iterator[str]:
