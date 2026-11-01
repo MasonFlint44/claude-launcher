@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from claude_launcher import install
+from conftest import FakePlatform
 
 
 class FakeSetup:
@@ -44,19 +45,6 @@ class FakeSetup:
             raise self.uninstall_fails
 
     commands = {}
-
-
-class FakePlatform:
-    fzf_os = "linux"
-
-    def __init__(self, setup, data):
-        self._setup, self.data = setup, data
-
-    def setup(self):
-        return self._setup
-
-    def data_dir(self, env):
-        return self.data
 
 
 @pytest.fixture

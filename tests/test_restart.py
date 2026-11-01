@@ -9,11 +9,8 @@ import pytest
 from claude_launcher import restart
 from claude_launcher.platforms import Event
 from claude_launcher.restart import KEEP, LEAD, SHARED, TAIL, Closed, Reason, RestartState, reasons, unknown
-from conftest import FakeEvents, FakeHost, conversation
+from conftest import LAST_BOOT, NOW, THIS_BOOT, FakeEvents, FakeHost, conversation, write_record
 
-NOW = 1_800_000_000.0
-THIS_BOOT = "1" * 32
-LAST_BOOT = "2" * 32
 BOOT_STARTED = NOW - 600
 RESTART = Event(NOW - 700, NOW - 690, "restart")
 LOGOUT = Event(NOW - 2000, NOW - 1990, "logout")
@@ -33,11 +30,7 @@ def setup(claude_home):
         )
 
     def record(session_id, boot=LAST_BOOT, pid=100, started=NOW - 3600, ended=None, name=None):
-        claude_home.paths.open_records.mkdir(parents=True, exist_ok=True)
-        rec = {"session_id": session_id, "pid": pid, "boot_id": boot, "login_session": "", "started_at": started}
-        if ended is not None:
-            rec.update(end_reason="other", ended_at=ended)
-        (claude_home.paths.open_records / (name or f"{boot}_{pid}")).write_text(json.dumps(rec))
+        write_record(claude_home.paths, session_id, boot, pid, started, ended, name=name)
 
     def session():
         return claude_home.log("/tmp", conversation("x", "/tmp"))

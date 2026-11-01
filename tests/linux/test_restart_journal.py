@@ -16,9 +16,8 @@ from claude_launcher.platforms.linux.journal import (
     JournalEvents,
 )
 from claude_launcher.restart import KEEP, Closed, RestartState
-from conftest import FakeHost, conversation
+from conftest import NOW, FakeHost, conversation, write_record
 
-NOW = 1_800_000_000.0
 THIS_BOOT = "11111111-1111-1111-1111-111111111111"
 LAST_BOOT = "22222222-2222-2222-2222-222222222222"
 BOOT_STARTED = NOW - 600  # this boot began ten minutes ago
@@ -142,17 +141,7 @@ def setup(claude_home):
         )
 
     def record(pid, session_id, boot=LAST_BOOT, started=NOW - 3600, ended=None, login_session="1", name=None):
-        claude_home.paths.open_records.mkdir(parents=True, exist_ok=True)
-        rec = {
-            "session_id": session_id,
-            "pid": pid,
-            "boot_id": boot,
-            "login_session": login_session,
-            "started_at": started,
-        }
-        if ended is not None:
-            rec.update(end_reason="other", ended_at=ended)
-        (claude_home.paths.open_records / (name or f"{boot}_{pid}")).write_text(json.dumps(rec))
+        write_record(claude_home.paths, session_id, boot, pid, started, ended, name=name, login_session=login_session)
 
     def session():
         return claude_home.log("/tmp", conversation("x", "/tmp"))

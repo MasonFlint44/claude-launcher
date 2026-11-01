@@ -18,7 +18,7 @@ from claude_launcher.platforms.windows.setup import DEFAULT_ICON
 from claude_launcher.platforms.wsl.events import WslEvents
 from claude_launcher.platforms.wsl.interop import Interop
 from claude_launcher.platforms.wsl.setup import WslSetup
-from conftest import FakeHost
+from conftest import FakeHost, FakePlatform
 
 LOCAL = "C:\\Users\\José\\AppData\\Local"
 
@@ -295,6 +295,16 @@ def test_icon_is_kept_and_remembered(windows, home, tmp_path):
     assert shown.read_bytes() == DEFAULT_ICON.read_bytes()
 
 
+def test_icon_can_be_the_copy_already_made(windows, home, tmp_path):
+    # Run again with --icon naming the installed copy.
+    mine = tmp_path / "mine.png"
+    mine.write_bytes(b"png")
+    setup = make(windows, home)
+    list(setup.install(None, str(mine)))
+    list(setup.install(None, str(setup.data_dir / "icon.png")))
+    assert (setup.data_dir / "icon.png").read_bytes() == b"png"
+
+
 @pytest.mark.parametrize("name", ["mine.svg", "mine.ico", "missing.png"])
 def test_icon_must_be_a_png_file(windows, home, tmp_path, name):
     icon = tmp_path / name
@@ -306,18 +316,6 @@ def test_icon_must_be_a_png_file(windows, home, tmp_path, name):
 
 
 # --- Through the installer ---------------------------------------------------
-
-
-class FakePlatform:
-    def __init__(self, setup, data):
-        self._setup, self.data = setup, data
-        self.fzf_os = "linux"
-
-    def setup(self):
-        return self._setup
-
-    def data_dir(self, env):
-        return self.data
 
 
 @pytest.fixture

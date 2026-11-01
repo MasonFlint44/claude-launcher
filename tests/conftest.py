@@ -149,6 +149,48 @@ class FakeEvents:
         return None if self.found is None else list(self.found)
 
 
+class FakePlatform:
+    """A Platform for the installer's steps: a given Setup and data directory."""
+
+    fzf_os = "linux"
+
+    def __init__(self, setup, data):
+        self._setup, self.data = setup, data
+
+    def setup(self):
+        return self._setup
+
+    def data_dir(self, env):
+        return self.data
+
+
+# A fixed "now" and two boots, for the restart tests.
+NOW = 1_800_000_000.0
+THIS_BOOT, LAST_BOOT = "1" * 32, "2" * 32
+
+
+def write_record(
+    paths: Paths,
+    session_id: str,
+    boot: str,
+    pid: int,
+    started: float,
+    ended: float | None = None,
+    name: str | None = None,
+    **extra,
+) -> Path:
+    """Write a session hook's record, as `restart.Record` reads it. `ended`
+    makes it an exit that wasn't chosen; `extra` adds or replaces keys."""
+    paths.open_records.mkdir(parents=True, exist_ok=True)
+    rec = {"session_id": session_id, "pid": pid, "boot_id": boot, "login_session": "", "started_at": started}
+    if ended is not None:
+        rec.update(end_reason="other", ended_at=ended)
+    rec.update(extra)
+    path = paths.open_records / (name or f"{boot}_{pid}")
+    path.write_text(json.dumps(rec))
+    return path
+
+
 # tests/<platform>/ holds one platform's own tests, and its RUNS_ON file the
 # sys.platform prefix they run on (a fork adds its own directory and file).
 RUNS_ON = "RUNS_ON"

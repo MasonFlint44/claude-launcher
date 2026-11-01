@@ -45,9 +45,10 @@ def test_linux(fresh, monkeypatch):
     assert platforms.current() is platforms.current()
 
 
-def test_unsupported(fresh, monkeypatch):
-    monkeypatch.setattr(sys, "platform", "plan9")
-    with pytest.raises(platforms.Unsupported, match="plan9"):
+@pytest.mark.parametrize("name", ["darwin", "plan9"])
+def test_unsupported(fresh, monkeypatch, name):
+    monkeypatch.setattr(sys, "platform", name)
+    with pytest.raises(platforms.Unsupported, match=name):
         platforms.current()
 
 

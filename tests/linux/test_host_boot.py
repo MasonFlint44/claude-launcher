@@ -6,9 +6,9 @@ import os
 import pytest
 
 from claude_launcher.platforms.linux.host import LinuxHost
+from conftest import NOW
 
 VM_BOOT = "5e1c2a7b-0d4f-4e8a-9b3c-6f2d1e0a9c84"
-NOW = 1_800_000_000.0
 HZ = os.sysconf("SC_CLK_TCK")
 
 
