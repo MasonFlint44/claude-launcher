@@ -11,10 +11,9 @@ from claude_launcher.picker import Pick, Picker
 from claude_launcher.restart import Reason, RestartState
 from claude_launcher.text import strip_ansi, width
 from claude_launcher.theme import Theme
-from conftest import FakeEvents, FakeHost, conversation, log_dirs_for, posix_only
+from conftest import NOW, FakeEvents, FakeHost, conversation, log_dirs_for, posix_only
 
 S = os.sep  # the separator the picker builds paths with
-NOW = 1_800_000_000.0
 
 
 def closed(at, why="restart"):

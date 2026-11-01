@@ -2,8 +2,6 @@
 own counted as a restart. WSL is Linux, so these are with Linux's tests;
 they use fakes for Windows' side."""
 
-import json
-
 import pytest
 
 from claude_launcher import platforms
@@ -11,11 +9,9 @@ from claude_launcher.platforms import Event
 from claude_launcher.platforms.wsl import is_wsl
 from claude_launcher.platforms.wsl.events import WslEvents
 from claude_launcher.restart import Closed, Record, RestartState
-from conftest import FakeHost, conversation
+from conftest import LAST_BOOT, NOW, THIS_BOOT, FakeHost, conversation, write_record
 
-NOW = 1_800_000_000.0
 WSL_STARTED = NOW - 300  # this WSL boot
-THIS_BOOT, LAST_BOOT = "1" * 32, "2" * 32
 
 
 @pytest.mark.parametrize(
@@ -48,7 +44,7 @@ def test_wsl_is_picked_inside_wsl(monkeypatch):
     assert platforms.current().name == "wsl"
 
 
-class FakeWindows:
+class FakeWindowsEvents:
     def __init__(self, found):
         self.found, self.asked = found, []
 
@@ -59,7 +55,7 @@ class FakeWindows:
 
 def source(found):
     host = FakeHost(boot=THIS_BOOT, started=lambda now: WSL_STARTED)
-    return WslEvents(host, FakeWindows(found), now=lambda: NOW)
+    return WslEvents(host, FakeWindowsEvents(found), now=lambda: NOW)
 
 
 WINDOWS_RESTART = Event(NOW - 900, NOW - 895, "restart")
@@ -87,20 +83,10 @@ def test_without_interop_wsl_stopping_still_counts():
 @pytest.fixture
 def sort(claude_home):
     def run(*records, windows=()):
-        claude_home.paths.open_records.mkdir(parents=True, exist_ok=True)
         ids = []
         for i, ended in enumerate(records):
             sid = claude_home.log("/tmp", conversation(f"s{i}", "/tmp"))
-            rec = {
-                "session_id": sid,
-                "pid": 100 + i,
-                "boot_id": LAST_BOOT,
-                "login_session": "",
-                "started_at": NOW - 3600,
-            }
-            if ended is not None:
-                rec.update(end_reason="other", ended_at=ended)
-            (claude_home.paths.open_records / f"{LAST_BOOT}_{100 + i}").write_text(json.dumps(rec))
+            write_record(claude_home.paths, sid, LAST_BOOT, 100 + i, NOW - 3600, ended)
             ids.append(sid)
         s = source(windows)
         state = RestartState(claude_home.paths, s, s.host, now=lambda: NOW)
@@ -125,7 +111,7 @@ def test_a_logoff_is_said_over_wsl_stopping(claude_home):
     # A Claude that ended at a logoff, with WSL starting again moments later.
     logoff = Event(NOW - 3000, NOW - 3000, "logout")
     host = FakeHost(boot=THIS_BOOT, started=lambda now: NOW - 2999)
-    state = RestartState(claude_home.paths, WslEvents(host, FakeWindows([logoff]), now=lambda: NOW), host)
+    state = RestartState(claude_home.paths, WslEvents(host, FakeWindowsEvents([logoff]), now=lambda: NOW), host)
     record = Record("s", 1, LAST_BOOT, "", NOW - 3600, ended=NOW - 3001)
     assert state._closed_by(record, False, NOW) == Closed(logoff.start, "logout")
 
@@ -140,7 +126,7 @@ def test_one_wsl_stop_for_every_record_though_the_uptime_moves():
     # reads: the sessions one stop closed should share one time.
     clock = iter([NOW, NOW + 0.7, NOW + 1.4])
     host = FakeHost(boot=THIS_BOOT, started=lambda now: now - 300)
-    s = WslEvents(host, FakeWindows([]), now=lambda: next(clock))
+    s = WslEvents(host, FakeWindowsEvents([]), now=lambda: next(clock))
     first = s.events(None, same_boot=False)
     second = s.events(None, same_boot=False)
     assert first == second == [Event(NOW - 300, NOW - 300, "wsl-stop")]
