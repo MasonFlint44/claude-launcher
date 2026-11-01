@@ -2,9 +2,11 @@
 tests/linux/test_restart_journal.py has the rule with Linux's own events."""
 
 import json
+from pathlib import Path
 
 import pytest
 
+from claude_launcher import restart
 from claude_launcher.platforms import Event
 from claude_launcher.restart import KEEP, LEAD, SHARED, TAIL, Closed, Reason, RestartState, reasons, unknown
 from conftest import FakeEvents, FakeHost, conversation
@@ -110,6 +112,16 @@ def test_still_running_stays_and_leaves_the_group(setup, claude_home):
     setup.host.running.add(200)
     assert len(setup.make().sort()) == 0
     assert records(claude_home) == [f"{THIS_BOOT}_200"]
+
+
+def test_the_newer_closing_wins_whichever_record_is_read_last(setup):
+    # One session resumed in another boot and closed again: two records.
+    # Records are read in name order, and the boot read last holds the older one.
+    sid = setup.session()
+    older = Event(NOW - 5000, NOW - 4990, "logout")
+    setup.record(sid, boot="0" * 32, ended=RESTART.start + 1)
+    setup.record(sid, boot="f" * 32, ended=older.start + 1)
+    assert setup.make(older, RESTART).sort().sessions == {sid: Closed(RESTART.start, "restart")}
 
 
 class TestSystemCantBeAsked:
@@ -252,3 +264,61 @@ class TestReasons:
         monkeypatch.setattr(platforms, "_current", platform("mine", reasons=(self.STOP,)))
         state = RestartState(claude_home.paths, FakeEvents([]), setup.host, now=lambda: NOW)
         assert state.ranks == {"restart": 10, "stop": 15, "logout": 20}
+
+
+class TestRemove:
+    def test_a_file_held_open_is_tried_again(self, tmp_path, monkeypatch):
+        # Windows: the hook or an antivirus scan can hold it for a moment.
+        path = tmp_path / "rec"
+        path.write_text("{}")
+        real, tries = Path.unlink, []
+
+        def unlink(self, missing_ok=False):
+            tries.append(self)
+            if len(tries) < 3:
+                raise PermissionError(13, "in use")
+            real(self, missing_ok)
+
+        monkeypatch.setattr(Path, "unlink", unlink)
+        monkeypatch.setattr(restart.time, "sleep", lambda s: None)
+        restart._remove(path)
+        assert len(tries) == 3 and not path.exists()
+
+    def test_gives_up_quietly(self, tmp_path, monkeypatch):
+        tries = []
+
+        def unlink(self, missing_ok=False):
+            tries.append(self)
+            raise PermissionError(13, "in use")
+
+        monkeypatch.setattr(Path, "unlink", unlink)
+        monkeypatch.setattr(restart.time, "sleep", lambda s: None)
+        restart._remove(tmp_path / "rec")
+        assert len(tries) == 5
+
+    def test_a_missing_file_is_fine(self, tmp_path):
+        restart._remove(tmp_path / "gone")
+
+
+def test_the_platforms_host_and_events_are_made_on_first_use(setup, claude_home, monkeypatch):
+    from test_platforms import platform
+
+    from claude_launcher import platforms
+
+    made = []
+
+    def events():
+        made.append("events")
+        return FakeEvents([RESTART])
+
+    monkeypatch.setattr(platforms, "_current", platform("mine", host=setup.host, events=events))
+    state = RestartState(claude_home.paths, now=lambda: NOW, reasons=SHARED)
+    sid = setup.session()
+    setup.record(sid, ended=NOW - 695)
+    state.load()
+    assert made == []
+    assert state.sort().sessions == {sid: Closed(RESTART.start, "restart")}
+    assert state.host is setup.host
+    assert made == ["events"]
+    state.sort()
+    assert made == ["events"]  # once per run

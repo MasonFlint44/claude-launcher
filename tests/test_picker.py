@@ -1222,3 +1222,30 @@ def test_fzf_too_old_names_the_platforms_installer(env, monkeypatch, os_name, in
     monkeypatch.setattr(picker, "_installer", lambda: real(os_name))
     with pytest.raises(picker.FzfTooOld, match=f"found 0.44.0. Run {installer} in"):
         env.picker().start(100)
+
+
+class TestRestoredEvents:
+    """The header's lines: sessions closed within SAME_EVENT of each other by
+    the same reason are one restart or logout."""
+
+    def events(self, *closings):
+        from claude_launcher.picker import _restored
+        from claude_launcher.restart import Closed, Group
+
+        return _restored(Group({f"s{i}": Closed(at, why) for i, (at, why) in enumerate(closings)}))
+
+    @pytest.mark.parametrize("gap", [0.1, 0.5, 0.9, 1.0])
+    def test_closings_a_moment_apart_are_one(self, gap):
+        assert self.events((NOW, "restart"), (NOW - gap, "restart")) == [["restart", NOW, 2]]
+
+    @pytest.mark.parametrize("gap", [1.01, 2.0])
+    def test_closings_over_a_second_apart_are_two(self, gap):
+        assert self.events((NOW, "restart"), (NOW - gap, "restart")) == [["restart", NOW, 1], ["restart", NOW - gap, 1]]
+
+    def test_measured_from_the_newest(self):
+        # Not a chain: each joins the newest closing's line only within a second of it.
+        got = self.events((NOW, "logout"), (NOW - 0.6, "logout"), (NOW - 1.2, "logout"))
+        assert got == [["logout", NOW, 2], ["logout", NOW - 1.2, 1]]
+
+    def test_another_reason_at_the_same_time_is_its_own(self):
+        assert self.events((NOW, "restart"), (NOW - 0.5, "logout")) == [["restart", NOW, 1], ["logout", NOW - 0.5, 1]]
