@@ -107,6 +107,11 @@ def wsl(monkeypatch):
 MIDNIGHT = time.mktime((*time.localtime(NOW)[:3], 0, 0, 0, 0, 0, -1))
 
 
+def _date(at):
+    t = time.localtime(at)
+    return time.strftime("%b ", t) + str(t.tm_mday)
+
+
 def start(env, cols=100):
     p = env.picker()
     opts = p.start(cols)
@@ -678,6 +683,8 @@ class TestSessions:
             (MIDNIGHT - 86400 + 60, "logout", "yesterday logout"),
             (MIDNIGHT - 86400 - 60, "restart", time.strftime("%a", time.localtime(MIDNIGHT - 86400 - 60)) + " restart"),
             (MIDNIGHT - 5 * 86400, "wsl-stop", time.strftime("%a", time.localtime(MIDNIGHT - 5 * 86400)) + " WSL stop"),
+            # A week back has today's weekday, so past six days it's a date.
+            (NOW - 6 * 86400 - 60, "restart", _date(NOW - 6 * 86400 - 60) + " restart"),
         ],
     )
     def test_a_restored_rows_day_and_reason(self, env, wsl, at, why, when):
@@ -1119,6 +1126,66 @@ class TestPick:
         p, _ = start(env)
         p.on_sessions()
         assert env.picker().pick("") == "No sessions to resume"
+
+
+@pytest.fixture
+def new_york():
+    """Local time in a zone with daylight saving: 2026's clocks go forward
+    on 8 March and back on 1 November."""
+    if not hasattr(time, "tzset"):
+        pytest.skip("needs time.tzset (POSIX)")
+    old = os.environ.get("TZ")
+    os.environ["TZ"] = "America/New_York"
+    time.tzset()
+    try:
+        yield
+    finally:
+        if old is None:
+            del os.environ["TZ"]
+        else:
+            os.environ["TZ"] = old
+        time.tzset()
+
+
+def local(y, mo, d, h, mi=0):
+    return time.mktime((y, mo, d, h, mi, 0, 0, 0, -1))
+
+
+class TestDay:
+    """A ↻ row's day: today, yesterday, a weekday, or past six days a date."""
+
+    @pytest.mark.parametrize(
+        ("then", "now", "day"),
+        [
+            # A month's end.
+            ((2026, 2, 28, 22), (2026, 3, 1, 10), "yesterday"),
+            ((2026, 2, 27, 22), (2026, 3, 1, 10), "Fri"),
+            ((2026, 10, 31, 23, 59), (2026, 11, 1, 0, 1), "yesterday"),
+            # The new year.
+            ((2026, 12, 31, 23), (2027, 1, 1, 9), "yesterday"),
+            ((2026, 12, 30, 23), (2027, 1, 1, 9), "Wed"),
+            ((2027, 1, 1, 0, 5), (2027, 1, 1, 23, 55), "today"),
+            # 8 March has 23 hours.
+            ((2026, 3, 8, 0, 30), (2026, 3, 9, 0, 30), "yesterday"),
+            ((2026, 3, 7, 23, 30), (2026, 3, 9, 0, 30), "Sat"),
+            ((2026, 3, 7, 0, 10), (2026, 3, 8, 12), "yesterday"),
+            ((2026, 3, 8, 0, 10), (2026, 3, 8, 23, 50), "today"),
+            # 1 November has 25.
+            ((2026, 11, 1, 0, 10), (2026, 11, 2, 0, 30), "yesterday"),
+            ((2026, 10, 31, 23, 50), (2026, 11, 2, 0, 30), "Sat"),
+            ((2026, 11, 1, 0, 5), (2026, 11, 1, 23, 50), "today"),
+            ((2026, 11, 2, 0, 5), (2026, 11, 2, 23, 0), "today"),
+            # Six and seven days back: a week ago has today's weekday (Thursday).
+            ((2026, 10, 23, 13), (2026, 10, 29, 12), "Fri"),
+            ((2026, 10, 23, 11), (2026, 10, 29, 12), "Oct 23"),
+            ((2026, 10, 22, 18), (2026, 10, 29, 12), "Oct 22"),
+            ((2026, 10, 22, 11), (2026, 10, 29, 12), "Oct 22"),
+        ],
+    )
+    def test_day(self, new_york, then, now, day):
+        from claude_launcher.picker import _day
+
+        assert _day(local(*then), local(*now)) == day
 
 
 def test_title_skipped_on_dumb_terminals():

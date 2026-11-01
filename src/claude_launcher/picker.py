@@ -821,14 +821,17 @@ def _restored(group: Group) -> list:
 
 
 def _day(then: float, now: float) -> str:
-    """The day `then` was: today, yesterday, or its weekday ("Mon"), which
-    is enough for a ↻ row: they're at most KEEP (a week) old."""
+    """The day `then` was: today, yesterday, its weekday ("Mon") within the
+    week, else its date ("Oct 22"), as `text.clock` says it: a ↻ row can be
+    up to KEEP (a week) old, and a week ago has today's weekday."""
     t, today = time.localtime(then), time.localtime(now)
     if t[:3] == today[:3]:
         return "today"
     if t[:3] == time.localtime(time.mktime((*today[:2], today[2] - 1, 12, 0, 0, 0, 0, -1)))[:3]:
         return "yesterday"
-    return time.strftime("%a", t)
+    if now - then < 6 * 86400:
+        return time.strftime("%a", t)
+    return time.strftime("%b ", t) + str(t.tm_mday)
 
 
 def _action(name: str, arg: str) -> str:
