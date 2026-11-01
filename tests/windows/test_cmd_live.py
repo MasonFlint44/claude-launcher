@@ -140,8 +140,9 @@ def test_the_cmds_own_variables_stay_out_of_pythons_environment(tmp_path, python
     )
     cmd = tmp_path / "env.cmd"
     cmd.write_text(windows_setup.run_cmd("env.py"), encoding="ascii", newline="")
-    # Run by each of the three, two of them after a Python that was too old.
-    for path in ([pythons["real"]], [pythons["old"], py_dir()], [pythons["old"], pythons["store"]]):
+    # Run by each of the three: the first python.exe, py after a Python that
+    # was too old, and the store's (reached only when it's the first python.exe).
+    for path in ([pythons["real"]], [pythons["old"], py_dir()], [pythons["store"]]):
         done = run_probe(cmd, *path)
         assert done.returncode == 0, done.stderr
         assert done.stdout.strip() in ("[]", "['CLAUDE_LAUNCHER_FALLBACK']")

@@ -4,6 +4,7 @@ setup: what the lines say, and what's left as it was when a step fails."""
 from __future__ import annotations
 
 import json
+import shlex
 import shutil
 from pathlib import Path
 
@@ -80,7 +81,7 @@ def test_install(env):
     assert lines[1].startswith("Added the session hook to ")
     assert lines[-3:] == ["Linked it", "Set it up", "Done. Open it."]
     hooks = json.loads(env.settings.read_text())["hooks"]
-    assert hooks["SessionStart"] == [{"hooks": [{"type": "command", "command": f"{env.hook} start"}]}]
+    assert hooks["SessionStart"] == [{"hooks": [{"type": "command", "command": f"{shlex.quote(str(env.hook))} start"}]}]
     assert "already in" in run(env, FakeSetup(hook=env.hook))[1]
 
 
