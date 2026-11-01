@@ -11,12 +11,13 @@ usage() {
   cat <<'USAGE'
 usage: install.sh [--terminal NAME[,NAME...]] [--icon FILE|default]
        install.sh --uninstall
+       install.sh -h|--help
 
 USAGE
   option --terminal "the terminal(s) \"Claude Code\" opens; the first gets the plain\
  name.${names:+ One of: $names.} Without it: last time's choice, else the first of\
  those that's installed (drop-down ones only when asked for). \"auto\" goes back\
- to that. Linux desktops only."
+ to that. For Linux desktops; ignored in WSL."
   option --icon "your own app icon (.svg, or a square .png; .png for Windows\
  Terminal); \"default\" goes back to the one in share/icons."
 }
@@ -75,6 +76,7 @@ if [[ $action == uninstall ]]; then
   exit 0
 fi
 if [[ -n $icon && $icon != default ]]; then
+  [[ -f $icon ]] || { error "not a file: $icon"; exit 1; }
   icon=$(realpath "$icon")
 fi
 run run ${terminal:+--terminal "$terminal"} ${icon:+--icon "$icon"}

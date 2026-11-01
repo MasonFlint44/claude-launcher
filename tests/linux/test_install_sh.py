@@ -118,3 +118,17 @@ def test_uninstall_says_so_when_python_fails(tmp_path):
     done = subprocess.run([str(REPO_DIR / "install.sh"), "--uninstall"], env=env, capture_output=True, text=True)
     assert done.returncode == 0
     assert "the uninstall stopped partway" in done.stderr
+
+
+@pytest.mark.parametrize("name", ["nope.svg", "no/such/dir.svg"])
+def test_an_icon_that_isnt_there(tmp_path, name):
+    done = run(tmp_path, "--icon", str(tmp_path / name))
+    assert done.returncode == 1
+    assert done.stderr.strip().endswith(f"not a file: {tmp_path / name}")
+    assert "realpath" not in done.stderr
+    assert not (tmp_path / ".local").exists()  # stopped before any step
+
+
+def test_help_lists_its_own_options(tmp_path):
+    done = run(tmp_path, "--help")
+    assert "install.sh -h|--help" in done.stdout
