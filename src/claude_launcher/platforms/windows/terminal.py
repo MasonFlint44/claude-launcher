@@ -84,6 +84,20 @@ def fragment(commandline: str, starting_directory: str, icon: str, theme: Theme,
     }
 
 
+def _same_file(a: Path, b: Path) -> bool:
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return False
+
+
+def copy_icon(icon: Path | str, to: Path) -> None:
+    """Copy an icon, unless it's already that file (an install run again
+    with --icon naming the copy it made)."""
+    if not _same_file(Path(icon), to):
+        shutil.copyfile(icon, to)
+
+
 def write(
     directory: Path,
     commandline: str,
@@ -99,9 +113,9 @@ def write(
     directory.mkdir(parents=True, exist_ok=True)
     shown_icon = directory / ("icon" + icon.suffix.lower())
     for old in directory.glob("icon.*"):
-        if old != shown_icon:
+        if old != shown_icon and not _same_file(old, icon):
             old.unlink()
-    shutil.copyfile(icon, shown_icon)
+    copy_icon(icon, shown_icon)
     path = directory / f"{APP}.json"
     data = fragment(commandline, starting_directory, windows_path(shown_icon), theme, profile)
     tmp = path.with_name(path.name + ".tmp")

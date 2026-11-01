@@ -20,7 +20,6 @@ from __future__ import annotations
 import ntpath
 import os
 import re
-import shutil
 from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 
@@ -279,7 +278,7 @@ class WindowsSetup:
             if not icon.lower().endswith(".png"):
                 raise ValueError("the icon for Windows Terminal must be a .png")
             kept.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(icon, kept)
+            terminal.copy_icon(icon, kept)
         return kept if kept.is_file() else DEFAULT_ICON
 
     def check(self) -> None:

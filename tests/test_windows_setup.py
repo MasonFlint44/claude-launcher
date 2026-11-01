@@ -216,3 +216,14 @@ def test_uninstall_takes_it_all_out(setup, env):
 
 def test_terminal_option_is_for_linux(setup):
     assert any("--terminal is for Linux desktops; on Windows" in line for line in setup.install("ghostty", None))
+
+
+def test_icon_can_be_the_copy_already_made(setup, env, tmp_path):
+    # Run again with --icon naming the installed copy, or the profile's own.
+    mine = tmp_path / "mine.png"
+    mine.write_bytes(b"png")
+    list(setup.install(None, str(mine)))
+    list(setup.install(None, str(setup.data_dir / "icon.png")))
+    shown = Path(fragment(env)["profiles"][0]["icon"])
+    list(setup.install(None, str(shown)))
+    assert Path(fragment(env)["profiles"][0]["icon"]).read_bytes() == b"png"
