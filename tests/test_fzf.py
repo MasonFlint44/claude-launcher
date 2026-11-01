@@ -145,3 +145,8 @@ class TestPinnedRelease:
     def test_windows_builds(self, machine, build):
         # platform.machine() on Windows says AMD64 or ARM64.
         assert fzf.build_name("windows", machine) == f"fzf-{fzf.PINNED}-{build}.zip"
+
+
+def test_environ_leaves_out_the_users_defaults():
+    env = {"FZF_DEFAULT_OPTS": "--height=40%", "FZF_DEFAULT_OPTS_FILE": "/x", "FZF_DEFAULT_COMMAND": "fd"}
+    assert fzf.environ(env) == {"FZF_DEFAULT_COMMAND": "fd"}

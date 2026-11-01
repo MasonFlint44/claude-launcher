@@ -901,6 +901,7 @@ def _nth_match(fzf_path: str, rows: list[str], query: str, pos: int, nth: str = 
             [fzf_path, f"--filter={query}", *MATCHING, f"--nth={nth}"],
             input="".join(r + "\n" for r in rows).encode("utf-8", "surrogateescape"),
             capture_output=True,
+            env=fzf.environ(),  # matching as the picker's fzf does
         )
         matched = [line for line in done.stdout.decode("utf-8", "surrogateescape").split("\n") if line]
     if len(matched) < pos:

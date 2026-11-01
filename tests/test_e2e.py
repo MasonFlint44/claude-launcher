@@ -312,6 +312,17 @@ def test_each_view_shows_its_own_header_row(launch, claude_home):
         assert "Last active" not in t.text()
 
 
+def test_the_users_fzf_defaults_dont_reach_the_picker(launch, claude_home, tmp_path):
+    # Each would change the picker: a short box, opening ~ unasked, other matching.
+    project_with_a_session(claude_home, tmp_path / "project")
+    t = launch(FZF_DEFAULT_OPTS="--height=5 --border --select-1 --exact")
+    t.wait_for("Select a project directory for Claude")
+    assert "╭" not in t.text()  # no --border
+    t.type("prjct")  # fuzzy, not --exact
+    t.wait_for("1/2")
+    assert launch.calls() == []
+
+
 def test_two_enters_at_once_start_a_new_session(launch, claude_home, tmp_path):
     proj = tmp_path / "proj"
     project_with_a_session(claude_home, proj)

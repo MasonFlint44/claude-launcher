@@ -25,7 +25,7 @@ import time
 from collections.abc import Sequence
 from pathlib import Path
 
-from . import logs, text, theme, title
+from . import fzf, logs, text, theme, title
 from .paths import Paths
 from .picker import FzfTooOld, Pick, Picker, resume_dir
 
@@ -206,7 +206,8 @@ def _loop(signals: _Signals, run: Path, args: list[str]) -> int:
     from .platforms import current
 
     # Only key bindings run with this key, so nothing else can drive fzf.
-    fzf_env = {**os.environ, **current().fzf_env, "FZF_API_KEY": secrets.token_hex(16)}
+    # The key presses fzf runs inherit this, without the user's fzf defaults.
+    fzf_env = {**fzf.environ(), **current().fzf_env, "FZF_API_KEY": secrets.token_hex(16)}
     again = False
     while True:
         try:

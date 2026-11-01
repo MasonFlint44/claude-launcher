@@ -28,6 +28,10 @@ PINNED = "0.74.5"
 # The release's own checksums file, as it is. To move the pin, add the new
 # release's file and change PINNED.
 CHECKSUMS = REPO_DIR / "share" / "fzf" / f"fzf_{PINNED}_checksums.txt"
+# Your fzf defaults are for fzf in your shell; the picker is laid out and
+# keyed on its own, and options it doesn't set (--height, --exact, --bind ...)
+# would change what it shows or which row Enter takes.
+USER_DEFAULTS = ("FZF_DEFAULT_OPTS", "FZF_DEFAULT_OPTS_FILE")
 # fzf's names for processors, by what platform.machine() says on each OS.
 ARCHES = {
     "x86_64": "amd64",
@@ -152,3 +156,8 @@ def _download(url: str) -> bytes:
 
     with urllib.request.urlopen(url, timeout=60) as response:
         return response.read()
+
+
+def environ(env: Mapping[str, str] = os.environ) -> dict[str, str]:
+    """`env` without the user's fzf defaults (`USER_DEFAULTS`)."""
+    return {k: v for k, v in env.items() if k not in USER_DEFAULTS}

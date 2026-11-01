@@ -1212,6 +1212,19 @@ def test_nth_match_takes_rows_as_fzf_gives_them():
     assert _nth_match(fzf, rows, "one", 4) == ""
 
 
+def test_nth_match_ignores_the_users_fzf_defaults(monkeypatch, tmp_path):
+    # --exact would match nothing for "lnch"; the picker's fzf never sees it.
+    import shutil
+
+    from claude_launcher.picker import _nth_match
+
+    opts = tmp_path / "opts"
+    opts.write_text("--exact")
+    monkeypatch.setenv("FZF_DEFAULT_OPTS", "--exact")
+    monkeypatch.setenv("FZF_DEFAULT_OPTS_FILE", str(opts))
+    assert _nth_match(shutil.which("fzf"), ["a\tlauncher", "b\tother"], "lnch", 1) == "a"
+
+
 @pytest.mark.parametrize(("os_name", "installer"), [("posix", "install.sh"), ("nt", "install.ps1")])
 def test_fzf_too_old_names_the_platforms_installer(env, monkeypatch, os_name, installer):
     from claude_launcher import fzf, picker

@@ -66,6 +66,8 @@ Run `claude-launcher` in a terminal tab and it switches to Claude Dark while the
 | Ctrl-D | Delete the character under the cursor; on an empty search, press twice to quit |
 | Ctrl-U | Delete back to the start of the search, a path included |
 
+The picker keeps its own keys and layout: your `FZF_DEFAULT_OPTS` (and `FZF_DEFAULT_OPTS_FILE`) don't apply to it.
+
 Like in Claude, Esc, Ctrl-D and Ctrl-C on an empty search take two presses within a second. The first press shows what the second will do ("esc again to quit") where the key hints are. In a narrower window, hints that don't fit beside the title go on a line under them.
 
 Your home directory is the top row, so Enter on an empty search opens it, through its sessions if it has any.
