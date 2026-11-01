@@ -1,6 +1,8 @@
 """Windows paths, as the picker sees them: any drive, UNC shares, either
 slash typed, case ignored. Pure text, so these run on any OS."""
 
+from pathlib import Path
+
 import pytest
 
 from claude_launcher.pathtext import PathText
@@ -222,3 +224,39 @@ def test_colors_switch_on_windows_without_term():
     assert theme.enabled({}, windows=True)
     assert not theme.enabled({}, windows=False)
     assert not theme.enabled({"CLAUDE_LAUNCHER_COLORS": "0"}, windows=True)
+
+
+@pytest.mark.parametrize(
+    ("directory", "rest", "expected"),
+    [
+        ("work", "a\\b", "work\\a\\b"),
+        ("D:\\", "proj", "D:\\proj"),
+        ("\\\\srv\\share\\", "x\\y", "\\\\srv\\share\\x\\y"),
+        ("D:\\", "", "D:\\"),
+    ],
+)
+def test_join(directory, rest, expected):
+    assert w.join(directory, rest) == expected
+
+
+@pytest.mark.parametrize(
+    ("within", "cwd", "shown"),
+    [
+        ("D:\\", "D:\\proj", "D:\\proj"),
+        ("\\\\srv\\share\\", "\\\\srv\\share\\x\\y", "\\\\srv\\share\\x\\y"),
+        ("D:\\work", "D:\\work\\a", "work\\a"),
+        ("D:\\work", "D:\\work", "work"),
+    ],
+)
+def test_a_sessions_directory_below_a_root(monkeypatch, tmp_path, within, cwd, shown):
+    """A directory's view shows each session's path from the directory's
+    name down; from a drive or share root, with one separator after it."""
+    from claude_launcher import picker
+    from claude_launcher.paths import Paths
+
+    monkeypatch.setattr(picker, "pathtext", w)
+    monkeypatch.setattr(picker, "below", w.below)
+    monkeypatch.setattr(picker, "is_inside", w.is_inside)
+    p = picker.Picker(tmp_path, Paths(config=tmp_path, home=Path("C:\\Users\\me")))
+    p.state.view, p.state.dir = "directory", within
+    assert p._session_dir(cwd) == shown

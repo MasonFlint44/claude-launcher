@@ -49,6 +49,11 @@ class PathText:
         sep = "/" if self.windows and "/" in directory and "\\" not in directory else self.sep
         return directory.rstrip(self.seps) + sep
 
+    def join(self, directory: str, rest: str) -> str:
+        """`rest` (from `below`) under `directory`, with one separator between
+        even when `directory` is a root that ends in one (/, D:\\)."""
+        return self.with_sep(directory) + rest if rest else directory
+
     def without_sep(self, path: str) -> str:
         """`path` without a trailing separator, except a root itself."""
         stripped = path.rstrip(self.seps)
@@ -153,6 +158,7 @@ class PathText:
 _here = PathText()
 SEP = _here.sep
 with_sep = _here.with_sep
+join = _here.join
 without_sep = _here.without_sep
 name = _here.name
 first_part = _here.first_part

@@ -498,7 +498,7 @@ class Picker:
             if is_inside(home, within):
                 return text.printable(self.paths.tilde(cwd))
             rest, top = below(cwd, within), pathtext.name(within)
-            return text.printable(top + pathtext.SEP + rest if rest else top)
+            return text.printable(pathtext.join(top, rest))
         if pathtext.same(cwd, home):
             return "~"
         return text.printable(pathtext.name(cwd))
