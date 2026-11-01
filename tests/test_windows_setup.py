@@ -3,6 +3,7 @@ Files only, so these run on any OS."""
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -87,12 +88,30 @@ def test_nothing_names_a_python(installed):
     for name, entry, options in (("claude-launcher", LAUNCHER, ""), ("claude-session-hook", HOOK, "-I ")):
         text = (installed.data_dir / f"{name}.cmd").read_text()
         assert "python.exe" in text and "py.exe" in text and "\\WindowsApps\\" in text
-        assert f'"%A%" {options}"%~dp0{name}.py" %*' in text
-        assert f'"%B%" -3 {options}"%~dp0{name}.py" %*' in text
-        assert f'if not "%E%"=="{TOO_OLD}" if not "%E%"=="{windows_setup.PY_NONE}" exit /b %E%' in text
+        assert f'"%CLAUDE_LAUNCHER_PYTHON%" {options}"%~dp0{name}.py" %*' in text
+        assert f'"%CLAUDE_LAUNCHER_PY%" -3 {options}"%~dp0{name}.py" %*' in text
+        assert f'"%CLAUDE_LAUNCHER_STORE%" {options}"%~dp0{name}.py" %*' in text
+        assert 'if not "%CLAUDE_LAUNCHER_EXIT%"=="9310" if not "%CLAUDE_LAUNCHER_EXIT%"=="103" exit' in text
         assert "setlocal DisableDelayedExpansion" in text
         script = (installed.data_dir / f"{name}.py").read_bytes().decode("ascii")
         assert ascii(str(entry)) in script and sys.executable not in script
+
+
+def test_the_cmds_own_variables_never_reach_python(installed):
+    # Each line that runs Python empties them first: its %...% were already
+    # expanded when cmd read it. And each is unmistakably ours.
+    list(installed.install(None, None))
+    for name in ("claude-launcher", "claude-session-hook"):
+        lines = (installed.data_dir / f"{name}.cmd").read_text().splitlines()
+        names = set(re.findall(r'set "([A-Za-z_]+)=', "\n".join(lines)))
+        assert names and all(n.startswith("CLAUDE_LAUNCHER_") for n in names)
+        helpers = names - {"CLAUDE_LAUNCHER_FALLBACK"}  # for the entry script, which takes it out
+        runs = [line for line in lines if '"%~dp0' in line]
+        assert len(runs) == 3
+        for line in runs:
+            cleared, command = line.split(' & "%', 1)
+            assert set(re.findall(r'set "([A-Za-z_]+)="', cleared)) == helpers
+            assert "set " not in command
 
 
 def test_the_hook_names_its_cmd_by_localappdata(installed):

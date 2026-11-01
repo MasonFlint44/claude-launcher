@@ -131,6 +131,22 @@ def test_a_script_that_exits_103_runs_once(tmp_path, pythons):
     assert ran_log.read_text() == "ran\n"
 
 
+def test_the_cmds_own_variables_stay_out_of_pythons_environment(tmp_path, pythons):
+    (tmp_path / "env.py").write_text(
+        "import os, sys\n"
+        f"if os.sep + 'old' + os.sep in sys.executable: sys.exit({windows_setup.TOO_OLD})\n"
+        "print(sorted(k for k in os.environ if k.upper().startswith('CLAUDE_LAUNCHER_')))\n",
+        encoding="utf-8",
+    )
+    cmd = tmp_path / "env.cmd"
+    cmd.write_text(windows_setup.run_cmd("env.py"), encoding="ascii", newline="")
+    # Run by each of the three, two of them after a Python that was too old.
+    for path in ([pythons["real"]], [pythons["old"], py_dir()], [pythons["old"], pythons["store"]]):
+        done = run_probe(cmd, *path)
+        assert done.returncode == 0, done.stderr
+        assert done.stdout.strip() in ("[]", "['CLAUDE_LAUNCHER_FALLBACK']")
+
+
 def test_no_python_at_all(probe, tmp_path):
     empty = tmp_path / "empty"
     empty.mkdir()

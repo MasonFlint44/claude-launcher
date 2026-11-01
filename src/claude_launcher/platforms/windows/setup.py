@@ -55,39 +55,54 @@ _SHIM_MARK = "rem claude-launcher: "
 # how to get Python). A Python the entry script finds too old exits TOO_OLD,
 # and the next one is tried; so is the next after a py launcher with no Python
 # (PY_NONE). Only those cost a second Python start. "-" stands for none: cmd
-# can't take part of a variable that isn't set. E is the last exit code.
+# can't take part of a variable that isn't set.
+# The helper variables are ours by name and never reach Python (or Claude):
+# the line that runs Python empties them first, but its %...% were expanded
+# when cmd read the line, before any of it ran. So they're found again
+# ({find}, a PATH search: no process) after a Python that was too old.
 # DisableDelayedExpansion: it may be on by default (the registry), or from
 # the hook's cmd /v:on, and would eat a "!" in a path.
+_FIND = """set "{a}=-" & set "{b}=-" & set "{c}=-"
+for %%P in (python.exe) do if not "%%~$PATH:P"=="" set "{a}=%%~$PATH:P"
+if /i not "%{a}:\\WindowsApps\\=%"=="%{a}%" (set "{c}=%{a}%" & set "{a}=-")
+for %%P in (py.exe) do if not "%%~$PATH:P"=="" set "{b}=%%~$PATH:P"
+"""
+_CLEAR = 'set "{a}=" & set "{b}=" & set "{c}=" & set "{e}=" & '
 _RUN = """@echo off
 {mark}runs {name} beside it with Python {major}.{minor} or newer
 setlocal DisableDelayedExpansion
-set "A=-" & set "B=-" & set "C=-" & set "E=-"
-for %%P in (python.exe) do if not "%%~$PATH:P"=="" set "A=%%~$PATH:P"
-if /i not "%A:\\WindowsApps\\=%"=="%A%" (set "C=%A%" & set "A=-")
-for %%P in (py.exe) do if not "%%~$PATH:P"=="" set "B=%%~$PATH:P"
+set "{e}="
+{find}set "{fallback}="
+if not "%{b}%%{c}%"=="--" set "{fallback}=1"
+if "%{a}%"=="-" goto py
+{clear}"%{a}%" {options}"%~dp0{name}" %*
+set "{e}=%errorlevel%"
+if not "%{e}%"=="{too_old}" exit /b %{e}%
+{find}:py
 set "{fallback}="
-if not "%B%%C%"=="--" set "{fallback}=1"
-if "%A%"=="-" goto py
-"%A%" {options}"%~dp0{name}" %*
-set "E=%errorlevel%"
-if not "%E%"=="{too_old}" exit /b %E%
-:py
+if not "%{c}%"=="-" set "{fallback}=1"
+if "%{b}%"=="-" goto store
+{clear}"%{b}%" -3 {options}"%~dp0{name}" %*
+set "{e}=%errorlevel%"
+if not "%{e}%"=="{too_old}" if not "%{e}%"=="{py_none}" exit /b %{e}%
+{find}:store
 set "{fallback}="
-if not "%C%"=="-" set "{fallback}=1"
-if "%B%"=="-" goto store
-"%B%" -3 {options}"%~dp0{name}" %*
-set "E=%errorlevel%"
-if not "%E%"=="{too_old}" if not "%E%"=="{py_none}" exit /b %E%
-:store
-set "{fallback}="
-if "%C%"=="-" goto none
-"%C%" {options}"%~dp0{name}" %*
+if "%{c}%"=="-" goto none
+{clear}"%{c}%" {options}"%~dp0{name}" %*
 exit /b %errorlevel%
 :none
-if "%E%"=="{too_old}" exit /b {too_old}
+if "%{e}%"=="{too_old}" exit /b {too_old}
 echo claude-launcher needs Python {major}.{minor} or newer: https://www.python.org/downloads/ 1>&2
 exit /b 9009
 """
+# The helper variables' names: the first python.exe, py.exe, the
+# WindowsApps python.exe, and the last exit code.
+_VARS = {
+    "a": "CLAUDE_LAUNCHER_PYTHON",
+    "b": "CLAUDE_LAUNCHER_PY",
+    "c": "CLAUDE_LAUNCHER_STORE",
+    "e": "CLAUDE_LAUNCHER_EXIT",
+}
 
 # The entry script: as old a Python as can run it says what's wrong (or lets
 # the .cmd try the next one), then the repo's script runs as __main__ with its
@@ -141,6 +156,9 @@ def run_cmd(name: str, options: str = "") -> str:
     """A .cmd that runs the entry script `name` beside it with Python 3.10+.
     Python's `options` (like "-I") go before the script. Marked as ours."""
     text = _RUN.format(
+        find=_FIND.format(**_VARS),
+        clear=_CLEAR.format(**_VARS),
+        **_VARS,
         mark=_SHIM_MARK,
         name=name,
         options=options + " " if options else "",
