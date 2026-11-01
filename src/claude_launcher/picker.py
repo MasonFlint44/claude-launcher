@@ -555,7 +555,7 @@ class Picker:
             if path is None:
                 raise FzfTooOld(
                     f"claude-launcher needs fzf {fzf.show(fzf.MIN_VERSION)} or newer, and found "
-                    f"{fzf.show(version)}. Run install.sh in the claude-launcher repo to get one."
+                    f"{fzf.show(version)}. Run {_installer()} in the claude-launcher repo to get one."
                 )
             for name in ("accept", "sessions.json"):
                 self._file(name).unlink(missing_ok=True)
@@ -800,6 +800,11 @@ def _platform() -> Platform:
     from .platforms import current
 
     return current()
+
+
+def _installer(os_name: str = os.name) -> str:
+    """The installer to run again: native Windows has its own (WSL is Linux)."""
+    return "install.ps1" if os_name == "nt" else "install.sh"
 
 
 def _reason_texts(found: tuple[Reason, ...]) -> list:

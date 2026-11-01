@@ -1211,3 +1211,14 @@ def test_nth_match_takes_rows_as_fzf_gives_them():
     assert _nth_match(fzf, rows, "one", 1) == "a"
     assert _nth_match(fzf, rows, "one", 3) == "c\x80"
     assert _nth_match(fzf, rows, "one", 4) == ""
+
+
+@pytest.mark.parametrize(("os_name", "installer"), [("posix", "install.sh"), ("nt", "install.ps1")])
+def test_fzf_too_old_names_the_platforms_installer(env, monkeypatch, os_name, installer):
+    from claude_launcher import fzf, picker
+
+    monkeypatch.setattr(fzf, "find", lambda private: (None, (0, 44, 0)))
+    real = picker._installer
+    monkeypatch.setattr(picker, "_installer", lambda: real(os_name))
+    with pytest.raises(picker.FzfTooOld, match=f"found 0.44.0. Run {installer} in"):
+        env.picker().start(100)
