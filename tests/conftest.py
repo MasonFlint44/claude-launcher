@@ -149,6 +149,21 @@ class FakeEvents:
         return None if self.found is None else list(self.found)
 
 
+class FakePlatform:
+    """A Platform for the installer's steps: a given Setup and data directory."""
+
+    fzf_os = "linux"
+
+    def __init__(self, setup, data):
+        self._setup, self.data = setup, data
+
+    def setup(self):
+        return self._setup
+
+    def data_dir(self, env):
+        return self.data
+
+
 # A fixed "now" and two boots, for the restart tests.
 NOW = 1_800_000_000.0
 THIS_BOOT, LAST_BOOT = "1" * 32, "2" * 32

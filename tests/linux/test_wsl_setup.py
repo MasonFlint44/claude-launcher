@@ -18,7 +18,7 @@ from claude_launcher.platforms.windows.setup import DEFAULT_ICON
 from claude_launcher.platforms.wsl.events import WslEvents
 from claude_launcher.platforms.wsl.interop import Interop
 from claude_launcher.platforms.wsl.setup import WslSetup
-from conftest import FakeHost
+from conftest import FakeHost, FakePlatform
 
 LOCAL = "C:\\Users\\José\\AppData\\Local"
 
@@ -306,18 +306,6 @@ def test_icon_must_be_a_png_file(windows, home, tmp_path, name):
 
 
 # --- Through the installer ---------------------------------------------------
-
-
-class FakePlatform:
-    def __init__(self, setup, data):
-        self._setup, self.data = setup, data
-        self.fzf_os = "linux"
-
-    def setup(self):
-        return self._setup
-
-    def data_dir(self, env):
-        return self.data
 
 
 @pytest.fixture
