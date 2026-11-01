@@ -2,7 +2,7 @@
 
 A project and session picker for Claude Code, with a "Claude Code" app for your desktop and a Claude Dark look for your terminal. It runs on Linux, Windows and WSL.
 
-Run `claude-launcher` (or open **Claude Code** from your apps) and you get a list of the directories you've used Claude in, most recent first. Pick one to see its sessions and resume one, or start a new session there; Ctrl-S shows your recent sessions everywhere. When Claude exits, you're back at the list.
+Run `claude-launcher` (or open **Claude Code** from your apps, or as a Windows Terminal tab) and you get a list of the directories you've used Claude in, most recent first. Pick one to see its sessions and resume one, or start a new session there; Ctrl-S shows your recent sessions everywhere. When Claude exits, you're back at the list.
 
 ```
   Select a project directory for Claude                          enter open   tab complete   ctrl-s sessions   esc quit
@@ -45,11 +45,11 @@ git clone https://github.com/MasonFlint44/claude-launcher.git $HOME\git\claude-l
 powershell -ExecutionPolicy Bypass -File $HOME\git\claude-launcher\install.ps1
 ```
 
-Then open a **Claude Code** tab in Windows Terminal. [docs/windows.md](docs/windows.md) has the details. In WSL, clone and run `install.sh` inside your distro, as on Linux: [docs/wsl.md](docs/wsl.md).
+Then restart Windows Terminal and open a **Claude Code** tab. [docs/windows.md](docs/windows.md) has the details. In WSL, clone and run `install.sh` inside your distro, as on Linux: [docs/wsl.md](docs/wsl.md).
 
 ## Colors
 
-Run `claude-launcher` in a terminal tab and it switches to Claude Dark while the launcher runs, Claude included, then back to your exact colors when it exits. It asks the terminal for its colors first and only changes the ones it reports, so a terminal that can't do this is left alone. GNU screen is left alone too, since it would change the colors of every window at once. Set `CLAUDE_LAUNCHER_COLORS=0` to always keep your own colors, or `=1` to switch them inside screen anyway. Which terminals are tested, and the Ghostty theme on its own: [docs/linux.md](docs/linux.md#colors-in-linux-terminals).
+Run `claude-launcher` in a terminal tab and it switches to Claude Dark while the launcher runs, Claude included, then back to your exact colors when it exits. It asks the terminal for its colors first and only changes the ones it reports, so a terminal that can't do this is left alone. GNU screen is left alone too, since it would change the colors of every window at once. Set `CLAUDE_LAUNCHER_COLORS=0` to always keep your own colors, or `=1` to switch them inside screen anyway. Which terminals are tested, and the Ghostty theme on its own: [docs/linux.md](docs/linux.md#colors-in-linux-terminals); on Windows, the **Claude Code** profile is Claude Dark and other tabs switch as on Linux: [docs/windows.md](docs/windows.md#the-claude-code-profile).
 
 ## Using the picker
 
@@ -63,7 +63,7 @@ Run `claude-launcher` in a terminal tab and it switches to Claude Dark while the
 | Alt-X, Alt-X | In a Sessions view, do that for every ↻ session it shows |
 | Esc, Esc | Clear the search; on an empty search, quit. While typing a path, Esc backs up a directory instead, and in a Sessions view it goes back to the directory list |
 | Ctrl-C | Clear the search; on an empty search, press twice to quit |
-| Ctrl-D, Ctrl-D | On an empty search, quit |
+| Ctrl-D | Delete the character under the cursor; on an empty search, press twice to quit |
 | Ctrl-U | Delete back to the start of the search, a path included |
 
 Like in Claude, Esc, Ctrl-D and Ctrl-C on an empty search take two presses within a second. The first press shows what the second will do ("esc again to quit") where the key hints are. In a narrower window, hints that don't fit beside the title go on a line under them.
@@ -126,7 +126,7 @@ The Directory column says where each session ran, so a session in a subdirectory
 ▌   2w ago        workspace (missing)      Queue configuration
 ```
 
-A ↻ row shows what closed the session and the day ("today restart", "yesterday logout", "Mon restart"), so that column is headed "When" while there are any.
+A ↻ row shows what closed the session and the day ("today restart", "yesterday logout", "Mon restart", in WSL "Mon WSL stop"), or past six days the date ("Oct 22 restart"), so that column is headed "When" while there are any.
 
 In either view, type to filter (it matches the directory and the title), and press Enter to resume the highlighted session in its directory. Esc goes back to the directory list, with the search and the cursor where you left them.
 
@@ -150,7 +150,7 @@ When a restart or logging out closed Claude sessions, the picker shows which:
   ↻ 3 sessions were open when your computer restarted (Mon 11:14 PM)
 ```
 
-There's a line for each restart or logout, newest first (past three, the oldest share one line). In WSL, WSL stopping on its own (`wsl --shutdown`) gets its own line too, "open when WSL stopped"; if Windows restarted or you logged out, that's what it says instead.
+There's a line for each restart or logout, newest first. With more than three, only the newest two get a line, and the sessions from the rest are counted on a third ("↻ 5 more from earlier"). In WSL, WSL stopping on its own (`wsl --shutdown`) gets its own line too, "open when WSL stopped"; if Windows restarted or you logged out, that's what it says instead.
 
 Press Ctrl-S and they're at the top of the Sessions view, marked ↻ with what closed each and the day, like "today restart" or "Mon restart" (and at the top of their directory's sessions too). Enter resumes one, and it leaves the group; Ctrl-X takes it out without resuming, and Alt-X twice takes out every ↻ session the view shows. A session stays in the group for 7 days, unless you resume or dismiss it first, or start it again from anywhere else.
 

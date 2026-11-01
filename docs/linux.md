@@ -71,7 +71,7 @@ Only interactive Claude sessions in a terminal are recorded: not `claude -p`, SD
 git -C ~/git/claude-launcher pull
 ```
 
-Changes to the launcher, hook and theme apply right away. If the desktop launcher changed (`src/claude_launcher/platforms/linux/`), re-run `install.sh`.
+Changes to the launcher, hook and theme apply right away. If the desktop launcher changed (`src/claude_launcher/platforms/linux/`), re-run `install.sh`. If you move the repo, run `install.sh` again from its new place: the links point into it.
 
 ## Uninstalling
 
@@ -79,4 +79,4 @@ Changes to the launcher, hook and theme apply right away. If the desktop launche
 ~/git/claude-launcher/install.sh --uninstall
 ```
 
-This removes the links, the desktop launcher and the session hook. It leaves the launcher's state in `~/.claude/state/claude-launcher` and says how to remove it.
+This removes the links, the desktop launcher, the session hook and the launcher's own files in `~/.local/share/claude-launcher` (its fzf, your icon, the options you gave). It leaves the launcher's state in `~/.claude/state/claude-launcher` and says how to remove it.

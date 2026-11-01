@@ -4,7 +4,7 @@ How to install claude-launcher on Windows, what the installer sets up, and how t
 
 ## Install
 
-You need Windows 10 or 11, [Claude Code](https://docs.claude.com/en/docs/claude-code) (its installer puts `claude.exe` in `%USERPROFILE%\.local\bin`; npm's `claude.cmd` works too), Git to clone the repo, and Python 3.10 or newer from python.org, the Microsoft Store or anywhere else. If there's no Python, the installer offers to install Python 3.13 for you with winget.
+You need Windows 10 or 11, [Claude Code](https://docs.claude.com/en/docs/claude-code) (its installer puts `claude.exe` in `%USERPROFILE%\.local\bin`; npm's `claude.cmd` works too), Git to clone the repo, and Python 3.10 or newer from python.org, the Microsoft Store or anywhere else. If there's no Python, the installer offers to install Python 3.13 for you with winget (from a desktop session; winget can't install it over SSH).
 
 In PowerShell:
 
@@ -17,16 +17,16 @@ powershell -ExecutionPolicy Bypass -File $HOME\git\claude-launcher\install.ps1
 
 The installer:
 
-1. Checks for fzf 0.67 or newer, and if there isn't one, downloads fzf 0.74.5 from fzf's GitHub releases, checks it against the release's checksum, and keeps it in `%LOCALAPPDATA%\claude-launcher\bin` for the launcher alone.
+1. Checks for fzf 0.67 or newer, and if yours is older than that, or missing, downloads fzf 0.74.5 from fzf's GitHub releases, checks it against the release's checksum, and keeps it in `%LOCALAPPDATA%\claude-launcher\bin` for the launcher alone.
 2. Adds the session hook to Claude Code's user settings (`%USERPROFILE%\.claude\settings.json`, or `%CLAUDE_CONFIG_DIR%\settings.json`), as a SessionStart and SessionEnd hook. Your other settings and hooks are left as they are.
-3. Writes `claude-launcher.cmd` to `%USERPROFILE%\.local\bin`, so `claude-launcher` runs in any terminal, and the small files it and the hook run to `%LOCALAPPDATA%\claude-launcher`.
+3. Writes `claude-launcher.cmd` to `%USERPROFILE%\.local\bin`, and the small files it and the hook run to `%LOCALAPPDATA%\claude-launcher`. `claude-launcher` then runs in any terminal if `%USERPROFILE%\.local\bin` is on your PATH. Claude Code's own installer puts it there; if you installed Claude Code with npm only, it may not be, and the installer warns you.
 4. Adds a **Claude Code** profile to Windows Terminal, in Claude Dark, with the app icon. It's a [fragment](https://learn.microsoft.com/windows/terminal/json-fragment-extensions), so your Windows Terminal settings file isn't touched; restart Windows Terminal to see it.
 
 Re-running it is safe; it updates what's already there.
 
 | Option | Does |
 |---|---|
-| `-Icon FILE.png` | Your own icon for the profile. A copy is kept, so the original can move. `-Icon default` goes back to the one in `share\icons`. |
+| `-Icon FILE.png` | Your own icon for the profile. A copy is kept, so the original can move, and re-running the installer keeps it. `-Icon default` goes back to the one in `share\icons`. |
 | `-Uninstall` | Takes everything out again. |
 | `-Help` | Shows these. |
 
@@ -51,7 +51,7 @@ A session that ended in that span, or up to 30 seconds before or 10 seconds afte
 git -C $HOME\git\claude-launcher pull
 ```
 
-Changes apply right away. If the profile changed (`src\claude_launcher\platforms\windows\`), re-run `install.ps1` and restart Windows Terminal.
+Changes apply right away. If the profile changed (`src\claude_launcher\platforms\windows\`), re-run `install.ps1` and restart Windows Terminal. If you move the repo, run `install.ps1` again from its new place: the installed files name it.
 
 The profile, `claude-launcher.cmd` and the session hook find Python each time they run (the first `python` on your PATH, else the `py` launcher, else the Microsoft Store's; it has to be 3.10 or newer), so upgrading or replacing Python needs nothing from you.
 
@@ -61,4 +61,4 @@ The profile, `claude-launcher.cmd` and the session hook find Python each time th
 powershell -ExecutionPolicy Bypass -File $HOME\git\claude-launcher\install.ps1 -Uninstall
 ```
 
-This removes `claude-launcher.cmd`, the profile and the session hook. It leaves the launcher's state in `%USERPROFILE%\.claude\state\claude-launcher` and says so.
+This removes `claude-launcher.cmd`, the profile, the session hook and the launcher's own files in `%LOCALAPPDATA%\claude-launcher` (its fzf, your icon). It leaves the launcher's state in `%USERPROFILE%\.claude\state\claude-launcher` and says so.
