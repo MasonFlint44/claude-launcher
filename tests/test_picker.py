@@ -11,7 +11,7 @@ from claude_launcher.picker import Pick, Picker
 from claude_launcher.restart import Reason, RestartState
 from claude_launcher.text import strip_ansi, width
 from claude_launcher.theme import Theme
-from conftest import FakeEvents, FakeHost, conversation, posix_only
+from conftest import FakeEvents, FakeHost, conversation, log_dirs_for, posix_only
 
 S = os.sep  # the separator the picker builds paths with
 NOW = 1_800_000_000.0
@@ -748,7 +748,7 @@ class TestSessions:
 
 
 def sid_in(env, d):
-    return next(p.stem for p in env.paths.log_dirs_for(str(d))[0].glob("*.jsonl"))
+    return next(p.stem for p in log_dirs_for(env.paths, str(d))[0].glob("*.jsonl"))
 
 
 # Before the test logs' message timestamps, so a log's mtime is when it was last active.

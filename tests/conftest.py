@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 import sys
 import uuid
 from collections.abc import Callable
@@ -14,6 +15,25 @@ from pathlib import Path
 import pytest
 
 from claude_launcher.paths import Paths
+
+# Claude names a project's log directory after its path, with every character
+# other than a letter or digit turned into "-". A name longer than this is cut
+# to this length and given a hash suffix.
+LOG_DIR_NAME_MAX = 200
+
+
+def log_dirs_for(paths: Paths, directory: str) -> list[Path]:
+    """The log directories Claude may keep `directory`'s sessions in. The
+    launcher never needs this (it reads each log's own directory); the tests
+    write logs where Claude would."""
+    name = re.sub(r"[^a-zA-Z0-9]", "-", directory)
+    if len(name) <= LOG_DIR_NAME_MAX:
+        return [paths.projects / name]
+    prefix = name[:LOG_DIR_NAME_MAX] + "-"
+    try:
+        return sorted(p for p in paths.projects.iterdir() if p.name.startswith(prefix))
+    except OSError:
+        return []
 
 
 @dataclass
@@ -26,7 +46,7 @@ class ClaudeHome:
 
     def project(self, cwd: Path | str) -> Path:
         """The log directory Claude uses for `cwd`."""
-        d = self.paths.log_dirs_for(str(cwd))[0]
+        d = log_dirs_for(self.paths, str(cwd))[0]
         d.mkdir(parents=True, exist_ok=True)
         return d
 

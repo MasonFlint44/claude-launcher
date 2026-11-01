@@ -3,17 +3,11 @@
 from __future__ import annotations
 
 import os
-import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
 from . import pathtext
-
-# Claude names a project's log directory after its path, with every character
-# other than a letter or digit turned into "-". A name longer than this is cut
-# to this length and given a hash suffix.
-_LOG_DIR_NAME_MAX = 200
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 REPO_DIR = PACKAGE_DIR.parent.parent
@@ -55,17 +49,6 @@ class Paths:
     @property
     def lock(self) -> Path:
         return self.state / "lock"
-
-    def log_dirs_for(self, directory: str) -> list[Path]:
-        """The log directories Claude may keep `directory`'s sessions in."""
-        name = re.sub(r"[^a-zA-Z0-9]", "-", directory)
-        if len(name) <= _LOG_DIR_NAME_MAX:
-            return [self.projects / name]
-        prefix = name[:_LOG_DIR_NAME_MAX] + "-"
-        try:
-            return sorted(p for p in self.projects.iterdir() if p.name.startswith(prefix))
-        except OSError:
-            return []
 
     def all_log_dirs(self) -> list[Path]:
         try:

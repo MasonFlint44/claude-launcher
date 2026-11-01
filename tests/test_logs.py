@@ -1,7 +1,7 @@
 import json
 
 from claude_launcher import logs
-from conftest import assistant, conversation, posix_only, user
+from conftest import assistant, conversation, log_dirs_for, posix_only, user
 
 
 def titles(claude_home):
@@ -240,4 +240,4 @@ def test_long_path_log_dirs(claude_home):
     long = "/" + "a" * 250
     cut = claude_home.paths.projects / ("-" + "a" * 199 + "-deadbeef")
     cut.mkdir()
-    assert claude_home.paths.log_dirs_for(long) == [cut]
+    assert log_dirs_for(claude_home.paths, long) == [cut]

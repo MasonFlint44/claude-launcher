@@ -207,9 +207,10 @@ def test_home_is_the_profile_not_git_bashs_home():
 def test_log_directory_name_for_a_windows_path(tmp_path):
     # As Claude names it on Windows (seen with Claude Code 2.1.312).
     from claude_launcher.paths import Paths
+    from conftest import log_dirs_for
 
     paths = Paths(config=tmp_path, home=tmp_path)
-    assert paths.log_dirs_for("C:\\Users\\tester") == [tmp_path / "projects" / "C--Users-tester"]
+    assert log_dirs_for(paths, "C:\\Users\\tester") == [tmp_path / "projects" / "C--Users-tester"]
 
 
 @pytest.mark.parametrize(
