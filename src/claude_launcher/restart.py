@@ -84,7 +84,7 @@ REASONS = tuple(r.key for r in SHARED)
 def unknown(key: str) -> Reason:
     """A reason no platform here gives (one from another version's
     restored.json, say): kept, ranked last, and said plainly."""
-    return Reason(key, "Claude was stopped", "stopped", 1_000_000)
+    return Reason(key, "Claude was stopped", "stop", 1_000_000)
 
 
 def reasons(extra: Iterable[Reason] = ()) -> tuple[Reason, ...]:

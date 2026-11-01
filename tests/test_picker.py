@@ -584,7 +584,7 @@ class TestHeader:
         assert "↻ 1 session was open when Claude was stopped" in strip_ansi(p.make_header())
         p.on_sessions()
         assert "↻ open when Claude was stopped" in strip_ansi(p.make_header())
-        assert displayed(p.rows())[1].startswith("↻ today stopped ")
+        assert displayed(p.rows())[1].startswith("↻ today stop ")
 
     def test_sessions_view_says_all_three_reasons(self, env, wsl):
         a, b, c = (env.log("/tmp", conversation(n, "/tmp")) for n in "abc")

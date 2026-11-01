@@ -17,7 +17,7 @@ Most of the launcher is the same everywhere: the picker (`picker.py`), the sessi
 
 `Host` and `Setup` are made when first used and `EventSource` only when the picker sorts the restart group, so key presses, which run the core once each, never load platform code (`tests/test_imports.py` checks). What a key press needs from the platform (the shell, the core's command line, the reasons' wording) is saved in the picker's state when it starts. Dismissing a ↻ session (Ctrl-X, Alt-X) is the exception: it takes the platform's lock.
 
-A reason that's in a record's group but that no platform knows (from an older or newer launcher) is kept, ranked last, and shown as "Claude was stopped".
+A reason that's in a record's group but that no platform knows (from an older or newer launcher) is kept, ranked last, and shown as "Claude was stopped" ("Mon stop" in its rows).
 
 ## Picking one
 
