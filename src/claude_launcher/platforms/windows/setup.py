@@ -240,7 +240,7 @@ class WindowsSetup:
 
     def install(self, terminal_names: str | None, icon: str | None) -> Iterator[str]:
         if terminal_names:
-            yield "warning: --terminal is for Linux; on Windows the launcher opens in Windows Terminal"
+            yield "warning: --terminal is for Linux desktops; on Windows the launcher opens in Windows Terminal"
         self.data_dir.mkdir(parents=True, exist_ok=True)
         files = {
             "claude-session-hook.py": entry_script(HOOK),
@@ -277,7 +277,7 @@ class WindowsSetup:
             kept.unlink(missing_ok=True)
         elif icon:
             if not icon.lower().endswith(".png"):
-                raise ValueError("on Windows, --icon takes a .png")
+                raise ValueError("the icon for Windows Terminal must be a .png")
             kept.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(icon, kept)
         return kept if kept.is_file() else DEFAULT_ICON

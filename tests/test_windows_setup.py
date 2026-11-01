@@ -192,7 +192,7 @@ def test_own_icon_kept_until_default(setup, env, tmp_path):
 
 
 def test_icon_must_be_a_png(setup, tmp_path):
-    with pytest.raises(ValueError, match="png"):
+    with pytest.raises(ValueError, match="^the icon for Windows Terminal must be a .png$"):
         list(setup.install(None, str(tmp_path / "x.svg")))
 
 
@@ -215,4 +215,4 @@ def test_uninstall_takes_it_all_out(setup, env):
 
 
 def test_terminal_option_is_for_linux(setup):
-    assert any("--terminal is for Linux" in line for line in setup.install("ghostty", None))
+    assert any("--terminal is for Linux desktops; on Windows" in line for line in setup.install("ghostty", None))
