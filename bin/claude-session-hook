@@ -16,7 +16,9 @@
 # Runs on every session start and end, so it's plain bash, quick, and always
 # exits 0.
 
-LC_ALL=C  # $EPOCHREALTIME has a comma for a decimal point in some locales
+# $EPOCHREALTIME has a comma for a decimal point in some locales. Exported,
+# so nothing this runs sees another locale either.
+export LC_ALL=C
 input=$(cat)
 # Only interactive terminal sessions: not `claude -p`, the SDK or an editor panel.
 [[ ${CLAUDE_CODE_ENTRYPOINT:-} == cli ]] || exit 0
