@@ -28,6 +28,34 @@ jobs:
       - run: uvx $RUFF format --check $PY_FILES
       - run: shellcheck bin/claude-session-hook install.sh scripts/render-icons.sh tests/docker/run.sh tests/docker/*/*.sh tests/docker/terminals/systemd-run
 
+  # The suite with fzf's floor (fzf.MIN_VERSION) first on PATH, and the entry
+  # scripts on a real old Python. The distro jobs run the pinned fzf.
+  floors:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      FZF_FLOOR: "0.67.0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: fzf ${{ env.FZF_FLOOR }}, checked against its release's checksums file
+        run: |
+          dir=$RUNNER_TEMP/fzf-floor
+          mkdir -p "$dir/bin" && cd "$dir"
+          url=https://github.com/junegunn/fzf/releases/download/v$FZF_FLOOR
+          tarball=fzf-$FZF_FLOOR-linux_amd64.tar.gz
+          curl -fsSLO "$url/fzf_${FZF_FLOOR}_checksums.txt"
+          curl -fsSLO "$url/$tarball"
+          grep -F "  $tarball" "fzf_${FZF_FLOOR}_checksums.txt" | sha256sum -c -
+          tar -xzf "$tarball" -C bin fzf
+          echo "$dir/bin" >> "$GITHUB_PATH"
+      - run: '[[ $(fzf --version) == "$FZF_FLOOR "* ]]'
+      - name: an old Python for the entry scripts' check
+        run: |
+          uv python install 3.9
+          echo "CLAUDE_LAUNCHER_TEST_OLD_PYTHON=$(uv python find 3.9)" >> "$GITHUB_ENV"
+      - run: uv run --frozen pytest -q -rs -p no:cacheprovider
+
   windows:
     runs-on: windows-latest
     timeout-minutes: 20
