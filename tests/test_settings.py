@@ -2,11 +2,18 @@
 
 import json
 import os
+import shlex
+import subprocess
 from pathlib import Path
 
 import pytest
 
 from claude_launcher import settings as hook_settings
+
+
+def q(path: str) -> str:
+    """The hook's path as the shell form writes it (Windows' backslashes get quoted too)."""
+    return shlex.quote(str(Path(path)))
 
 
 class TestHook:
@@ -18,10 +25,8 @@ class TestHook:
         settings = json.loads(path.read_text())
         assert settings["model"] == "opus"
         assert settings["hooks"]["SessionStart"][0] == other
-        assert (
-            settings["hooks"]["SessionStart"][1]["hooks"][0]["command"] == f"{Path('/bin/claude-session-hook')} start"
-        )
-        assert settings["hooks"]["SessionEnd"][0]["hooks"][0]["command"] == f"{Path('/bin/claude-session-hook')} end"
+        assert settings["hooks"]["SessionStart"][1]["hooks"][0]["command"] == f"{q('/bin/claude-session-hook')} start"
+        assert settings["hooks"]["SessionEnd"][0]["hooks"][0]["command"] == f"{q('/bin/claude-session-hook')} end"
 
     def test_add_twice_changes_nothing(self, tmp_path):
         path = tmp_path / "settings.json"
@@ -35,7 +40,7 @@ class TestHook:
         hook_settings.add_hook(path, Path("/old/claude-session-hook"))
         hook_settings.add_hook(path, Path("/new/claude-session-hook"))
         groups = json.loads(path.read_text())["hooks"]["SessionStart"]
-        assert [h["command"] for g in groups for h in g["hooks"]] == [f"{Path('/new/claude-session-hook')} start"]
+        assert [h["command"] for g in groups for h in g["hooks"]] == [f"{q('/new/claude-session-hook')} start"]
 
     def test_writes_through_a_symlink(self, tmp_path):
         real = tmp_path / "dotfiles" / "settings.json"
@@ -57,6 +62,49 @@ class TestHook:
         hook_settings.add_hook(path, Path("/x/claude-session-hook"))
         assert hook_settings.remove_hook(path)
         assert json.loads(path.read_text()) == {"hooks": {"SessionEnd": [other]}}
+
+    SPACED = "/home/John Doe/.local/bin/claude-session-hook"
+
+    def test_a_path_with_a_space_is_quoted(self, tmp_path):
+        path = tmp_path / "settings.json"
+        hook_settings.add_hook(path, Path(self.SPACED))
+        hooks = json.loads(path.read_text())["hooks"]
+        assert hooks["SessionStart"][0]["hooks"][0]["command"] == f"{q(self.SPACED)} start"
+        assert hooks["SessionEnd"][0]["hooks"][0]["command"] == f"{q(self.SPACED)} end"
+
+    @pytest.mark.skipif(os.name == "nt", reason="runs the command with sh")
+    def test_a_quoted_hook_runs_through_a_shell(self, tmp_path):
+        hook = tmp_path / "John Doe" / "claude-session-hook"
+        hook.parent.mkdir()
+        hook.write_text('#!/bin/sh\necho "$1" > "$(dirname "$0")/ran"\n')
+        hook.chmod(0o755)
+        path = tmp_path / "settings.json"
+        hook_settings.add_hook(path, hook)
+        command = json.loads(path.read_text())["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+        subprocess.run(["sh", "-c", command], check=True)
+        assert (hook.parent / "ran").read_text() == "start\n"
+
+    def _unquoted(self, path):
+        """settings.json as an install from before the quoting left it."""
+        old = {
+            event: [{"hooks": [{"type": "command", "command": f"{self.SPACED} {arg}"}]}]
+            for event, arg in hook_settings.HOOK_EVENTS
+        }
+        path.write_text(json.dumps({"hooks": old}))
+
+    def test_reinstall_replaces_an_unquoted_entry(self, tmp_path):
+        path = tmp_path / "settings.json"
+        self._unquoted(path)
+        assert hook_settings.add_hook(path, Path(self.SPACED))
+        groups = json.loads(path.read_text())["hooks"]["SessionStart"]
+        assert [h["command"] for g in groups for h in g["hooks"]] == [f"{q(self.SPACED)} start"]
+        assert not hook_settings.add_hook(path, Path(self.SPACED))
+
+    def test_remove_takes_out_an_unquoted_entry(self, tmp_path):
+        path = tmp_path / "settings.json"
+        self._unquoted(path)
+        assert hook_settings.remove_hook(path)
+        assert json.loads(path.read_text()) == {}
 
     def test_remove_last_hook_removes_the_key(self, tmp_path):
         path = tmp_path / "settings.json"

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 from pathlib import Path
 
 HOOK_NAME = "claude-session-hook"
@@ -73,10 +74,12 @@ def _is_ours(hook: object) -> bool:
 
 def hook_entry(argv: list[str], arg: str) -> dict:
     """The settings.json entry that runs `argv` with `arg` ("start" or "end").
-    One word is a script, run by Claude's shell; more is a program and its
-    arguments, run with no shell."""
+    One word is a script, run by Claude's shell (quoted, for a home like
+    /home/John Doe); more is a program and its arguments, run with no shell.
+    Entries from before the quoting are still ours (`_is_ours`), so they're
+    replaced or taken out like any other."""
     if len(argv) == 1:
-        return {"type": "command", "command": f"{argv[0]} {arg}"}
+        return {"type": "command", "command": f"{shlex.quote(argv[0])} {arg}"}
     return {"type": "command", "command": argv[0], "args": [*argv[1:], arg]}
 
 
