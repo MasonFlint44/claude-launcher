@@ -35,10 +35,14 @@ MIN_PYTHON = (3, 10)
 # next Python. Unlike any code Claude or Python exits with.
 TOO_OLD = 9310
 # The py launcher's exit code when it has no Python to run ("No suitable
-# Python runtime found": a launcher left behind by an uninstalled Python).
-# The .cmd tries the next Python then, as on TOO_OLD. A script of ours that
-# exits 103 itself would run again with the next Python; Claude never has.
+# Python runtime found": one left behind by an uninstalled Python). The .cmd
+# tries the next Python then too.
 PY_NONE = 103
+# So the .cmd never runs a script a second time, the entry script exits this
+# instead of TOO_OLD or PY_NONE once its target has run (the launcher passes
+# on Claude's exit code, which could be either). Still a failure to Windows
+# Terminal, and the hook always exits 0.
+RAN_INSTEAD = 1
 # Set while there's another Python left to try, so a too-old one says nothing.
 _FALLBACK = "CLAUDE_LAUNCHER_FALLBACK"
 _SHIM_MARK = "rem claude-launcher: "
@@ -103,7 +107,13 @@ os.environ.pop("{fallback}", None)
 TARGET = {target}
 with open(TARGET, "rb") as f:
     code = compile(f.read(), TARGET, "exec")
-exec(code, {{"__name__": "__main__", "__file__": TARGET}})
+try:
+    exec(code, {{"__name__": "__main__", "__file__": TARGET}})
+except SystemExit as e:
+    # The .cmd would run it again with the next Python.
+    if e.code in ({too_old}, {py_none}):
+        sys.exit({ran_instead})
+    raise
 """
 
 # claude-launcher.cmd on PATH: hands over to the one in the data directory,
@@ -152,6 +162,8 @@ def entry_script(target: Path) -> str:
         minor=MIN_PYTHON[1],
         fallback=_FALLBACK,
         too_old=TOO_OLD,
+        py_none=PY_NONE,
+        ran_instead=RAN_INSTEAD,
     )
 
 

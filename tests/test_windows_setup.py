@@ -173,6 +173,15 @@ def test_a_python_too_old_says_so_unless_another_is_left(tmp_path, monkeypatch):
     assert quiet.returncode == EXIT_TOO_OLD and quiet.stderr == ""
 
 
+@pytest.mark.parametrize("code", [TOO_OLD, windows_setup.PY_NONE])
+def test_a_script_that_ran_never_exits_with_a_retry_code(tmp_path, code):
+    # The .cmd would run it again with the next Python.
+    target = tmp_path / "probe.py"
+    target.write_text(f"import sys\nprint('ran')\nsys.exit({code})\n")
+    done = run_entry(tmp_path, target)
+    assert done.returncode == windows_setup.RAN_INSTEAD and done.stdout == "ran\n"
+
+
 def test_profile_guid_never_changes(setup, env):
     # Windows Terminal keeps the user's own changes to the profile under it.
     list(setup.install(None, None))

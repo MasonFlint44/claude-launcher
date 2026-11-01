@@ -114,6 +114,23 @@ def test_py_without_a_python_then_the_store_python(probe, pythons):
     assert ran(run_probe(probe, pythons["store"], py_dir(), **none), pythons["store"])
 
 
+def test_a_script_that_exits_103_runs_once(tmp_path, pythons):
+    # py runs it and passes on its 103, which the .cmd must not take for py
+    # having no Python: it would run it again with the store's python.exe.
+    ran_log = tmp_path / "ran.txt"
+    target = tmp_path / "target.py"
+    target.write_text(
+        f"import sys\nopen({str(ran_log)!r}, 'a').write('ran\\n')\nsys.exit({windows_setup.PY_NONE})\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "entry.py").write_text(windows_setup.entry_script(target), encoding="ascii")
+    cmd = tmp_path / "entry.cmd"
+    cmd.write_text(windows_setup.run_cmd("entry.py"), encoding="ascii", newline="")
+    done = run_probe(cmd, pythons["store"], py_dir())
+    assert done.returncode == windows_setup.RAN_INSTEAD, done.stderr
+    assert ran_log.read_text() == "ran\n"
+
+
 def test_no_python_at_all(probe, tmp_path):
     empty = tmp_path / "empty"
     empty.mkdir()
