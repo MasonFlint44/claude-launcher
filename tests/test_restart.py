@@ -171,6 +171,13 @@ def test_bad_records_are_removed_and_ones_being_written_are_left(setup, claude_h
     assert records(claude_home) == [f"{LAST_BOOT}_2.tmp"]
 
 
+def test_a_record_moved_aside_is_read(setup):
+    # The hook keeps a record under <name>_<session id> when a new Claude gets its pid.
+    sid = setup.session()
+    setup.record(sid, boot=THIS_BOOT, ended=LOGOUT.start + 1, name=f"{THIS_BOOT}_100_{sid}")
+    assert setup.make(LOGOUT).sort().sessions == {sid: Closed(LOGOUT.start, "logout")}
+
+
 def test_drop_and_drop_all(setup):
     a, b = setup.session(), setup.session()
     setup.record(a, pid=1, ended=NOW - 695)

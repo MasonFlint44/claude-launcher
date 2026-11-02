@@ -11,7 +11,7 @@ import sys
 import pytest
 
 from claude_launcher.paths import REPO_DIR
-from claude_launcher.restart import Record
+from claude_launcher.restart import _RECORD_NAME, Record
 
 spec = importlib.util.spec_from_file_location("win_hook", REPO_DIR / "bin" / "claude-session-hook.py")
 hook = importlib.util.module_from_spec(spec)
@@ -176,6 +176,26 @@ def test_another_sessions_record_is_replaced(config):
     run(config, "end", "other", at=150.0)
     record = Record.load(records(config)[f"{BOOT}_4242"])
     assert (record.session_id, record.started) == (SID, 150.0)
+
+
+def test_a_new_claude_with_the_pid_keeps_the_old_record(config):
+    # A Claude a logoff or Fast Startup killed (no end), then a new one that
+    # got its pid (Windows reuses them quickly) before the launcher sorted it.
+    other = "11111111-2222-4333-8444-555555555555"
+    run(config, "start", session=other)
+    run(config, "start", at=150.0)
+    found = records(config)
+    assert set(found) == {f"{BOOT}_4242", f"{BOOT}_4242_{other}"}
+    kept, new = Record.load(found[f"{BOOT}_4242_{other}"]), Record.load(found[f"{BOOT}_4242"])
+    assert (kept.session_id, kept.started, kept.ended) == (other, 100.0, None)
+    assert (new.session_id, new.started) == (SID, 150.0)
+    assert _RECORD_NAME.fullmatch(f"{BOOT}_4242_{other}")
+
+
+def test_the_same_session_starting_again_keeps_one_record(config):
+    run(config, "start")
+    run(config, "start", at=150.0)
+    assert set(records(config)) == {f"{BOOT}_4242"}
 
 
 def test_bad_input_writes_nothing(config):

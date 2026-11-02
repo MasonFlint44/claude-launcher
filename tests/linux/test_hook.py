@@ -74,7 +74,7 @@ def run_hook(tmp_path):
         if as_ is not None and not as_[1].endswith(("claude", "cli.js")):
             # Walking up past a non-Claude process can reach a real Claude running these tests.
             return {k: v for k, v in found.items() if k == pid}
-        assert set(found) <= {pid}
+        assert all(name == pid or name.startswith(pid + "_") for name in found)  # moved aside: <record>_<session>
         return found
 
     return run
@@ -124,6 +124,27 @@ def test_end_of_another_session_doesnt_reuse_its_record(run_hook):
     other = "9b2f1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b"
     [record] = run_hook(("start", {"session_id": other}), ("end", {"session_id": SID, "reason": "other"})).values()
     assert record["session_id"] == SID and "ended_at" in record
+
+
+OTHER = "9b2f1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b"
+
+
+def test_a_new_claude_with_the_pid_keeps_the_old_record(run_hook):
+    # A Claude a logout killed (no end), then a new one that got its pid
+    # before the launcher sorted the old record.
+    found = run_hook(("start", {"session_id": OTHER}), ("start", {"session_id": SID}))
+    [(name, record)] = [(n, r) for n, r in found.items() if r["session_id"] == SID]
+    [(kept_name, kept)] = [(n, r) for n, r in found.items() if r["session_id"] == OTHER]
+    assert kept_name == f"{name}_{OTHER}" and "ended_at" not in kept
+    from claude_launcher.restart import _RECORD_NAME
+
+    assert _RECORD_NAME.fullmatch(name) and _RECORD_NAME.fullmatch(kept_name)
+
+
+def test_the_same_session_starting_again_keeps_one_record(run_hook):
+    # Claude starts a session again after /compact, with the same ID.
+    [record] = run_hook(("start", {"session_id": SID}), ("start", {"session_id": SID, "source": "compact"})).values()
+    assert record["session_id"] == SID
 
 
 def test_times_are_json_numbers_in_any_locale(run_hook, monkeypatch):

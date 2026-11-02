@@ -3,7 +3,8 @@
 claude-session-hook leaves a record in state/open/<boot id>_<pid> for each
 interactive Claude. An exit you chose (/exit, /clear, switching with /resume) deletes it;
 any other end (closing the tab, or the desktop closing every window) keeps it,
-with the time it ended.
+with the time it ended. A new Claude that gets the pid of one whose record
+is still there moves that record to <boot id>_<pid>_<its session id>.
 
 A record is one line of JSON (`Record.load` reads it and ignores keys it
 doesn't know): "session_id", "pid", "boot_id", "login_session" (the login
@@ -51,7 +52,9 @@ from .paths import Paths
 if TYPE_CHECKING:
     from .platforms import Event, EventSource, Host
 
-_RECORD_NAME = re.compile(r"[0-9a-f-]{32,36}_[0-9]+")
+# <boot id>_<pid>, or with _<session id> after it: a record the hook moved
+# aside when a new Claude got its pid. "<record>.tmp" is one being written.
+_RECORD_NAME = re.compile(r"[0-9a-f-]{32,36}_[0-9]+(?:_[0-9a-f-]{36})?")
 KEEP = 7 * 86400  # how long closed sessions stay in the group
 # How close to a restart or logout a Claude has to have ended to count.
 #
