@@ -119,6 +119,46 @@ class TestHook:
             hook_settings.add_hook(path, Path("/x/claude-session-hook"))
 
 
+class TestOtherGroups:
+    """Groups in the same event that aren't only ours."""
+
+    OURS = {"type": "command", "command": "/old/claude-session-hook start"}
+    OTHER = {"type": "command", "command": "other.sh"}
+
+    def write(self, path, groups):
+        path.write_text(json.dumps({"hooks": {"SessionStart": groups}}))
+
+    def groups(self, path):
+        return json.loads(path.read_text())["hooks"]["SessionStart"]
+
+    def test_odd_and_empty_groups_are_kept(self, tmp_path):
+        path = tmp_path / "settings.json"
+        odd, empty, no_hooks = "not a group", {"matcher": "x", "hooks": []}, {"matcher": "y"}
+        self.write(path, [odd, empty, no_hooks, {"hooks": [self.OURS]}])
+        hook_settings.add_hook(path, Path("/new/claude-session-hook"))
+        new = {"hooks": [{"type": "command", "command": f"{q('/new/claude-session-hook')} start"}]}
+        assert self.groups(path) == [odd, empty, no_hooks, new]
+        hook_settings.remove_hook(path)
+        assert self.groups(path) == [odd, empty, no_hooks]
+
+    def test_ours_beside_other_hooks(self, tmp_path):
+        # The group stays with the other hook; ours moves to a group of its own.
+        path = tmp_path / "settings.json"
+        self.write(path, [{"matcher": "x", "hooks": [self.OTHER, self.OURS]}])
+        hook_settings.add_hook(path, Path("/new/claude-session-hook"))
+        new = {"hooks": [{"type": "command", "command": f"{q('/new/claude-session-hook')} start"}]}
+        assert self.groups(path) == [{"matcher": "x", "hooks": [self.OTHER]}, new]
+        hook_settings.remove_hook(path)
+        assert self.groups(path) == [{"matcher": "x", "hooks": [self.OTHER]}]
+
+    def test_the_same_hook_beside_others_is_left_where_it_is(self, tmp_path):
+        path = tmp_path / "settings.json"
+        ours = {"type": "command", "command": f"{q('/x/claude-session-hook')} start"}
+        self.write(path, [{"hooks": [self.OTHER, ours]}])
+        hook_settings.add_hook(path, Path("/x/claude-session-hook"))
+        assert self.groups(path) == [{"hooks": [self.OTHER, ours]}]
+
+
 class TestHookWithoutAShell:
     """Windows: Claude runs python.exe with the hook script as an argument."""
 
