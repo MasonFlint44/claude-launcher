@@ -21,6 +21,7 @@ A project and session picker for Claude Code, plus a Claude Dark theme and a des
 | `src/claude_launcher/install.py`, `install.sh` | The installer's steps, the same on every platform; install.sh (and Windows' install.ps1) only check for Python and show the steps' lines. |
 | `src/claude_launcher/settings.py` | For the installer: adding the hook to Claude's settings.json (a script, or a program and its arguments), and taking it out. |
 | `share/icons/`, `scripts/render-icons.sh` | The app icon. Edit the SVG, then run the script to re-render the PNGs. |
+| `CHANGELOG.md`, `.github/workflows/release.yml`, `scripts/release-notes.sh` | Releases. Pushing a tag `vX.Y.Z` (on `main`, matching `__version__` and `pyproject.toml`, with a `## [X.Y.Z]` section in the changelog) runs every test, then makes the GitHub release from that section. Users install and update to the newest such tag. |
 | `tests/` | pytest. `term.py` is a pseudo-terminal driver (pyte) for the end-to-end and hook tests. `contract/` checks any platform's parts; `linux/`, `windows/` and `wsl/` run only on their OS (each has a `RUNS_ON` file; `wsl/` is live interop and runs only inside WSL). |
 
 ## Commands
@@ -30,7 +31,7 @@ uv run pytest                    # everything (about 30 s)
 uv run pytest -m "not e2e"       # skip the pseudo-terminal tests
 uvx ruff@0.17.3 check src tests bin/claude-launcher bin/claude-session-hook.py libexec/claude-launcher-core
 uvx ruff@0.17.3 format src tests bin/claude-launcher bin/claude-session-hook.py libexec/claude-launcher-core
-shellcheck bin/claude-session-hook install.sh scripts/render-icons.sh tests/docker/run.sh tests/docker/*/*.sh tests/docker/terminals/systemd-run
+shellcheck bin/claude-session-hook install.sh scripts/render-icons.sh scripts/release-notes.sh tests/docker/run.sh tests/docker/*/*.sh tests/docker/terminals/systemd-run
 ```
 
 Run these before calling a change done, and the Docker layer a change touches (docs/dev/linux.md). CI runs everything. Tests need fzf 0.67+ on PATH. Skipped where they can't run (`pytest -rs` says which and why): the Ghostty theme check (no Ghostty), the old-Python checks (no Python older than 3.10; CI's floors job sets `CLAUDE_LAUNCHER_TEST_OLD_PYTHON`) and `tests/wsl/` (WSL only), the only skips `tests/docker/distro/check.sh` allows. A dev machine can add: install.sh's tests (fzf older than 0.67, or WSL), a hook test (no locale with a decimal comma), two desktop checks (no PyGObject, no hicolor `index.theme`), and a terminal check (every terminal installed).

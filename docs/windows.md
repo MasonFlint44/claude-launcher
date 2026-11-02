@@ -10,7 +10,9 @@ In PowerShell:
 
 ```powershell
 git clone https://github.com/MasonFlint44/claude-launcher.git $HOME\git\claude-launcher
-powershell -ExecutionPolicy Bypass -File $HOME\git\claude-launcher\install.ps1
+cd $HOME\git\claude-launcher
+git checkout -q (git describe --tags --abbrev=0 origin/main)  # the latest release
+powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
 (`-ExecutionPolicy Bypass` lets this one script run; Windows doesn't run downloaded PowerShell scripts otherwise.)
@@ -50,10 +52,12 @@ Once the System log is full it drops its oldest events (it usually holds weeks o
 ## Updating
 
 ```powershell
-git -C $HOME\git\claude-launcher pull
+cd $HOME\git\claude-launcher
+git fetch -q --tags
+git checkout -q (git describe --tags --abbrev=0 origin/main)
 ```
 
-Changes apply right away. If the profile changed (`src\claude_launcher\platforms\windows\`), re-run `install.ps1` and restart Windows Terminal. If you move the repo, run `install.ps1` again from its new place: the installed files name it.
+That moves to the latest release ([CHANGELOG.md](../CHANGELOG.md) says what changed). Changes apply right away. If the profile changed (`src\claude_launcher\platforms\windows\`), re-run `install.ps1` and restart Windows Terminal. If you move the repo, run `install.ps1` again from its new place: the installed files name it.
 
 The profile, `claude-launcher.cmd` and the session hook find Python each time they run (the first `python` on your PATH, else the `py` launcher, else the Microsoft Store's; it has to be 3.10 or newer), so upgrading or replacing Python needs nothing from you.
 

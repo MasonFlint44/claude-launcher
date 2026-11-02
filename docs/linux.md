@@ -8,14 +8,16 @@ You need Linux with systemd (tested on Ubuntu 22.04 to 26.04, Debian 12 and 13, 
 
 ```bash
 git clone https://github.com/MasonFlint44/claude-launcher.git ~/git/claude-launcher
-~/git/claude-launcher/install.sh
+cd ~/git/claude-launcher
+git checkout -q "$(git describe --tags --abbrev=0 origin/main)"  # the latest release
+./install.sh
 ```
 
 The installer:
 
 1. Checks for fzf 0.67 or newer. Ubuntu 24.04 and Debian ship older ones, so if yours is older (or missing), it downloads fzf 0.74.5 from fzf's GitHub releases, checks it against the release's checksum, and keeps it in `~/.local/share/claude-launcher/bin` for the launcher alone. Your own fzf stays as it is.
 2. Adds `claude-session-hook` to Claude Code's user settings (`~/.claude/settings.json`, or `$CLAUDE_CONFIG_DIR/settings.json`) as a SessionStart and SessionEnd hook. Your other settings and hooks are left as they are. If `settings.json` is a link (into a dotfiles repo, say), the file it points to is edited and the link stays. Sessions started after this use the hook.
-3. Links `~/.local/bin/claude-launcher` and `~/.local/bin/claude-session-hook` to the scripts in this repo, so `git pull` picks up changes.
+3. Links `~/.local/bin/claude-launcher` and `~/.local/bin/claude-session-hook` to the scripts in this repo, so updating the repo (see [Updating](#updating)) picks up changes.
 4. Links the theme to `~/.config/ghostty/themes/claude-dark`.
 5. Adds the app icon and a **Claude Code** desktop launcher for your terminal (see below), with a Claude Code profile in terminals that use profiles.
 
@@ -68,10 +70,12 @@ Only interactive Claude sessions in a terminal are recorded: not `claude -p`, SD
 ## Updating
 
 ```bash
-git -C ~/git/claude-launcher pull
+cd ~/git/claude-launcher
+git fetch -q --tags
+git checkout -q "$(git describe --tags --abbrev=0 origin/main)"
 ```
 
-Changes to the launcher, hook and theme apply right away. If the desktop launcher changed (`src/claude_launcher/platforms/linux/`), re-run `install.sh`. If you move the repo, run `install.sh` again from its new place: the links point into it.
+That moves to the latest release ([CHANGELOG.md](../CHANGELOG.md) says what changed). Changes to the launcher, hook and theme apply right away. If the desktop launcher changed (`src/claude_launcher/platforms/linux/`), re-run `install.sh`. If you move the repo, run `install.sh` again from its new place: the links point into it.
 
 ## Uninstalling
 

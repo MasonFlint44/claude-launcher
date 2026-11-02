@@ -1,13 +1,14 @@
 name: test
 
-# Pushes to main and release tags, and every PR (from a branch here or a
-# fork). A branch without a PR runs only by hand (workflow_dispatch).
+# Pushes to main, and every PR (from a branch here or a fork). A branch
+# without a PR runs only by hand (workflow_dispatch). A release tag runs it
+# through release.yml (workflow_call), before the release is made.
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -30,7 +31,7 @@ jobs:
       - uses: astral-sh/setup-uv@v6
       - run: uvx $RUFF check $PY_FILES
       - run: uvx $RUFF format --check $PY_FILES
-      - run: shellcheck bin/claude-session-hook install.sh scripts/render-icons.sh tests/docker/run.sh tests/docker/*/*.sh tests/docker/terminals/systemd-run
+      - run: shellcheck bin/claude-session-hook install.sh scripts/render-icons.sh scripts/release-notes.sh tests/docker/run.sh tests/docker/*/*.sh tests/docker/terminals/systemd-run
       - name: the distro jobs are DISTROS in tests/docker/run.sh
         run: |
           want=$(sed -n 's/^DISTROS=(\(.*\))$/\1/p' tests/docker/run.sh)

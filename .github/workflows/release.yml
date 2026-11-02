@@ -1,0 +1,53 @@
+name: release
+
+# Pushing a tag like v0.1.0: check it names this version and has notes in
+# CHANGELOG.md, run every test (test.yml), then make the GitHub release with
+# those notes.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # to see that the tag is on main
+      - name: the tag is this version, on main, with notes
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          code=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' src/claude_launcher/__init__.py)
+          project=$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml)
+          [[ $version == "$code" && $version == "$project" ]] \
+            || { echo "tag $GITHUB_REF_NAME, but __version__ is $code and pyproject.toml's $project" >&2; exit 1; }
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main \
+            || { echo "$GITHUB_REF_NAME isn't on main" >&2; exit 1; }
+          scripts/release-notes.sh "$version" > notes.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: notes
+          path: notes.md
+
+  test:
+    needs: check
+    uses: ./.github/workflows/test.yml
+
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: notes
+      - name: make the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --notes-file notes.md --verify-tag
