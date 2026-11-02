@@ -63,11 +63,12 @@ _SHIM_MARK = "rem claude-launcher: "
 # ({find}, a PATH search: no process) after a Python that was too old.
 # The search runs from the .cmd's own directory (pushd), which holds no
 # python.exe: %~$PATH: may look in the current directory first, and
-# install.ps1's Get-Command never does.
+# install.ps1's Get-Command never does. A data directory on a share needs a
+# free drive letter for pushd; without one, System32, which holds none either.
 # DisableDelayedExpansion: it may be on by default (the registry), or from
 # the hook's cmd /v:on, and would eat a "!" in a path.
 _FIND = """set "{a}=-" & set "{b}=-" & set "{c}=-"
-pushd "%~dp0."
+pushd "%~dp0." 2>nul || pushd "%SystemRoot%\\System32"
 for %%P in (python.exe) do if not "%%~$PATH:P"=="" set "{a}=%%~$PATH:P"
 if /i not "%{a}:\\WindowsApps\\=%"=="%{a}%" (set "{c}=%{a}%" & set "{a}=-")
 for %%P in (py.exe) do if not "%%~$PATH:P"=="" set "{b}=%%~$PATH:P"

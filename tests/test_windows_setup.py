@@ -100,9 +100,10 @@ def test_nothing_names_a_python(installed):
 
 def test_the_python_search_is_from_the_cmds_own_directory(installed):
     # %~$PATH: may look in the current directory first: a python.exe in
-    # Claude's directory would be taken. Each search is from %~dp0, and the
-    # current directory is back before Python runs.
-    pushd = 'pushd "%~dp0."'
+    # Claude's directory would be taken. Each search is from %~dp0 (or, if
+    # pushd can't map a share to a drive, System32), and the current
+    # directory is back before Python runs.
+    pushd = 'pushd "%~dp0." 2>nul || pushd "%SystemRoot%\\System32"'
     list(installed.install(None, None))
     for name in ("claude-launcher", "claude-session-hook"):
         lines = (installed.data_dir / f"{name}.cmd").read_text().splitlines()

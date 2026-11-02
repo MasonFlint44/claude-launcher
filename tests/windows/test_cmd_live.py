@@ -234,6 +234,42 @@ def test_too_old_and_nothing_else(tmp_path, pythons, monkeypatch):
     assert done.returncode == windows_setup.TOO_OLD and "needs Python 99.0 or newer (found" in done.stderr
 
 
+def drives():
+    import ctypes
+
+    return ctypes.windll.kernel32.GetLogicalDrives()
+
+
+def test_the_cmd_from_a_share(probe, pythons, tmp_path):
+    # A data directory on a share (a redirected AppData): pushd maps it to a
+    # drive letter for the search, and popd takes the mapping away again.
+    drive, rest = os.path.splitdrive(str(probe))
+    shared = f"\\\\127.0.0.1\\{drive[:1]}${rest}"
+    if len(drive) != 2 or not os.path.isfile(shared):
+        pytest.skip(f"{probe} can't be reached through an administrative share")
+    before = drives()
+    done = run_probe(shared, pythons["real"], cwd=tmp_path)
+    assert ran(done, pythons["real"]), (done.stdout, done.stderr)
+    assert drives() == before, "pushd left a drive mapped"
+
+
+def test_a_failed_pushd_searches_from_system32(pythons, tmp_path):
+    # pushd fails on a share when there's no drive letter free. Then the
+    # search is from System32, not the caller's directory.
+    find = windows_setup._FIND.format(**windows_setup._VARS)
+    assert '"%~dp0."' in find
+    find = find.replace('"%~dp0."', '"%~dp0missing"')
+    cmd = tmp_path / "find.cmd"
+    text = "@echo off\nsetlocal DisableDelayedExpansion\n" + find + "echo %CLAUDE_LAUNCHER_PYTHON%\ncd\n"
+    cmd.write_text(text.replace("\n", "\r\n"), encoding="ascii", newline="")
+    here = venv(tmp_path / "here")
+    done = run_probe(cmd, pythons["real"], cwd=here)
+    assert done.returncode == 0 and not done.stderr, (done.stdout, done.stderr)
+    found, cwd = done.stdout.splitlines()
+    assert os.path.normcase(found) == os.path.normcase(str(pythons["real"] / "python.exe"))
+    assert os.path.normcase(cwd) == os.path.normcase(str(here))  # popd: back where it was
+
+
 def test_a_running_cmd_replaced_with_other_text(tmp_path):
     # Why the installer leaves a .cmd that's unchanged alone: cmd reads a
     # running batch file a line at a time, from a byte offset, so an open
