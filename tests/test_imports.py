@@ -41,8 +41,9 @@ FETCHING = ("urllib.request", "hashlib", "tarfile", "zipfile")
 )
 def test_key_actions_stay_light(tmp_path, claude_home, action):
     # As the picker leaves it once it has started: it saves how key bindings
-    # run the core, so key presses don't have to ask the platform.
-    (tmp_path / "state.json").write_text(json.dumps({"shell": "bash -c", "core": "core --run x"}))
+    # run the core and the fzf it found, so key presses don't have to ask the platform.
+    state = {"shell": "bash -c", "core": "core --run x", "fzf": "fzf"}
+    (tmp_path / "state.json").write_text(json.dumps(state))
     done = subprocess.run(
         [sys.executable, "-c", PROBE, str(REPO_DIR / "src"), "--run", str(tmp_path), "ui", *action],
         capture_output=True,
