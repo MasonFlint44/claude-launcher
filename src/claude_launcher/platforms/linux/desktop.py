@@ -143,7 +143,8 @@ ICON_SIZES = (48, 64, 128, 256, 512)
 
 
 def _icon_targets(ctx: Context) -> list[Path]:
-    """The app icon, at every size it's in (a PNG of yours goes in by its size)."""
+    """The app icon, at every size it's in, including any an older install
+    used (it put a PNG of yours in by its own size)."""
     return sorted((ctx.data_home / "icons" / "hicolor").glob(f"*/apps/{APP_ID}.*"))
 
 
@@ -153,6 +154,15 @@ def _png_size(path: Path) -> int | None:
         return None
     width, height = struct.unpack(">II", head[16:24])
     return width if width == height else None
+
+
+# The sizes hicolor's index.theme lists. GTK looks for an app icon only in
+# those, so a PNG of another size goes in the next one up (GTK scales it).
+THEME_SIZES = (16, 22, 24, 32, 36, 48, 64, 72, 96, 128, 192, 256, 512)
+
+
+def theme_size(size: int) -> int:
+    return next((s for s in THEME_SIZES if s >= size), THEME_SIZES[-1])
 
 
 def install_icon(ctx: Context, icon: str | None) -> str:
@@ -179,7 +189,7 @@ def install_icon(ctx: Context, icon: str | None) -> str:
         if own.suffix == ".svg":
             pairs = [(own, theme / "scalable" / "apps" / f"{APP_ID}.svg")]
         else:
-            size = _png_size(own)
+            size = theme_size(_png_size(own))
             pairs = [(own, theme / f"{size}x{size}" / "apps" / f"{APP_ID}.png")]
         what = f"Installed your icon ({own})"
     else:

@@ -389,15 +389,38 @@ class TestIcon:
         desktop.install_icon(ctx, str(desktop.ICONS_DIR / "claude-launcher-256.png"))
         assert self.installed(ctx) == [f"256x256/apps/{APP_ID}.png"]
 
-    def test_odd_png_size_comes_out(self, ctx, tmp_path):
-        big = tmp_path / "big.png"
-        big.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\0\0\0\rIHDR" + (1024).to_bytes(4, "big") * 2)
-        desktop.install_icon(ctx, str(big))
-        assert self.installed(ctx) == [f"1024x1024/apps/{APP_ID}.png"]
-        desktop.install_icon(ctx, "default")
-        assert f"1024x1024/apps/{APP_ID}.png" not in self.installed(ctx)
+    @staticmethod
+    def png(path, size):
+        path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\0\0\0\rIHDR" + size.to_bytes(4, "big") * 2)
+        return str(path)
+
+    @pytest.mark.parametrize(("size", "theme"), [(1024, 512), (300, 512), (100, 128), (20, 22), (16, 16)])
+    def test_odd_png_size_goes_in_a_size_the_theme_lists(self, ctx, tmp_path, size, theme):
+        # GTK looks only in the sizes hicolor's index.theme lists, and scales.
+        desktop.install_icon(ctx, self.png(tmp_path / "odd.png", size))
+        assert self.installed(ctx) == [f"{theme}x{theme}/apps/{APP_ID}.png"]
         desktop.remove_icon(ctx)
         assert self.installed(ctx) == []
+
+    def test_an_older_installs_odd_size_comes_out(self, ctx, tmp_path):
+        old = ctx.data_home / "icons" / "hicolor" / "1024x1024" / "apps" / f"{APP_ID}.png"
+        old.parent.mkdir(parents=True)
+        old.symlink_to(self.png(tmp_path / "big.png", 1024))
+        desktop.install_icon(ctx, None)
+        assert f"1024x1024/apps/{APP_ID}.png" not in self.installed(ctx)
+        old.parent.mkdir(parents=True, exist_ok=True)
+        old.symlink_to(tmp_path / "big.png")
+        desktop.remove_icon(ctx)
+        assert self.installed(ctx) == []
+
+    def test_theme_sizes_are_hicolors(self):
+        index = Path("/usr/share/icons/hicolor/index.theme")
+        if not index.is_file():
+            pytest.skip("no hicolor index.theme here")
+        dirs = re.search(r"^Directories=(.*)$", index.read_text(), re.M).group(1).split(",")
+        listed = {int(m.group(1)) for d in dirs if (m := re.fullmatch(r"(\d+)x\1/apps", d))}
+        assert set(desktop.THEME_SIZES) <= listed
+        assert set(desktop.ICON_SIZES) <= set(desktop.THEME_SIZES)
 
     def test_back_to_default(self, ctx, tmp_path):
         mine = tmp_path / "x.svg"

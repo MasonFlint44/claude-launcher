@@ -24,7 +24,7 @@ Re-running it is safe; it updates what's already there, and remembers the option
 | Option | Does |
 |---|---|
 | `--terminal NAME[,NAME...]` | The terminal(s) **Claude Code** opens: `ghostty`, `kitty`, `wezterm`, `ptyxis`, `gnome-terminal`, `konsole`, `guake` or `default`. The first gets the plain name, the others "Claude Code (Guake)" and so on. `auto` goes back to picking. |
-| `--icon FILE` | Your own app icon, an `.svg` or a square `.png`. A copy is kept, so the original can move. `--icon default` goes back to the one in `share/icons`. |
+| `--icon FILE` | Your own app icon, an `.svg` or a square `.png` (512 by 512 or bigger looks sharpest; any size works). A copy is kept, so the original can move. `--icon default` goes back to the one in `share/icons`. |
 | `--uninstall` | Takes everything out again. |
 
 ## The Claude Code app
