@@ -18,7 +18,7 @@ Logs go to `.work/` (gitignored). CI (`.github/workflows/test.yml`) runs all thr
 - the whole test suite on the distro's Python, with PyGObject, the hicolor icon theme and a comma-decimal locale, so the only skips are the Ghostty theme check, the old-Python check (`test_on_a_real_old_python`, where there's no Python older than 3.10) and the live WSL tests (`tests/wsl/test_interop_live.py`); any other skip fails the run;
 - `--uninstall`, and that everything it set up is gone.
 
-pytest and pyte are in a venv built on the system Python, at `uv.lock`'s versions (the image is built from the repo's root for it; `distro/Dockerfile.dockerignore` keeps the rest out); the launcher never uses the venv. About 35 s a distro once the images are built.
+pytest and pyte are in a venv built on the system Python, at `uv.lock`'s versions (the image is built from the repo's root for it; `distro/Dockerfile.dockerignore` keeps the rest out); the launcher never uses the venv. That ignore file needs BuildKit, the default builder since Docker 23; the old builder sends the whole repo as the build context, which is slow but still works. About 35 s a distro once the images are built.
 
 **Terminals.** This one image, on Arch at 3.6 GB, runs every terminal claude-launcher sets up, plus xterm, live on a virtual X display: Ghostty, kitty, WezTerm, Ptyxis, GNOME Terminal, Konsole and Guake. A run takes about a minute. For each terminal it:
 
