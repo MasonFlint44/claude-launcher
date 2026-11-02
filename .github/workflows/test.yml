@@ -1,9 +1,11 @@
 name: test
 
-# Every push, to any branch or tag. A PR from a branch here is already run by
-# its pushes, so pull_request runs only for PRs from forks (each job's `if`).
+# Pushes to main and release tags, and every PR (from a branch here or a
+# fork). A branch without a PR runs only by hand (workflow_dispatch).
 on:
   push:
+    branches: [main]
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
@@ -21,7 +23,6 @@ env:
 
 jobs:
   lint:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -34,7 +35,6 @@ jobs:
   # The suite with fzf's floor (fzf.MIN_VERSION) first on PATH, and the entry
   # scripts on a real old Python. The distro jobs run the pinned fzf.
   floors:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -61,7 +61,6 @@ jobs:
       - run: uv run --frozen pytest -q -rs -p no:cacheprovider
 
   windows:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: windows-latest
     timeout-minutes: 20
     strategy:
@@ -119,7 +118,6 @@ jobs:
           if (Select-String -LiteralPath $settings -Pattern "claude-session-hook" -Quiet) { throw "hook left in settings.json" }
 
   distro:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -131,7 +129,6 @@ jobs:
       - run: tests/docker/run.sh distro ${{ matrix.image }}
 
   terminals:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -144,7 +141,6 @@ jobs:
           path: tests/docker/.work/
 
   systemd:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
