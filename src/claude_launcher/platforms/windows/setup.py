@@ -60,12 +60,17 @@ _SHIM_MARK = "rem claude-launcher: "
 # the line that runs Python empties them first, but its %...% were expanded
 # when cmd read the line, before any of it ran. So they're found again
 # ({find}, a PATH search: no process) after a Python that was too old.
+# The search runs from the .cmd's own directory (pushd), which holds no
+# python.exe: %~$PATH: may look in the current directory first, and
+# install.ps1's Get-Command never does.
 # DisableDelayedExpansion: it may be on by default (the registry), or from
 # the hook's cmd /v:on, and would eat a "!" in a path.
 _FIND = """set "{a}=-" & set "{b}=-" & set "{c}=-"
+pushd "%~dp0."
 for %%P in (python.exe) do if not "%%~$PATH:P"=="" set "{a}=%%~$PATH:P"
 if /i not "%{a}:\\WindowsApps\\=%"=="%{a}%" (set "{c}=%{a}%" & set "{a}=-")
 for %%P in (py.exe) do if not "%%~$PATH:P"=="" set "{b}=%%~$PATH:P"
+popd
 """
 _CLEAR = 'set "{a}=" & set "{b}=" & set "{c}=" & set "{e}=" & '
 _RUN = """@echo off

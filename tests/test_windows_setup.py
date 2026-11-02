@@ -97,6 +97,26 @@ def test_nothing_names_a_python(installed):
         assert ascii(str(entry)) in script and sys.executable not in script
 
 
+def test_the_python_search_is_from_the_cmds_own_directory(installed):
+    # %~$PATH: may look in the current directory first: a python.exe in
+    # Claude's directory would be taken. Each search is from %~dp0, and the
+    # current directory is back before Python runs.
+    list(installed.install(None, None))
+    for name in ("claude-launcher", "claude-session-hook"):
+        lines = (installed.data_dir / f"{name}.cmd").read_text().splitlines()
+        inside = False
+        for line in lines:
+            if line == 'pushd "%~dp0."':
+                inside = True
+            elif line == "popd":
+                inside = False
+            elif "~$PATH:" in line:
+                assert inside, line
+            elif '"%~dp0' in line:
+                assert not inside, line
+        assert lines.count('pushd "%~dp0."') == lines.count("popd") == 3
+
+
 def test_the_cmds_own_variables_never_reach_python(installed):
     # Each line that runs Python empties them first: its %...% were already
     # expanded when cmd read it. And each is unmistakably ours.
@@ -106,7 +126,7 @@ def test_the_cmds_own_variables_never_reach_python(installed):
         names = set(re.findall(r'set "([A-Za-z_]+)=', "\n".join(lines)))
         assert names and all(n.startswith("CLAUDE_LAUNCHER_") for n in names)
         helpers = names - {"CLAUDE_LAUNCHER_FALLBACK"}  # for the entry script, which takes it out
-        runs = [line for line in lines if '"%~dp0' in line]
+        runs = [line for line in lines if '"%~dp0' in line and not line.startswith("pushd ")]
         assert len(runs) == 3
         for line in runs:
             cleared, command = line.split(' & "%', 1)
