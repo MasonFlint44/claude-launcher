@@ -294,7 +294,10 @@ def test_a_session_claude_cant_resume_stays_in_the_group(launch, claude_home, tm
     sid = claude_home.log(proj, conversation("open at the restart", proj))
     in_the_group(claude_home, sid)
     (tmp_path / "bin" / "claude").unlink()
-    t = launch()
+    # Only its own bin, and bash for fzf's key bindings: no other claude
+    # (the distro images have one in /usr/local/bin).
+    (tmp_path / "bin" / "bash").symlink_to(shutil.which("bash"))
+    t = launch(PATH=str(tmp_path / "bin"))
     t.wait_for("Select a project directory for Claude")
     t.send("ctrl-s")
     t.wait_for("↻")
