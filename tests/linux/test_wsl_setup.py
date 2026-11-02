@@ -225,6 +225,13 @@ def test_localappdata_through_autorun_and_code_pages(windows, home):
     assert make(windows, home)._local_app_data() == LOCAL
 
 
+def test_localappdata_after_a_byte_order_mark(windows, home):
+    windows.cmd_out = ("\ufeffLOCALAPPDATA=" + LOCAL + "\r\n").encode("utf-16-le")
+    assert make(windows, home)._local_app_data() == LOCAL
+    windows.cmd_out = ("\ufeffLOCALAPPDATA=" + LOCAL + "\r\n").encode("utf-8")
+    assert make(windows, home)._local_app_data() == LOCAL
+
+
 def test_localappdata_without_utf16(windows, home):
     # If cmd ever wrote its code page instead, ASCII still comes through.
     windows.cmd_out = b"LOCALAPPDATA=C:\\Users\\me\\AppData\\Local\r\n"
@@ -441,24 +448,26 @@ def test_the_profiles_user_is_the_hosts(tmp_path):
 # --- Under sudo ----------------------------------------------------------------
 
 
-def test_sudo_stops_before_anything(windows, home, claude_home, fzf_found, tmp_path, monkeypatch):
-    # The profile would open as root, and the links would go in /root.
+@pytest.mark.parametrize("variable", ["SUDO_USER", "DOAS_USER"])
+def test_sudo_stops_before_anything(windows, home, claude_home, fzf_found, tmp_path, monkeypatch, variable):
+    # The profile would open as root, and the links would go in /root. doas
+    # sets DOAS_USER instead.
     monkeypatch.setattr("os.geteuid", lambda: 0)
-    lines = list(install.install(FakePlatform(make(windows, home, SUDO_USER="me"), tmp_path / "data")))
+    lines = list(install.install(FakePlatform(make(windows, home, **{variable: "me"}), tmp_path / "data")))
     assert lines == [
-        "error: run install.sh as yourself, without sudo: the profile opens as the user who installs it",
+        "error: run install.sh as yourself, without sudo or doas: the profile opens as the user who installs it",
     ]
     assert not (home / ".local" / "bin").exists()
     assert not (claude_home.paths.config / "settings.json").exists()
     assert not fragment_dir(windows).exists()
 
 
-@pytest.mark.parametrize("sudo_user", [None, "root"])
-def test_root_itself_can_install(windows, home, monkeypatch, sudo_user):
-    # A distro whose user is root (its default, or sudo from root).
+@pytest.mark.parametrize("by", [{}, {"SUDO_USER": "root"}, {"DOAS_USER": "root"}])
+def test_root_itself_can_install(windows, home, monkeypatch, by):
+    # A distro whose user is root (its default, or sudo or doas from root).
     monkeypatch.setattr("os.geteuid", lambda: 0)
     setup = WslSetup(
-        {"WSL_DISTRO_NAME": "Ubuntu", "HOME": str(home), **({"SUDO_USER": sudo_user} if sudo_user else {})},
+        {"WSL_DISTRO_NAME": "Ubuntu", "HOME": str(home), **by},
         windows.run,
         str(windows.mounts),
         user=lambda: "root",

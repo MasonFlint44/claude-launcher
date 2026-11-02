@@ -121,3 +121,31 @@ def test_the_hook_in_a_claude_without_localappdata(tmp_path):
     done = subprocess.run(line, input=payload.encode(), env=env, capture_output=True, timeout=20)
     assert done.returncode != 0 and done.stderr, (done.stdout, done.stderr)
     assert not (config / "state").exists()
+
+
+def test_the_hook_by_its_own_path_with_a_space(tmp_path):
+    # An installer with neither LOCALAPPDATA nor USERPROFILE names the .cmd
+    # by its path. Claude quotes it for the space, and cmd /c keeps the
+    # quotes: two of them, around a file that exists, nothing special between.
+    home = tmp_path / "Jo Smith"
+    env = {
+        "SystemRoot": os.environ["SYSTEMROOT"],
+        "PATH": os.pathsep.join([os.path.dirname(sys.executable), os.environ["PATH"]]),
+    }
+    data = home / "claude-launcher"
+    if not windows_setup._PLAIN_PATH.fullmatch(str(data)):
+        pytest.skip(f"the temporary directory isn't a plain path: {data}")
+    # Installed with USERPROFILE, so the shim and profile stay in tmp_path.
+    list(WindowsSetup(data, env={**env, "USERPROFILE": str(home)}).install(None, None))
+    command = WindowsSetup(data, env=env).hook_command()
+    assert command[1:] == ["/d", "/c", str(data / "claude-session-hook.cmd")]
+    config = home / ".claude"
+    env |= {"CLAUDE_CODE_ENTRYPOINT": "cli", "CLAUDE_CONFIG_DIR": str(config), "CLAUDE_PID": "4242"}
+    payload = json.dumps({"session_id": SID, "hook_event_name": "SessionStart", "cwd": str(home)})
+    line = libuv_join([*command, "start"])
+    assert f'"{data}' in line
+    done = subprocess.run(line, input=payload.encode(), env=env, capture_output=True, timeout=20)
+    assert done.returncode == 0, (line, done.stdout, done.stderr)
+    [path] = (config / "state" / "claude-launcher" / "open").iterdir()
+    record = Record.load(path)
+    assert record.pid == 4242 and record.session_id == SID

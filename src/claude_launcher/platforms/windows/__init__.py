@@ -19,9 +19,19 @@ def _events():
     return WindowsEvents(EventLog())
 
 
+def getenv(env: Mapping[str, str], name: str) -> str | None:
+    """Windows' environment ignores case (SystemRoot, SYSTEMROOT); a plain
+    mapping, as in tests, doesn't."""
+    if name in env:
+        return env[name]
+    folded = name.upper()
+    return next((v for k, v in env.items() if k.upper() == folded), None)
+
+
 def local_app_data(env: Mapping[str, str]) -> Path:
     """%LOCALAPPDATA%, or where it is by default when it isn't set."""
-    return Path(env.get("LOCALAPPDATA") or os.path.join(env.get("USERPROFILE") or str(Path.home()), "AppData", "Local"))
+    home = getenv(env, "USERPROFILE") or str(Path.home())
+    return Path(getenv(env, "LOCALAPPDATA") or os.path.join(home, "AppData", "Local"))
 
 
 def data_dir(env: Mapping[str, str]) -> Path:

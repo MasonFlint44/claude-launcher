@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from claude_launcher import files
 from claude_launcher.paths import REPO_DIR
 from claude_launcher.platforms.windows import data_dir, terminal
 from claude_launcher.platforms.windows import setup as windows_setup
@@ -99,14 +100,16 @@ def test_nothing_names_a_python(installed):
 
 def test_the_python_search_is_from_the_cmds_own_directory(installed):
     # %~$PATH: may look in the current directory first: a python.exe in
-    # Claude's directory would be taken. Each search is from %~dp0, and the
-    # current directory is back before Python runs.
+    # Claude's directory would be taken. Each search is from %~dp0 (or, if
+    # pushd can't map a share to a drive, System32), and the current
+    # directory is back before Python runs.
+    pushd = 'pushd "%~dp0." 2>nul || pushd "%SystemRoot%\\System32"'
     list(installed.install(None, None))
     for name in ("claude-launcher", "claude-session-hook"):
         lines = (installed.data_dir / f"{name}.cmd").read_text().splitlines()
         inside = False
         for line in lines:
-            if line == 'pushd "%~dp0."':
+            if line == pushd:
                 inside = True
             elif line == "popd":
                 inside = False
@@ -114,7 +117,7 @@ def test_the_python_search_is_from_the_cmds_own_directory(installed):
                 assert inside, line
             elif '"%~dp0' in line:
                 assert not inside, line
-        assert lines.count('pushd "%~dp0."') == lines.count("popd") == 3
+        assert lines.count(pushd) == lines.count("popd") == 3
 
 
 def test_the_cmds_own_variables_never_reach_python(installed):
@@ -226,6 +229,9 @@ def test_a_failed_write_leaves_the_old_file(setup, env, monkeypatch, name):
     # A disk that fills up partway: a .cmd cut short would run half its lines.
     list(setup.install(None, None))
     shim = Path(env["USERPROFILE"]) / ".local" / "bin" / "claude-launcher.cmd"
+    # An older version, so it's written again.
+    target = setup.data_dir / name
+    target.write_bytes(target.read_bytes() + b"rem older\r\n")
     before = {p: p.read_bytes() for p in [*setup.data_dir.iterdir(), shim]}
     write_text = Path.write_text
 
@@ -240,6 +246,66 @@ def test_a_failed_write_leaves_the_old_file(setup, env, monkeypatch, name):
         list(WindowsSetup(setup.data_dir, env=env).install(None, None))
     assert {p: p.read_bytes() for p in before} == before
     assert not list(setup.data_dir.glob("*.tmp")) and not list(shim.parent.glob("*.tmp"))
+
+
+def test_files_already_as_they_should_be_are_left_alone(setup, env, monkeypatch):
+    # cmd reads a running .cmd by its byte offset, so running install.ps1
+    # again mustn't touch one that open launcher tabs are running.
+    list(setup.install(None, None))
+    shim = Path(env["USERPROFILE"]) / ".local" / "bin" / "claude-launcher.cmd"
+    ours = [*(setup.data_dir / n for n in ("claude-launcher.cmd", "claude-session-hook.cmd")), shim]
+    ours += list(setup.data_dir.glob("*.py"))
+    replaced = []
+    real = files.replace
+    monkeypatch.setattr(files, "replace", lambda src, dst: (replaced.append(Path(dst)), real(src, dst)))
+    list(WindowsSetup(setup.data_dir, env=env).install(None, None))
+    assert not set(replaced) & set(ours)
+    # One that's changed is written again.
+    hook_cmd = setup.data_dir / "claude-session-hook.cmd"
+    hook_cmd.write_bytes(b"@echo old\r\n")
+    list(WindowsSetup(setup.data_dir, env=env).install(None, None))
+    assert (
+        hook_cmd in replaced and hook_cmd.read_bytes() == windows_setup.run_cmd("claude-session-hook.py", "-I").encode()
+    )
+
+
+def test_a_file_in_use_for_a_moment_is_still_written(setup, env, monkeypatch):
+    # A virus scanner or indexer can hold a file just written; Windows then
+    # refuses to replace it until it lets go.
+    monkeypatch.setattr(files, "_PAUSE", 0)
+    real, failures = os.replace, []
+
+    def busy(src, dst):
+        if len(failures) < 3:
+            failures.append(dst)
+            raise PermissionError(13, "The process cannot access the file because it is being used by another process")
+        real(src, dst)
+
+    monkeypatch.setattr(os, "replace", busy)
+    list(setup.install(None, None))
+    assert len(failures) == 3
+    assert (setup.data_dir / "claude-launcher.cmd").read_bytes() == windows_setup.run_cmd("claude-launcher.py").encode()
+    assert not list(setup.data_dir.glob("*.tmp"))
+
+
+@pytest.mark.parametrize("key", ["UserProfile", "userprofile", "USERPROFILE"])
+def test_the_shim_goes_in_userprofile_whatever_the_case(tmp_path, key):
+    me = tmp_path / "me"
+    env = {key: str(me), "LOCALAPPDATA": str(tmp_path / "local")}
+    list(WindowsSetup(tmp_path / "data", env=env).install(None, None))
+    assert (me / ".local" / "bin" / "claude-launcher.cmd").is_file()
+
+
+@pytest.mark.parametrize("local, profile", [("LocalAppData", "UserProfile"), ("localappdata", "userprofile")])
+def test_localappdata_whatever_the_case(tmp_path, local, profile):
+    env = {local: str(tmp_path / "local")}
+    assert data_dir(env) == tmp_path / "local" / "claude-launcher"
+    assert (
+        terminal.fragments_dir(env)
+        == tmp_path / "local" / "Microsoft" / "Windows Terminal" / "Fragments" / "claude-launcher"
+    )
+    # Without it, under USERPROFILE.
+    assert data_dir({profile: str(tmp_path / "me")}) == tmp_path / "me" / "AppData" / "Local" / "claude-launcher"
 
 
 def run_entry(tmp_path, target: Path, *args, env=None):

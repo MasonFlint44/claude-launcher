@@ -6,6 +6,8 @@ import os
 import shutil
 import subprocess
 import sys
+import time
+import warnings
 
 import pytest
 
@@ -230,6 +232,88 @@ def test_too_old_and_nothing_else(tmp_path, pythons, monkeypatch):
     cmd.write_text(windows_setup.run_cmd("entry.py"), encoding="ascii", newline="")
     done = run_probe(cmd, pythons["real"])
     assert done.returncode == windows_setup.TOO_OLD and "needs Python 99.0 or newer (found" in done.stderr
+
+
+def test_a_python_in_a_directory_cmd_would_trip_on(probe, tmp_path_factory):
+    # The search's lines expand the path when cmd reads them: the
+    # %a:\WindowsApps\=% test and the parenthesised set lines must keep
+    # & ( ) % ! in it as they are.
+    root = tmp_path_factory.mktemp("hostile") / "A&B (x) 100% !y!"
+    real, store = venv(root / "real"), venv(root / "WindowsApps")
+    assert ran(run_probe(probe, real), real)
+    # A WindowsApps one first and no py: set aside, then run after all.
+    assert ran(run_probe(probe, store, real), store)
+
+
+def drives():
+    import ctypes
+
+    return ctypes.windll.kernel32.GetLogicalDrives()
+
+
+def test_the_cmd_from_a_share(probe, pythons, tmp_path):
+    # A data directory on a share (a redirected AppData): pushd maps it to a
+    # drive letter for the search, and popd takes the mapping away again.
+    drive, rest = os.path.splitdrive(str(probe))
+    shared = f"\\\\127.0.0.1\\{drive[:1]}${rest}"
+    if len(drive) != 2 or not os.path.isfile(shared):
+        pytest.skip(f"{probe} can't be reached through an administrative share")
+    before = drives()
+    done = run_probe(shared, pythons["real"], cwd=tmp_path)
+    assert ran(done, pythons["real"]), (done.stdout, done.stderr)
+    assert drives() == before, "pushd left a drive mapped"
+
+
+def test_a_failed_pushd_searches_from_system32(pythons, tmp_path):
+    # pushd fails on a share when there's no drive letter free. Then the
+    # search is from System32, not the caller's directory.
+    find = windows_setup._FIND.format(**windows_setup._VARS)
+    assert '"%~dp0."' in find
+    find = find.replace('"%~dp0."', '"%~dp0missing"')
+    cmd = tmp_path / "find.cmd"
+    text = "@echo off\nsetlocal DisableDelayedExpansion\n" + find + "echo %CLAUDE_LAUNCHER_PYTHON%\ncd\n"
+    cmd.write_text(text.replace("\n", "\r\n"), encoding="ascii", newline="")
+    here = venv(tmp_path / "here")
+    done = run_probe(cmd, pythons["real"], cwd=here)
+    assert done.returncode == 0 and not done.stderr, (done.stdout, done.stderr)
+    found, cwd = done.stdout.splitlines()
+    assert os.path.normcase(found) == os.path.normcase(str(pythons["real"] / "python.exe"))
+    assert os.path.normcase(cwd) == os.path.normcase(str(here))  # popd: back where it was
+
+
+def test_a_running_cmd_replaced_with_other_text(tmp_path):
+    # Why the installer leaves a .cmd that's unchanged alone: cmd reads a
+    # running batch file a line at a time, from a byte offset, so an open
+    # launcher tab could run part of a new one. Here the .cmd is replaced
+    # while a command in it runs, and the new text has, at the old offset of
+    # the next line, a line of its own. Which ran says what cmd did.
+    sleep = f'"{sys.executable}" -c "import time; time.sleep(3)"'
+    old = f"@echo off\r\n{sleep}\r\necho AFTER-OLD\r\n"
+    new = f"@echo off\r\n{sleep}XXecho MIDLINE\r\necho AFTER-NEW\r\n"
+    assert new.index("echo MIDLINE") == old.index("echo AFTER-OLD")
+    cmd = tmp_path / "running.cmd"
+    cmd.write_text(old, encoding="ascii", newline="")
+    running = subprocess.Popen(
+        f'"{CMD}" /d /c "{cmd}"', stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8"
+    )
+    time.sleep(1)
+    tmp = tmp_path / "running.cmd.tmp"
+    tmp.write_text(new, encoding="ascii", newline="")
+    try:
+        os.replace(tmp, cmd)
+        replaced = "replaced"
+    except PermissionError:
+        replaced = "refused (cmd holds it open)"
+    out, err = running.communicate(timeout=30)
+    ran_after = out.split()
+    known = {
+        ("MIDLINE", "AFTER-NEW"): "carried on at its byte offset in the new file",
+        ("AFTER-OLD",): "carried on in the old file",
+        ("AFTER-NEW",): "carried on at the next line of the new file",
+    }
+    outcome = known.get(tuple(ran_after), f"ran {ran_after!r}, said {err.strip()!r}")
+    warnings.warn(f"a running .cmd: {replaced}; cmd {outcome}", stacklevel=1)
+    assert replaced == "replaced" or ran_after == ["AFTER-OLD"]
 
 
 def test_fzf_find_takes_a_fetched_fzf_exe(tmp_path):
