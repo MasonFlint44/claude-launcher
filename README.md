@@ -97,7 +97,7 @@ Text that matches nothing shows "Nothing matches"; either way the list comes bac
 
 **Where the list comes from:** each directory under `~/.claude/projects/` (or `$CLAUDE_CONFIG_DIR/projects/`) holds session logs for one project. The picker reads the working directory from the newest log in each, sorts by that log's date, and skips directories that no longer exist. Your home directory is always first. A directory you've never used Claude in won't be listed until you open it once by typing its path.
 
-**Options for Claude:** `claude-launcher --model opus` passes `--model opus` to every Claude it starts. `claude-launcher --help` (or `-h`) shows how to run it, and `--version` its version; as the first argument these two are the launcher's own, and anywhere after another one they go to Claude.
+**Options for Claude:** `claude-launcher --model opus` passes `--model opus` to every Claude it starts. `claude-launcher --help` (or `-h`) shows how to run it, and `--version` its version. `--help`, `-h` and `--version` count only as the first argument; after another one they go to Claude.
 
 ## Resuming a session
 
