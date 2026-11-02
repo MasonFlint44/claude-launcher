@@ -132,6 +132,40 @@ def test_the_hook_by_userprofile_without_localappdata(tmp_path):
     assert command[-1] == "!USERPROFILE!\\AppData\\Local\\claude-launcher\\claude-session-hook.cmd"
 
 
+@pytest.mark.parametrize(
+    "local",
+    ["C:\\Users\\A&B\\AppData\\Local\\", "C:/Users/A&B/AppData/Local", "c:/users/a&b/appdata/local/"],
+)
+def test_env_form_takes_localappdata_as_its_set(local):
+    # A trailing separator, forward slashes, another case: the rest is the same.
+    path = Path("C:\\Users\\A&B\\AppData\\Local\\claude-launcher\\claude-session-hook.cmd")
+    assert windows_setup.env_form(path, {"LOCALAPPDATA": local}) == (
+        "LOCALAPPDATA",
+        "\\claude-launcher\\claude-session-hook.cmd",
+    )
+
+
+def test_env_form_needs_the_path_below_the_variable():
+    path = Path("D:\\Users\\me\\AppData\\Local\\claude-launcher\\x.cmd")
+    assert windows_setup.env_form(path, {"LOCALAPPDATA": "C:\\Users\\me\\AppData\\Local"}) is None
+    assert windows_setup.env_form(path, {}) is None
+
+
+def test_without_either_variable_a_plain_path_is_used(tmp_path):
+    data = tmp_path / "Jo Smith" / "AppData" / "Local" / "claude-launcher"
+    command = WindowsSetup(data, env={"SystemRoot": "D:\\Win"}).hook_command()
+    assert command == ["D:\\Win\\System32\\cmd.exe", "/d", "/c", str(data / "claude-session-hook.cmd")]
+
+
+@pytest.mark.parametrize("name", ["A&B", "a^b", "100%", "Jo (work)", "x,y", HOSTILE])
+def test_without_either_variable_a_path_cmd_would_split_is_refused(tmp_path, name):
+    # cmd /c would split it at & (even quoted: it drops the quotes then),
+    # so the installer warns and adds no hook rather than a broken one.
+    data = tmp_path / name / "AppData" / "Local" / "claude-launcher"
+    with pytest.raises(ValueError, match="set LOCALAPPDATA"):
+        WindowsSetup(data, env={"SystemRoot": "D:\\Win"}).hook_command()
+
+
 @pytest.mark.parametrize("key", ["SystemRoot", "SYSTEMROOT", "systemroot"])
 def test_system32s_cmd_whatever_the_case(installed, key):
     env = {k: v for k, v in installed.env.items() if k != "SystemRoot"}

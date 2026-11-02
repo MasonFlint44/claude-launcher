@@ -150,6 +150,9 @@ exit /b 9009
 # What may follow an environment variable in a command line: nothing cmd or
 # Windows Terminal would treat specially, and no spaces.
 _PLAIN_TAIL = re.compile(r"(\\[A-Za-z0-9._-]+)+")
+# A path cmd /c runs as it is, quoted or not: no character it treats
+# specially, and none it splits a command at (, ; =).
+_PLAIN_PATH = re.compile(r"[\w .:\\/~-]+")
 
 
 def run_cmd(name: str, options: str = "") -> str:
@@ -278,9 +281,14 @@ class WindowsSetup:
         if form:
             name, rest = form
             return [cmd, "/d", "/v:on", "/c", f"!{name}!{rest}"]
-        # Somewhere else (only tests put it there): the path, which cmd /c
-        # takes as it is if Claude quotes it, and it's the only quoted part.
-        return [cmd, "/d", "/c", str(self._hook_cmd)]
+        # Somewhere else (tests, or neither variable set): the path itself,
+        # which cmd /c takes as it is only without its special characters.
+        # Quoted (Claude quotes it if it has a space), /c drops the quotes
+        # when there's a & ( ) ^ and the like between them.
+        path = str(self._hook_cmd)
+        if not _PLAIN_PATH.fullmatch(path):
+            raise ValueError(f"{path} can't go on cmd's command line as it is; set LOCALAPPDATA and run this again")
+        return [cmd, "/d", "/c", path]
 
     def _profile_command(self) -> str:
         """The profile's command line. Windows Terminal expands %VARIABLES%
