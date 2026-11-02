@@ -62,10 +62,10 @@ def probe(tmp_path):
     return cmd
 
 
-def run_probe(cmd, *path, **more):
+def run_probe(cmd, *path, cwd=None, **more):
     env = {"SystemRoot": os.environ["SYSTEMROOT"], "PATH": os.pathsep.join(str(p) for p in path), **more}
     return subprocess.run(
-        f'"{CMD}" /d /c "{cmd}"', env=env, capture_output=True, text=True, encoding="utf-8", timeout=30
+        f'"{CMD}" /d /c "{cmd}"', env=env, cwd=cwd, capture_output=True, text=True, encoding="utf-8", timeout=30
     )
 
 
@@ -146,6 +146,71 @@ def test_the_cmds_own_variables_stay_out_of_pythons_environment(tmp_path, python
         done = run_probe(cmd, *path)
         assert done.returncode == 0, done.stderr
         assert done.stdout.strip() in ("[]", "['CLAUDE_LAUNCHER_FALLBACK']")
+
+
+def test_a_python_in_the_current_directory_isnt_taken(probe, pythons, tmp_path):
+    # %~$PATH: may look in the current directory first; install.ps1's
+    # Get-Command doesn't, so neither does the .cmd (it searches from its own).
+    here = venv(tmp_path / "here")
+    assert ran(run_probe(probe, pythons["real"], cwd=here), pythons["real"])
+    done = run_probe(probe, tmp_path, cwd=here)  # and none on PATH: none at all
+    assert done.returncode == 9009 and "needs Python 3.10 or newer" in done.stderr, (done.stdout, done.stderr)
+
+
+def test_the_cmd_leaves_the_current_directory_as_it_was(tmp_path, pythons):
+    # The hook and the launcher run in Claude's directory, not the .cmd's.
+    (tmp_path / "cwd.py").write_text("import os\nprint(os.getcwd())\n", encoding="utf-8")
+    cmd = tmp_path / "cwd.cmd"
+    cmd.write_text(windows_setup.run_cmd("cwd.py"), encoding="ascii", newline="")
+    here = tmp_path / "here (a&b)"
+    here.mkdir()
+    done = run_probe(cmd, pythons["real"], cwd=here)
+    assert done.returncode == 0, done.stderr
+    assert os.path.normcase(done.stdout.strip()) == os.path.normcase(str(here))
+
+
+@pytest.fixture
+def shim(tmp_path):
+    """claude-launcher.cmd as on PATH, and where it hands over to: a .cmd
+    that shows its arguments, under %USERPROFILE%\\AppData\\Local."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "claude-launcher.cmd").write_text(windows_setup.shim_cmd(), encoding="ascii", newline="")
+    profile = tmp_path / "A&B 100%"
+    target = profile / "AppData" / "Local" / "claude-launcher" / "claude-launcher.cmd"
+    target.parent.mkdir(parents=True)
+    target.write_text("@echo off\r\necho ran %*\r\nexit /b 7\r\n", encoding="ascii", newline="")
+    return bin_dir / "claude-launcher.cmd", profile
+
+
+def run_shim(cmd, **env):
+    env = {"SystemRoot": os.environ["SYSTEMROOT"], **env}
+    return subprocess.run(
+        f'"{CMD}" /d /c ""{cmd}" --resume x"', env=env, capture_output=True, text=True, encoding="utf-8", timeout=30
+    )
+
+
+def test_the_shim_without_localappdata_takes_the_profiles(shim):
+    cmd, profile = shim
+    done = run_shim(cmd, USERPROFILE=str(profile))
+    assert done.returncode == 7 and done.stdout.strip() == "ran --resume x", (done.stdout, done.stderr)
+
+
+def test_the_shim_with_localappdata(shim):
+    cmd, profile = shim
+    done = run_shim(cmd, LOCALAPPDATA=str(profile / "AppData" / "Local"), USERPROFILE="C:\\nowhere")
+    assert done.returncode == 7 and done.stdout.strip() == "ran --resume x", (done.stdout, done.stderr)
+
+
+@pytest.mark.parametrize("where", ["localappdata", "profile"])
+def test_the_shim_with_nothing_to_hand_over_to(shim, tmp_path, where):
+    cmd, _ = shim
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    env = {"LOCALAPPDATA": str(empty)} if where == "localappdata" else {"USERPROFILE": str(empty)}
+    done = run_shim(cmd, **env)
+    assert done.returncode == 9009 and "isn't set up for this user; run install.ps1 again" in done.stderr
+    assert "ran" not in done.stdout
 
 
 def test_no_python_at_all(probe, tmp_path):

@@ -60,12 +60,17 @@ _SHIM_MARK = "rem claude-launcher: "
 # the line that runs Python empties them first, but its %...% were expanded
 # when cmd read the line, before any of it ran. So they're found again
 # ({find}, a PATH search: no process) after a Python that was too old.
+# The search runs from the .cmd's own directory (pushd), which holds no
+# python.exe: %~$PATH: may look in the current directory first, and
+# install.ps1's Get-Command never does.
 # DisableDelayedExpansion: it may be on by default (the registry), or from
 # the hook's cmd /v:on, and would eat a "!" in a path.
 _FIND = """set "{a}=-" & set "{b}=-" & set "{c}=-"
+pushd "%~dp0."
 for %%P in (python.exe) do if not "%%~$PATH:P"=="" set "{a}=%%~$PATH:P"
 if /i not "%{a}:\\WindowsApps\\=%"=="%{a}%" (set "{c}=%{a}%" & set "{a}=-")
 for %%P in (py.exe) do if not "%%~$PATH:P"=="" set "{b}=%%~$PATH:P"
+popd
 """
 _CLEAR = 'set "{a}=" & set "{b}=" & set "{c}=" & set "{e}=" & '
 _RUN = """@echo off
@@ -150,6 +155,9 @@ exit /b 9009
 # What may follow an environment variable in a command line: nothing cmd or
 # Windows Terminal would treat specially, and no spaces.
 _PLAIN_TAIL = re.compile(r"(\\[A-Za-z0-9._-]+)+")
+# A path cmd /c runs as it is, quoted or not: no character it treats
+# specially, and none it splits a command at (, ; =).
+_PLAIN_PATH = re.compile(r"[\w .:\\/~-]+")
 
 
 def run_cmd(name: str, options: str = "") -> str:
@@ -222,7 +230,28 @@ def _bin_dir(env: Mapping[str, str] = os.environ) -> Path:
 
 
 def _same_dir(a: str, b: str) -> bool:
-    return a.replace("/", "\\").rstrip("\\").lower() == b.replace("/", "\\").rstrip("\\").lower()
+    """Whether two directories are one: case, slashes, a trailing separator
+    and quotes around a PATH entry ("C:\\x y\\bin") don't count."""
+
+    def key(d: str) -> str:
+        d = d.strip()
+        if len(d) >= 2 and d[0] == d[-1] == '"':
+            d = d[1:-1]
+        return d.replace("/", "\\").rstrip("\\").lower()
+
+    return key(a) == key(b)
+
+
+def _write(path: Path, text: str) -> None:
+    """Write a whole file or leave the old one: a .cmd cut short would run
+    half its lines."""
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        tmp.write_text(text, encoding="ascii", newline="")
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def check_icon(icon: str) -> None:
@@ -265,9 +294,14 @@ class WindowsSetup:
         if form:
             name, rest = form
             return [cmd, "/d", "/v:on", "/c", f"!{name}!{rest}"]
-        # Somewhere else (only tests put it there): the path, which cmd /c
-        # takes as it is if Claude quotes it, and it's the only quoted part.
-        return [cmd, "/d", "/c", str(self._hook_cmd)]
+        # Somewhere else (tests, or neither variable set): the path itself,
+        # which cmd /c takes as it is only without its special characters.
+        # Quoted (Claude quotes it if it has a space), /c drops the quotes
+        # when there's a & ( ) ^ and the like between them.
+        path = str(self._hook_cmd)
+        if not _PLAIN_PATH.fullmatch(path):
+            raise ValueError(f"{path} can't go on cmd's command line as it is; set LOCALAPPDATA and run this again")
+        return [cmd, "/d", "/c", path]
 
     def _profile_command(self) -> str:
         """The profile's command line. Windows Terminal expands %VARIABLES%
@@ -286,13 +320,13 @@ class WindowsSetup:
             self._launcher_cmd.name: run_cmd("claude-launcher.py"),
         }
         for name, text in files.items():
-            (self.data_dir / name).write_text(text, encoding="ascii", newline="")
+            _write(self.data_dir / name, text)
         shim = _bin_dir(self.env) / "claude-launcher.cmd"
         if shim.exists() and _SHIM_MARK not in shim.read_text(encoding="utf-8", errors="replace"):
             yield f"warning: {shim} isn't one of ours; leaving it alone"
         else:
             shim.parent.mkdir(parents=True, exist_ok=True)
-            shim.write_text(shim_cmd(), encoding="ascii", newline="")
+            _write(shim, shim_cmd())
             yield f"Wrote {shim}"
         path = (_getenv(self.env, "PATH") or "").split(";")
         if not any(_same_dir(str(shim.parent), p) for p in path):

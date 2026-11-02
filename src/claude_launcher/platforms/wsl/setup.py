@@ -73,7 +73,14 @@ class WslSetup:
         return bin_dir(self.env) / "claude-session-hook"
 
     def check(self, terminal_names: str | None, icon: str | None) -> None:
-        """Before the installer does anything: the profile is per distro."""
+        """Before the installer does anything: the profile opens as the user
+        who installed it, and is per distro."""
+        # Under sudo the profile would run wsl.exe -u root, and the links go
+        # in /root. Root on its own (the distro's default user) is fine.
+        if os.geteuid() == 0 and self.env.get("SUDO_USER", "root") != "root":
+            raise RuntimeError(
+                "run install.sh as yourself, without sudo: the profile opens as the user who installs it"
+            )
         if not self.distro:
             raise RuntimeError("can't tell which WSL distro this is; run install.sh in a WSL terminal, without sudo")
         if icon and icon != "default":
@@ -83,15 +90,19 @@ class WslSetup:
         return self.run(["wslpath", flag, path]).decode("utf-8", errors="surrogateescape").strip()
 
     def _local_app_data(self) -> str:
-        # /d: no AutoRun commands (Clink, conda), whose output would come
-        # first. /u: echo writes UTF-16, so a name like José comes through
-        # whatever the console's code page is.
-        out = self.windows.run("cmd.exe", ["/d", "/u", "/c", "echo", "%LOCALAPPDATA%"])
+        # `set`, not `echo %LOCALAPPDATA%`: cmd parses the line after it
+        # expands %...%, so a user name with & ^ or % in it would break it.
+        # `set` prints the value as it is. /d: no AutoRun commands (Clink,
+        # conda), whose output would come first. /u: set writes UTF-16, so a
+        # name like José comes through whatever the console's code page is.
+        out = self.windows.run("cmd.exe", ["/d", "/u", "/c", "set", "LOCALAPPDATA"])
         text = out.decode("utf-16-le", errors="replace") if b"\0" in out else out.decode("utf-8", errors="replace")
-        lines = [line.strip() for line in text.splitlines() if line.strip()]
-        if not lines or "%" in lines[-1]:
-            raise RuntimeError("Windows didn't say where %LOCALAPPDATA% is")
-        return lines[-1]
+        for line in text.splitlines():
+            # Every variable whose name starts with LOCALAPPDATA: only that one.
+            name, eq, value = line.partition("=")
+            if eq and name.upper() == "LOCALAPPDATA" and value.strip():
+                return value.rstrip("\r\n")
+        raise RuntimeError("Windows didn't say where %LOCALAPPDATA% is")
 
     def _fragments(self) -> Path:
         local = Path(self._wslpath("-u", self._local_app_data()))

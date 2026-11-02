@@ -21,7 +21,7 @@ A reason that's in a record's group but that no platform knows (from an older or
 
 ## Picking one
 
-`platforms.current()` picks the platform once per run: `platforms/fork.py` if it exists, else Windows on `win32`, and on Linux WSL when the kernel says "microsoft" and WSL's markers are there (`wsl.is_wsl`), else Linux. On any other OS, the launcher and the installer say "claude-launcher doesn't run on <os> yet" and exit 1. This repo never creates `fork.py`.
+`platforms.current()` picks the platform once per run: `platforms/fork.py` if it exists, else Windows on `win32`, and on Linux WSL when WSL's own files are there, or `WSL_DISTRO_NAME` is set and the kernel says "microsoft" (`wsl.is_wsl`), else Linux. On any other OS, the launcher and the installer say "claude-launcher doesn't run on <os> yet" and exit 1. This repo never creates `fork.py`.
 
 ## Adding a platform here
 

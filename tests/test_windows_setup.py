@@ -97,6 +97,26 @@ def test_nothing_names_a_python(installed):
         assert ascii(str(entry)) in script and sys.executable not in script
 
 
+def test_the_python_search_is_from_the_cmds_own_directory(installed):
+    # %~$PATH: may look in the current directory first: a python.exe in
+    # Claude's directory would be taken. Each search is from %~dp0, and the
+    # current directory is back before Python runs.
+    list(installed.install(None, None))
+    for name in ("claude-launcher", "claude-session-hook"):
+        lines = (installed.data_dir / f"{name}.cmd").read_text().splitlines()
+        inside = False
+        for line in lines:
+            if line == 'pushd "%~dp0."':
+                inside = True
+            elif line == "popd":
+                inside = False
+            elif "~$PATH:" in line:
+                assert inside, line
+            elif '"%~dp0' in line:
+                assert not inside, line
+        assert lines.count('pushd "%~dp0."') == lines.count("popd") == 3
+
+
 def test_the_cmds_own_variables_never_reach_python(installed):
     # Each line that runs Python empties them first: its %...% were already
     # expanded when cmd read it. And each is unmistakably ours.
@@ -106,7 +126,7 @@ def test_the_cmds_own_variables_never_reach_python(installed):
         names = set(re.findall(r'set "([A-Za-z_]+)=', "\n".join(lines)))
         assert names and all(n.startswith("CLAUDE_LAUNCHER_") for n in names)
         helpers = names - {"CLAUDE_LAUNCHER_FALLBACK"}  # for the entry script, which takes it out
-        runs = [line for line in lines if '"%~dp0' in line]
+        runs = [line for line in lines if '"%~dp0' in line and not line.startswith("pushd ")]
         assert len(runs) == 3
         for line in runs:
             cleared, command = line.split(' & "%', 1)
@@ -130,6 +150,40 @@ def test_the_hook_by_userprofile_without_localappdata(tmp_path):
     env = {"USERPROFILE": str(tmp_path / HOSTILE), "SystemRoot": "D:\\Win"}
     command = WindowsSetup(data_dir(env), env=env).hook_command()
     assert command[-1] == "!USERPROFILE!\\AppData\\Local\\claude-launcher\\claude-session-hook.cmd"
+
+
+@pytest.mark.parametrize(
+    "local",
+    ["C:\\Users\\A&B\\AppData\\Local\\", "C:/Users/A&B/AppData/Local", "c:/users/a&b/appdata/local/"],
+)
+def test_env_form_takes_localappdata_as_its_set(local):
+    # A trailing separator, forward slashes, another case: the rest is the same.
+    path = Path("C:\\Users\\A&B\\AppData\\Local\\claude-launcher\\claude-session-hook.cmd")
+    assert windows_setup.env_form(path, {"LOCALAPPDATA": local}) == (
+        "LOCALAPPDATA",
+        "\\claude-launcher\\claude-session-hook.cmd",
+    )
+
+
+def test_env_form_needs_the_path_below_the_variable():
+    path = Path("D:\\Users\\me\\AppData\\Local\\claude-launcher\\x.cmd")
+    assert windows_setup.env_form(path, {"LOCALAPPDATA": "C:\\Users\\me\\AppData\\Local"}) is None
+    assert windows_setup.env_form(path, {}) is None
+
+
+def test_without_either_variable_a_plain_path_is_used(tmp_path):
+    data = tmp_path / "Jo Smith" / "AppData" / "Local" / "claude-launcher"
+    command = WindowsSetup(data, env={"SystemRoot": "D:\\Win"}).hook_command()
+    assert command == ["D:\\Win\\System32\\cmd.exe", "/d", "/c", str(data / "claude-session-hook.cmd")]
+
+
+@pytest.mark.parametrize("name", ["A&B", "a^b", "100%", "Jo (work)", "x,y", HOSTILE])
+def test_without_either_variable_a_path_cmd_would_split_is_refused(tmp_path, name):
+    # cmd /c would split it at & (even quoted: it drops the quotes then),
+    # so the installer warns and adds no hook rather than a broken one.
+    data = tmp_path / name / "AppData" / "Local" / "claude-launcher"
+    with pytest.raises(ValueError, match="set LOCALAPPDATA"):
+        WindowsSetup(data, env={"SystemRoot": "D:\\Win"}).hook_command()
 
 
 @pytest.mark.parametrize("key", ["SystemRoot", "SYSTEMROOT", "systemroot"])
@@ -157,6 +211,35 @@ def test_path_check_ignores_case_and_a_trailing_backslash(tmp_path):
     assert not any("PATH" in line for line in lines)
     lines = list(WindowsSetup(tmp_path / "data", env={**env, "Path": "C:\\x"}).install(None, None))
     assert any("is not on your PATH" in line for line in lines)
+
+
+def test_path_check_takes_a_quoted_entry(tmp_path):
+    # PATH entries may be quoted, as a directory with ; in it must be.
+    me = tmp_path / "Me"
+    env = {"USERPROFILE": str(me), "Path": f'C:\\x; "{me / ".local" / "bin"}" ;D:\\y'}
+    lines = list(WindowsSetup(tmp_path / "data", env=env).install(None, None))
+    assert not any("PATH" in line for line in lines)
+
+
+@pytest.mark.parametrize("name", ["claude-launcher.cmd", "claude-session-hook.cmd", "claude-launcher.py"])
+def test_a_failed_write_leaves_the_old_file(setup, env, monkeypatch, name):
+    # A disk that fills up partway: a .cmd cut short would run half its lines.
+    list(setup.install(None, None))
+    shim = Path(env["USERPROFILE"]) / ".local" / "bin" / "claude-launcher.cmd"
+    before = {p: p.read_bytes() for p in [*setup.data_dir.iterdir(), shim]}
+    write_text = Path.write_text
+
+    def disk_full(self, text, *args, **kwargs):
+        if self.name.startswith(name):
+            write_text(self, text[:20], *args, **kwargs)
+            raise OSError(28, "No space left on device")
+        return write_text(self, text, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", disk_full)
+    with pytest.raises(OSError):
+        list(WindowsSetup(setup.data_dir, env=env).install(None, None))
+    assert {p: p.read_bytes() for p in before} == before
+    assert not list(setup.data_dir.glob("*.tmp")) and not list(shim.parent.glob("*.tmp"))
 
 
 def run_entry(tmp_path, target: Path, *args, env=None):

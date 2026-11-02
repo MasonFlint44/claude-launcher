@@ -65,13 +65,16 @@ reason=other
 # Another /proc for the boot's files, for tests only.
 proc=${CLAUDE_LAUNCHER_TEST_PROC:-/proc}
 read -r boot_id < "$proc/sys/kernel/random/boot_id"
-# Under WSL's kernel every distro shares one VM's boot ID, but a distro can
-# stop and start again while the VM runs on, so its boot is the VM's and its
-# pid 1's start (in clock ticks), as 32 hex digits. platforms/linux/host.py
-# does the same.
+# In WSL's VM every distro shares one boot ID, but a distro can stop and
+# start again while the VM runs on, so its boot is the VM's and its pid 1's
+# start (in clock ticks), as 32 hex digits. The VM is known by its kernel or,
+# for a custom kernel, WSL's own files (/run beside /proc), as in
+# platforms/linux/host.py (wsl_kernel).
 release=
 read -r release 2>/dev/null < "$proc/sys/kernel/osrelease"
-if [[ ${release,,} == *microsoft* ]] && read -r init 2>/dev/null < "$proc/1/stat"; then
+binfmt=$proc/sys/fs/binfmt_misc
+if [[ ${release,,} == *microsoft* || -e ${proc%/*}/run/WSL || -e $binfmt/WSLInterop || -e $binfmt/WSLInterop-late ]] &&
+  read -r init 2>/dev/null < "$proc/1/stat"; then
   read -ra init <<< "${init##*) }"
   if [[ ${init[19]:-} =~ ^[0-9]+$ ]]; then
     boot_id=${boot_id//-/}

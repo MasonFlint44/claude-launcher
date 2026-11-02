@@ -100,3 +100,23 @@ def test_the_launcher_from_any_users_directory(tmp_path, name):
         timeout=30,
     )
     assert done.returncode == 1 and f"No session with ID {missing}" in done.stderr, (done.stdout, done.stderr)
+
+
+def test_the_hook_in_a_claude_without_localappdata(tmp_path):
+    # settings.json names the .cmd by !LOCALAPPDATA!, so a Claude started
+    # without it (a scrubbed environment; Windows sets it for every logon)
+    # can't run the hook: cmd says it can't find it and there's no record.
+    # !USERPROFILE! is used only when the installer itself had no
+    # LOCALAPPDATA, so it doesn't cover this; a fallback in the command line
+    # isn't worth it for an environment that breaks much else too.
+    env = user(tmp_path, "A&B")
+    setup = WindowsSetup(data_dir(env), env=env)
+    list(setup.install(None, None))
+    config = tmp_path / "A&B" / ".claude"
+    del env["LOCALAPPDATA"]
+    env |= {"CLAUDE_CODE_ENTRYPOINT": "cli", "CLAUDE_CONFIG_DIR": str(config), "CLAUDE_PID": "4242"}
+    payload = json.dumps({"session_id": SID, "hook_event_name": "SessionStart"})
+    line = libuv_join([*setup.hook_command(), "start"])
+    done = subprocess.run(line, input=payload.encode(), env=env, capture_output=True, timeout=20)
+    assert done.returncode != 0 and done.stderr, (done.stdout, done.stderr)
+    assert not (config / "state").exists()

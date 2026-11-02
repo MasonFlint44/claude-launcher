@@ -10,19 +10,18 @@ from collections.abc import Mapping
 
 from ..base import Platform, Reason
 
-# What WSL puts in a distro and not in a container on its kernel (Docker
-# Desktop's, a devcontainer's): its interop's directory, and the binfmt entry
-# that runs Windows programs (WSLInterop-late when systemd cleared the first).
-_MARKERS = ("run/WSL", "proc/sys/fs/binfmt_misc/WSLInterop", "proc/sys/fs/binfmt_misc/WSLInterop-late")
-
 
 def is_wsl(release: str | None = None, root: str = "/", env: Mapping[str, str] = os.environ) -> bool:
-    """WSL's kernels say so (6.6.87.2-microsoft-standard-WSL2, or WSL 1's
-    4.4.0-19041-Microsoft), but so does a container on Docker Desktop; a
-    distro also has WSL's own files, or (not under sudo) WSL_DISTRO_NAME."""
-    if "microsoft" not in (release if release is not None else os.uname().release).lower():
-        return False
-    return bool(env.get("WSL_DISTRO_NAME")) or any(os.path.exists(os.path.join(root, m)) for m in _MARKERS)
+    """WSL's own files (`wsl_files`) say so, whatever the kernel (one from
+    .wslconfig needn't say "microsoft"); a container on WSL's kernel (Docker
+    Desktop's) doesn't have them. WSL_DISTRO_NAME (not under sudo) counts
+    too, but only with WSL's kernel: a container can be given it."""
+    from ..linux.host import wsl_files
+
+    if wsl_files(os.path.join(root, "proc")):
+        return True
+    release = release if release is not None else os.uname().release
+    return bool(env.get("WSL_DISTRO_NAME")) and "microsoft" in release.lower()
 
 
 def _events(host):

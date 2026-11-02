@@ -14,27 +14,45 @@ from conftest import LAST_BOOT, NOW, THIS_BOOT, FakeHost, conversation, write_re
 WSL_STARTED = NOW - 300  # this WSL boot
 
 
+WSL_KERNEL = "6.6.87.2-microsoft-standard-WSL2"
+MARKERS = ["run/WSL", "proc/sys/fs/binfmt_misc/WSLInterop", "proc/sys/fs/binfmt_misc/WSLInterop-late"]
+
+
+def mark(root, marker):
+    (root / marker).parent.mkdir(parents=True, exist_ok=True)
+    (root / marker).touch()
+
+
 @pytest.mark.parametrize(
     ("release", "wsl"),
-    [("6.6.87.2-microsoft-standard-WSL2", True), ("4.4.0-19041-Microsoft", True), ("6.8.0-31-generic", False)],
+    [(WSL_KERNEL, True), ("4.4.0-19041-Microsoft", True), ("6.8.0-31-generic", False)],
 )
-def test_is_wsl(release, wsl):
-    assert is_wsl(release, env={"WSL_DISTRO_NAME": "Ubuntu"}) is wsl
+def test_is_wsl(tmp_path, release, wsl):
+    assert is_wsl(release, root=str(tmp_path), env={"WSL_DISTRO_NAME": "Ubuntu"}) is wsl
 
 
-@pytest.mark.parametrize(
-    "marker", ["run/WSL", "proc/sys/fs/binfmt_misc/WSLInterop", "proc/sys/fs/binfmt_misc/WSLInterop-late"]
-)
+@pytest.mark.parametrize("marker", MARKERS)
 def test_wsl_without_its_distro_name(tmp_path, marker):
     # sudo resets the environment; WSL's own files are still there.
-    (tmp_path / marker).parent.mkdir(parents=True, exist_ok=True)
-    (tmp_path / marker).touch()
-    assert is_wsl("6.6.87.2-microsoft-standard-WSL2", root=str(tmp_path), env={})
+    mark(tmp_path, marker)
+    assert is_wsl(WSL_KERNEL, root=str(tmp_path), env={})
+
+
+@pytest.mark.parametrize("marker", MARKERS)
+def test_wsl_on_a_kernel_of_its_own(tmp_path, marker):
+    # A custom kernel from .wslconfig needn't say "microsoft".
+    mark(tmp_path, marker)
+    assert is_wsl("6.12.1-custom", root=str(tmp_path), env={})
 
 
 def test_a_container_on_wsls_kernel_isnt_wsl(tmp_path):
     # Docker Desktop's containers, and devcontainers, run WSL's kernel.
-    assert not is_wsl("6.6.87.2-microsoft-standard-WSL2", root=str(tmp_path), env={})
+    assert not is_wsl(WSL_KERNEL, root=str(tmp_path), env={})
+
+
+def test_wsl_distro_name_alone_needs_wsls_kernel(tmp_path):
+    # It can be passed into a container, or over SSH to another machine.
+    assert not is_wsl("6.8.0-31-generic", root=str(tmp_path), env={"WSL_DISTRO_NAME": "Ubuntu"})
 
 
 def test_wsl_is_picked_inside_wsl(monkeypatch):

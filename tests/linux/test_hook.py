@@ -241,17 +241,44 @@ def test_in_wsl_the_boot_is_the_distros(run_hook, tmp_path, release):
     assert name.startswith(record["boot_id"] + "_") and name_again.startswith(record_again["boot_id"] + "_")
 
 
+# WSL's own files, from the fake /proc's parent: /run beside /proc.
+WSL_FILES = ["run/WSL", "proc/sys/fs/binfmt_misc/WSLInterop", "proc/sys/fs/binfmt_misc/WSLInterop-late"]
+
+
+def wsl_file(root: Path, marker: str) -> None:
+    (root / marker).parent.mkdir(parents=True, exist_ok=True)
+    (root / marker).touch()
+
+
+@pytest.mark.parametrize("marker", WSL_FILES)
+def test_in_wsl_on_a_kernel_of_its_own_the_boot_is_the_distros(run_hook, tmp_path, marker):
+    # A custom kernel from .wslconfig needn't say "microsoft".
+    proc = fake_proc(tmp_path / "proc", "6.12.1-custom", 1234)
+    wsl_file(tmp_path, marker)
+    [record] = run_hook(("start", {"session_id": SID}), proc=proc).values()
+    assert record["boot_id"] == VM_BOOT.replace("-", "")[:20] + f"{1234:012x}"
+
+
 def test_elsewhere_the_boot_is_the_kernels(run_hook, tmp_path):
     [record] = run_hook(("start", {"session_id": SID}), proc=fake_proc(tmp_path, "6.8.0-31-generic", 1234)).values()
     assert record["boot_id"] == VM_BOOT
 
 
-@pytest.mark.parametrize("release", ["6.6.87.2-microsoft-standard-WSL2", "6.8.0-31-generic"])
-def test_wsl_records_are_what_the_launcher_reads(run_hook, tmp_path, release):
+@pytest.mark.parametrize(
+    ("release", "marker"),
+    [
+        ("6.6.87.2-microsoft-standard-WSL2", None),
+        ("6.8.0-31-generic", None),
+        *(("6.12.1-custom", m) for m in WSL_FILES),
+    ],
+)
+def test_wsl_records_are_what_the_launcher_reads(run_hook, tmp_path, release, marker):
     from claude_launcher.platforms.linux.host import LinuxHost
     from claude_launcher.restart import _RECORD_NAME, Record, normalize_boot_id
 
     proc = fake_proc(tmp_path / "proc", release, 4321)
+    if marker:
+        wsl_file(tmp_path, marker)
     records = run_hook(("start", {"session_id": SID}), proc=proc)
     (name,) = records
     assert _RECORD_NAME.fullmatch(name)
