@@ -34,10 +34,11 @@ When Claude exits, the picker comes back.
 
   claude-launcher [claude options]   pick, then run claude with those options
   claude-launcher --resume <id>      skip the picker: resume that session in its directory
-  claude-launcher --help             show this
+  claude-launcher -r <id>            the same
+  claude-launcher --help, -h         show this
   claude-launcher --version          show the launcher's version
 
---help and --version count only as the first argument; after another one
+--help, -h and --version count only as the first argument; after another one
 they go to claude. See README.md for the keys."""
 
 HUNG_UP = 129
@@ -292,7 +293,9 @@ def version() -> str:
     except (OSError, subprocess.SubprocessError):
         return __version__
     commit = done.stdout.strip()
-    return f"{__version__} ({commit})" if done.returncode == 0 and commit else __version__
+    if done.returncode != 0 or not commit or commit == f"v{__version__}":  # exactly the release
+        return __version__
+    return f"{__version__} ({commit})"
 
 
 def main(args: list[str]) -> int:

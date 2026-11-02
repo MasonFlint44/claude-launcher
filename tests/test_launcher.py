@@ -299,6 +299,30 @@ def test_version_without_a_commit(monkeypatch, tmp_path):
     assert launcher.version() == __version__  # no git
 
 
+def test_help_names_the_short_options():
+    assert "claude-launcher -r <id>" in launcher.USAGE and "--help, -h" in launcher.USAGE
+
+
+@pytest.mark.parametrize(
+    ("described", "shown"),
+    [
+        ("v{v}", "{v}"),  # exactly the release: no need to say it twice
+        ("v{v}-dirty", "{v} (v{v}-dirty)"),
+        ("v{v}-3-gabc1234", "{v} (v{v}-3-gabc1234)"),
+        ("v0.0.9", "{v} (v0.0.9)"),  # another release's tag
+        ("abc1234", "{v} (abc1234)"),  # no tags at all
+    ],
+)
+def test_version_from_git(monkeypatch, tmp_path, described, shown):
+    from claude_launcher import __version__, paths
+
+    monkeypatch.setattr(paths, "REPO_DIR", tmp_path)
+    (tmp_path / ".git").mkdir()
+    out = described.format(v=__version__) + "\n"
+    monkeypatch.setattr(subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(argv, 0, stdout=out))
+    assert launcher.version() == shown.format(v=__version__)
+
+
 def test_help_after_another_argument_goes_to_claude(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
     monkeypatch.setattr(launcher.signal, "signal", lambda *a: None)
