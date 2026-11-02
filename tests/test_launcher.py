@@ -194,6 +194,12 @@ def test_a_resumed_session_leaves_the_group_once_claude_starts(loop, restart, tm
     assert restart.dropped == [["sid", "older"]]
 
 
+def test_a_session_not_in_the_group_leaves_its_file_alone(loop, restart, tmp_path):
+    FakePicker.result = Pick(str(tmp_path), "sid")
+    loop(0, 0, launcher.QUIT)
+    assert restart.dropped == []  # no lock taken, no rewrite
+
+
 def test_a_session_that_cant_start_stays_in_the_group(loop, restart, tmp_path):
     FakePicker.result = Pick(str(tmp_path / "gone"), "sid", ["sid"])
     loop(0, launcher.QUIT)

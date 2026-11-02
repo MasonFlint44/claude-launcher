@@ -1163,7 +1163,20 @@ class TestPick:
         sid = sid_in(env, d)
         start(env)
         self.accept(env, "", monkeypatch=monkeypatch)
-        assert env.picker().pick(sid) == Pick(str(d), sid)
+        picked = env.picker().pick(sid)
+        assert picked == Pick(str(d), sid) and picked.ungroup == []  # not in the group: nothing to drop
+
+    def test_resume_a_session_row_not_in_the_group(self, env, monkeypatch):
+        d = project(env, "proj", NOW - 60)
+        sid = sid_in(env, d)
+        other = env.log(d, conversation("another", d))
+        env.paths.state.mkdir(parents=True, exist_ok=True)
+        env.paths.restored.write_text(json.dumps({other: closed(NOW - 300)}))
+        p, _ = start(env)
+        p.on_sessions()
+        self.accept(env, sid, pos=2, monkeypatch=monkeypatch)  # under the ↻ row
+        picked = env.picker().pick("")
+        assert picked == Pick(str(d), sid) and picked.ungroup == []
 
     def test_pasted_session_id_that_continues_one_in_the_group(self, env, monkeypatch):
         # The projects view has no Sessions rows to ask, so the group itself says.
