@@ -329,7 +329,10 @@ def main(args: list[str]) -> int:
         print(e, file=sys.stderr)
         return 1
     # `--resume <id>`: straight to that session, in the directory it was started in.
-    resume = _resume(args)
+    try:
+        resume = _resume(args)
+    except KeyboardInterrupt:  # Ctrl-C in the pause before resuming from ~
+        return QUIT
     if isinstance(resume, int):  # an error, already shown
         return resume
     signals = _Signals()

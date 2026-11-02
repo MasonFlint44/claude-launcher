@@ -468,6 +468,18 @@ def test_resume_when_the_group_cant_be_sorted(resume, claude_home, monkeypatch):
     assert in_group(claude_home) == set()
 
 
+def test_ctrl_c_while_waiting_to_resume_from_home_quits(resume, claude_home, tmp_path, monkeypatch, capsys):
+    gone = tmp_path / "gone"
+    sid = claude_home.log(gone, conversation("x", gone))
+
+    def interrupted(seconds):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(launcher.time, "sleep", interrupted)
+    assert resume(sid) == launcher.QUIT
+    assert "not found, so resuming from ~" in capsys.readouterr().err
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX signals")
 def test_resume_killed_by_a_signal_exits_as_a_shell_would(resume):
     kill = [sys.executable, "-c", "import os, signal; os.kill(os.getpid(), signal.SIGKILL)"]
