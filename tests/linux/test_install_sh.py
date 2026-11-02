@@ -16,8 +16,22 @@ pytestmark = [pytest.mark.skipif(not shutil.which("fzf"), reason="needs fzf"), d
 
 
 def run(home, *args):
-    env = {"HOME": str(home), "PATH": f"{home}/.local/bin:{home}/stubs:/usr/bin:/bin", "LANG": "C.UTF-8"}
-    return subprocess.run([str(REPO_DIR / "install.sh"), *args], env=env, capture_output=True, text=True)
+    # The fzf these tests run with (CI's floors job puts 0.67 first), alone
+    # in a directory of its own so nothing else on PATH leaks in. Fetching
+    # one goes to a closed port and fails: no test reaches the network.
+    fzf_dir = home.parent / f"{home.name}-fzf"
+    if not fzf_dir.exists():
+        fzf_dir.mkdir(parents=True)
+        (fzf_dir / "fzf").symlink_to(shutil.which("fzf"))
+    env = {
+        "HOME": str(home),
+        "PATH": f"{home}/.local/bin:{home}/stubs:{fzf_dir}:/usr/bin:/bin",
+        "LANG": "C.UTF-8",
+        "https_proxy": "http://127.0.0.1:9",
+    }
+    done = subprocess.run([str(REPO_DIR / "install.sh"), *args], env=env, capture_output=True, text=True)
+    assert "fetching" not in done.stdout, done.stdout
+    return done
 
 
 def test_install_then_uninstall(tmp_path):
