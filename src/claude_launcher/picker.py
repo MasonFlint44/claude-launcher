@@ -104,7 +104,7 @@ class State:
     has_group_rows: bool = False  # the Sessions view shows ↻ rows
     back: list | None = None  # [query, cursor] the directory list had when left
     pending_pos: int = 0  # the cursor to put back once the list's rows are in
-    fzf: str = "fzf"  # the fzf program the picker runs
+    fzf: str = ""  # the fzf program the picker runs, from start()
     # How key bindings run the core, from the platform when the picker starts.
     shell: str = ""  # fzf's --with-shell
     core: str = ""  # the core's command line, with --run DIR
@@ -161,6 +161,15 @@ class Picker:
         if not self.state.core:  # only before start(), which sets it
             self._from_platform()
         return self.state.core
+
+    @property
+    def fzf_path(self) -> str:
+        """The fzf start() found. Found again if the state was lost: the
+        fzf on PATH may be too old, or not there beside the launcher's own."""
+        if not self.state.fzf:
+            own = fzf.private_dir(_platform().data_dir(os.environ))
+            self.state.fzf = fzf.find(own)[0] or "fzf"
+        return self.state.fzf
 
     def _from_platform(self, platform: Platform | None = None) -> None:
         platform = platform or _platform()
@@ -332,6 +341,8 @@ class Picker:
         home_used = 0.0
         rows = []
         for used, directory in logs.recent_projects(self.paths):
+            if not text.is_utf8(directory):  # fzf couldn't hand it back
+                continue
             if directory == home:
                 home_used = used
             else:
@@ -409,7 +420,8 @@ class Picker:
         rows = [] if partial else [DirRow(parent, typed, self._note(parent_own, parent_inside), is_parent=True)]
         try:
             with os.scandir(parent) as entries:
-                # A name with control characters can't be typed or shown as it is.
+                # A name with control characters, or bytes that aren't UTF-8,
+                # can't be typed or shown as it is.
                 names = [e.name for e in entries if _is_dir(e) and text.printable(e.name) == e.name]
         except OSError:
             return rows
@@ -580,7 +592,7 @@ class Picker:
         t = self.theme
         c = self.core
         return [
-            self.state.fzf,
+            self.fzf_path,
             "--print-query",
             "--layout=reverse",
             *MATCHING,
@@ -632,10 +644,10 @@ class Picker:
         # matches, as Enter does.
         if typed_path_like(query):
             rows = self.directories(query)
-            key = _nth_match(self.state.fzf, [self._dir_row(d) for d in rows], query, _cursor())
+            key = _nth_match(self.fzf_path, [self._dir_row(d) for d in rows], query, _cursor())
             row = next((d for d in rows if d.path == key and not d.is_parent), None)
             return f"change-query:{with_sep(row.shown)}" if row else ""
-        key = _nth_match(self.state.fzf, self.projects_rows(query)[1:], query, _cursor())
+        key = _nth_match(self.fzf_path, self.projects_rows(query)[1:], query, _cursor())
         if not key or not os.path.isdir(key):
             return ""
         return f"change-query:{with_sep(self.paths.tilde(key))}"
@@ -667,7 +679,7 @@ class Picker:
         if self.state.view != "projects" or is_session_id(query):
             return "accept"
         # As in pick(): take the row at the cursor from what the query matches.
-        choice = _nth_match(self.state.fzf, self.projects_rows(query)[1:], query, pos)
+        choice = _nth_match(self.fzf_path, self.projects_rows(query)[1:], query, pos)
         if not choice or not os.path.isdir(choice) or not self._has_sessions(choice):
             return "accept"
         self.state.query = query
@@ -776,7 +788,7 @@ class Picker:
         # newline), fzf can return a row from before it caught up. So take the
         # row at the cursor's position from what the final query matches.
         kind = "projects" if view == "projects" else "sessions"
-        choice = _nth_match(self.state.fzf, self.rows(kind, query)[1:], query, pos, NTH[kind])
+        choice = _nth_match(self.fzf_path, self.rows(kind, query)[1:], query, pos, NTH[kind])
 
         session_id = ""
         if is_session_id(query):

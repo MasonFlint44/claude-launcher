@@ -172,3 +172,45 @@ def test_utf8_out_skips_missing_streams(monkeypatch):
     monkeypatch.setattr(sys, "stdout", None)
     monkeypatch.setattr(sys, "stderr", None)
     text.utf8_out()
+
+
+@pytest.mark.parametrize("arg", ["--help", "-h"])
+def test_help(monkeypatch, capsys, arg):
+    monkeypatch.setattr(platforms, "_current", None)
+    monkeypatch.setattr(sys, "platform", "darwin")  # it says how to run it anywhere
+    assert launcher.main([arg, "--model", "opus"]) == 0
+    assert capsys.readouterr().out == launcher.USAGE + "\n"
+
+
+def test_version(capsys):
+    from claude_launcher import __version__
+
+    assert launcher.main(["--version"]) == 0
+    assert capsys.readouterr().out.startswith(f"claude-launcher {__version__}")
+
+
+def test_version_without_a_commit(monkeypatch, tmp_path):
+    from claude_launcher import __version__, paths
+
+    monkeypatch.setattr(paths, "REPO_DIR", tmp_path)
+    assert launcher.version() == __version__  # not a clone
+    (tmp_path / ".git").mkdir()
+    assert launcher.version() == __version__  # git can't read it
+    monkeypatch.setenv("PATH", str(tmp_path / "nothing"))
+    assert launcher.version() == __version__  # no git
+
+
+def test_help_after_another_argument_goes_to_claude(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    monkeypatch.setattr(launcher.signal, "signal", lambda *a: None)
+    monkeypatch.setattr(launcher, "_theme", lambda run, action: None)
+    passed = []
+    monkeypatch.setattr(launcher, "_loop", lambda signals, run, args: passed.append(args) or 0)
+    assert launcher.main(["--model", "opus", "--help"]) == 0
+    assert launcher.main(["--append-system-prompt", "--version"]) == 0
+    assert passed == [["--model", "opus", "--help"], ["--append-system-prompt", "--version"]]
+
+
+def test_resume_then_help_still_resumes(claude_home, capsys):
+    assert launcher.main(["--resume", "0b2f0000-0000-0000-0000-000000000000", "--help"]) == 1
+    assert capsys.readouterr().err.strip() == "No session with ID 0b2f0000-0000-0000-0000-000000000000"

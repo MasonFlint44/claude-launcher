@@ -25,15 +25,28 @@ def strip_ansi(text: str) -> str:
     return _ANSI.sub("", text)
 
 
-# Escape sequences (CSI, OSC, and two-character ones), then any other control character.
-_CONTROLS = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)?|[@-Z\\-_])|[\x00-\x1f\x7f-\x9f]")
+# Escape sequences (CSI, OSC, and two-character ones), then any other control
+# character, then lone surrogates (a name's bytes that aren't UTF-8).
+_CONTROLS = re.compile(
+    r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)?|[@-Z\\-_])|[\x00-\x1f\x7f-\x9f]|[\ud800-\udfff]"
+)
 
 
 def printable(text: str) -> str:
     """`text` without escape sequences or control characters, for text from
     logs and paths: pasted terminal output keeps its color codes, and fzf
-    would show them."""
+    would show them. Text that isn't UTF-8 goes too: fzf reads UTF-8."""
     return _CONTROLS.sub("", text)
+
+
+def is_utf8(text: str) -> bool:
+    """Whether `text` can be written as UTF-8 (a path with bytes that aren't
+    UTF-8 can't)."""
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
 
 
 def _char_width(ch: str) -> int:

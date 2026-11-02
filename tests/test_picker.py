@@ -125,6 +125,15 @@ class TestProjects:
         [row] = [r for r in p.rows() if r.startswith(str(odd) + "\t")]
         assert "\x1b[31m" not in row.split("\t", 1)[1] and "/ab" in row
 
+    @posix_only  # Windows names are UTF-16
+    def test_directory_that_isnt_utf8_left_out(self, env):
+        # A log can name one (JSON can hold any code point), and fzf reads UTF-8.
+        project(env, os.fsdecode(b"latin1-\xe9dir"), NOW - 600)
+        ok = project(env, "ok", NOW - 900)
+        p, _ = start(env)
+        assert keys(p.rows()) == [str(env.home), str(ok)]
+        (env.run / "rows").read_text(encoding="utf-8")
+
     def test_home_first_then_most_recent(self, env):
         a = project(env, "a", NOW - 600)
         b = project(env, "b", NOW - 7200)
@@ -261,6 +270,15 @@ class TestPathMode:
         make_dirs(env, "ok", "bad\nname", "esc\x1b[31m")
         p, _ = start(env)
         assert listed(p.rows(query="~/"))[1:] == ["~/ok"]
+
+    @posix_only  # Windows names are UTF-16
+    def test_names_that_arent_utf8_left_out(self, env):
+        # fzf reads UTF-8, and the core writes rows as UTF-8.
+        make_dirs(env, "ok", os.fsdecode(b"latin1-\xe9dir"))
+        p, _ = start(env)
+        rows = p.rows(query="~/")
+        assert listed(rows)[1:] == ["~/ok"]
+        "".join(rows).encode("utf-8")
 
     def test_missing_directory(self, env):
         p, _ = start(env)
@@ -650,6 +668,14 @@ class TestSessions:
         assert displayed(p.rows())[1].split()[-1] == "hello"
         assert "Select a project directory" in env.picker().on_sessions()
 
+    def test_title_that_isnt_utf8(self, env):
+        env.log("/tmp", conversation("caf\udce9 time", "/tmp"))
+        p, _ = start(env)
+        p.on_sessions()
+        rows = env.picker().rows()
+        "".join(rows).encode("utf-8")
+        assert displayed(rows)[1].split()[-2:] == ["caf", "time"]
+
     def test_no_sessions(self, env):
         p, _ = start(env)
         assert "No Claude sessions yet" in p.on_sessions()
@@ -884,6 +910,15 @@ class TestDirectorySessions:
         assert self.enter(env, monkeypatch, d, pos=2) == "accept"
         assert env.picker().pick("") == Pick(str(d))
 
+    def test_new_session_in_a_directory_deleted_since(self, env, monkeypatch):
+        make_dirs(env, "x")
+        env.log(env.home / "x", conversation("hi", env.home / "x"), mtime=NOW - 60)
+        start(env)
+        self.enter(env, monkeypatch, env.home / "x", "~/x")
+        (env.home / "x").rmdir()
+        assert self.enter(env, monkeypatch, f"+{env.home / 'x'}") == "accept"
+        assert env.picker().pick("") == f"Not a directory: ~{S}x"
+
     def test_new_session_row_can_be_filtered_out(self, env, monkeypatch):
         d = project(env, "proj", NOW - 60)
         start(env)
@@ -1003,6 +1038,20 @@ class TestKeys:
         env.picker().on_change("a")
         assert env.picker().on_key("esc", "").startswith("change-header:")
 
+    @pytest.mark.parametrize("key", ["ctrl-c", "ctrl-d"])
+    def test_twice_on_an_empty_search_quits(self, env, key):
+        start(env)
+        first = strip_ansi(env.picker().on_key(key, ""))
+        assert f"{key} again" in first and "to quit" in first
+        env.clock.t += 0.5
+        assert env.picker().on_key(key, "").startswith("abort+change-header:")
+
+    def test_a_different_key_isnt_a_second_press(self, env):
+        start(env)
+        env.picker().on_key("esc", "")
+        env.clock.t += 0.2
+        assert env.picker().on_key("ctrl-c", "").startswith("change-header:")
+
     def test_ctrl_c_and_ctrl_d_with_text(self, env):
         p, _ = start(env)
         assert p.on_key("ctrl-c", "abc") == "clear-query"
@@ -1019,6 +1068,22 @@ class TestKeys:
         assert p.on_change("/tm").startswith("reload-sync(")
         assert p.on_change("x").startswith("reload-sync(")  # the typed-path row goes away
         assert not p.on_change("xy").startswith("reload")
+
+    def test_typing_in_a_sessions_view_doesnt_reload(self, env):
+        # fzf filters a Sessions view's rows itself, even for text like a path.
+        p, _ = start(env)
+        p.on_sessions()
+        assert env.picker().on_change("abc").startswith("change-header:")
+        assert env.picker().on_change("~/").startswith("change-header:")
+
+    def test_esc_after_typing_in_a_sessions_view_puts_the_lists_search_back(self, env, monkeypatch):
+        monkeypatch.setenv("FZF_POS", "1")
+        start(env)
+        env.picker().on_change("proj")
+        env.picker().on_sessions()
+        env.picker().on_change("hello")
+        assert env.picker().on_key("esc", "hello").startswith("change-query(proj)+change-prompt(project> )+")
+        assert env.picker().state.query == "proj"
 
     def test_alt_x_twice_dismisses_all(self, env):
         a = env.log("/tmp", conversation("a", "/tmp"))
@@ -1185,6 +1250,22 @@ class TestDay:
         from claude_launcher.picker import _day
 
         assert _day(local(*then), local(*now)) == day
+
+
+@pytest.mark.parametrize(("found", "used"), [("/own/fzf", "/own/fzf"), (None, "fzf")])
+def test_lost_state_finds_fzf_again(env, monkeypatch, found, used):
+    # state.json unreadable: the fzf on PATH may be too old, or missing.
+    from claude_launcher import picker
+
+    start(env)
+    (env.run / "state.json").write_text("{not json")
+    monkeypatch.setattr(picker.fzf, "find", lambda own: (found, (0, 70, 0) if found else None))
+    ran = []
+    monkeypatch.setattr(picker, "_nth_match", lambda fzf_path, *a, **kw: ran.append(fzf_path) or "")
+    p = env.picker()
+    assert p.state.view == "projects" and p.state.key is None
+    assert p.on_enter(str(env.home), "abc") == "accept"
+    assert ran == [used]
 
 
 def test_title_skipped_on_dumb_terminals():

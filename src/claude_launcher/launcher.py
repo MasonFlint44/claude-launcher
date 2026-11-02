@@ -1,9 +1,6 @@
 """The launcher: pick a project directory or a recent session, start Claude
 Code there, and come back to the picker when Claude exits.
-bin/claude-launcher runs main().
-
-    claude-launcher [claude options]   pick, then run claude with those options
-    claude-launcher --resume <id>      skip the picker: resume that session in its directory
+bin/claude-launcher runs main(); USAGE is what --help shows.
 
 The terminal is left as it was found: its colors and title go back on exit,
 unless the terminal itself has gone (a hang-up). Ctrl-C belongs to fzf and to
@@ -28,6 +25,18 @@ from pathlib import Path
 from . import fzf, logs, text, theme, title
 from .paths import Paths
 from .picker import FzfTooOld, Pick, Picker, resume_dir
+
+USAGE = """\
+Pick a project directory or a recent session, then start Claude Code there.
+When Claude exits, the picker comes back.
+
+  claude-launcher [claude options]   pick, then run claude with those options
+  claude-launcher --resume <id>      skip the picker: resume that session in its directory
+  claude-launcher --help             show this
+  claude-launcher --version          show the launcher's version
+
+--help and --version count only as the first argument; after another one
+they go to claude. See README.md for the keys."""
 
 HUNG_UP = 129
 TERMINATED = 143
@@ -239,8 +248,36 @@ def _loop(signals: _Signals, run: Path, args: list[str]) -> int:
             time.sleep(1)
 
 
+def version() -> str:
+    """The version, with the commit when the launcher runs from a git clone
+    (how it's installed). Leaves the commit out if git can't say."""
+    from . import __version__
+    from .paths import REPO_DIR
+
+    if not (REPO_DIR / ".git").exists():  # git would look in the directories above
+        return __version__
+    try:
+        done = subprocess.run(
+            ["git", "-C", str(REPO_DIR), "describe", "--tags", "--always", "--dirty"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return __version__
+    commit = done.stdout.strip()
+    return f"{__version__} ({commit})" if done.returncode == 0 and commit else __version__
+
+
 def main(args: list[str]) -> int:
     text.utf8_out()
+    # Only first: later, "--help" may be a claude option's value.
+    if args[:1] in (["--help"], ["-h"]):
+        print(USAGE)
+        return 0
+    if args[:1] == ["--version"]:
+        print(f"claude-launcher {version()}")
+        return 0
     from .platforms import Unsupported, current
 
     try:

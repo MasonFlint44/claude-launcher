@@ -46,7 +46,7 @@ def _fzf(platform) -> Iterator[str]:
         yield f"warning: {e}"
         yield "error: could not fetch fzf; install fzf 0.67 or newer, then re-run"
         return
-    yield f"Installed {fzf.show(fzf.version(str(path)))} to {path}"
+    yield f"Installed fzf {fzf.show(fzf.version(str(path)))} to {path}"
 
 
 def _hook(setup, settings_path: Path) -> Iterator[str]:

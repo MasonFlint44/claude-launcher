@@ -113,6 +113,19 @@ def test_fzf_that_cant_be_fetched_stops_before_anything_changes(env, monkeypatch
     assert not env.settings.exists() and not setup.installed
 
 
+@pytest.mark.parametrize("found", [None, (0, 44, 0)], ids=["none", "too-old"])
+def test_fzf_fetched_then_the_rest(env, monkeypatch, found):
+    monkeypatch.setattr(install.fzf, "find", lambda own: (None, found))
+    fetched = env.data / "bin" / "fzf"
+    asked = []
+    monkeypatch.setattr(install.fzf, "fetch", lambda own, system: asked.append((own, system)) or fetched)
+    monkeypatch.setattr(install.fzf, "version", lambda path: (0, 67, 0) if path == str(fetched) else None)
+    lines = run(env, FakeSetup(hook=env.hook))
+    assert asked == [(env.data / "bin", "linux")]
+    assert lines[1] == f"Installed fzf 0.67.0 to {fetched}"
+    assert lines[2].startswith("Added the session hook to ") and lines[-1] == "Done. Open it."
+
+
 def test_a_setup_that_cant_go_ahead_stops_first(env):
     lines = run(env, FakeSetup(hook=env.hook, check=RuntimeError("not here")))
     assert lines == ["error: not here"]

@@ -119,6 +119,46 @@ class TestHook:
             hook_settings.add_hook(path, Path("/x/claude-session-hook"))
 
 
+class TestOtherGroups:
+    """Groups in the same event that aren't only ours."""
+
+    OURS = {"type": "command", "command": "/old/claude-session-hook start"}
+    OTHER = {"type": "command", "command": "other.sh"}
+
+    def write(self, path, groups):
+        path.write_text(json.dumps({"hooks": {"SessionStart": groups}}))
+
+    def groups(self, path):
+        return json.loads(path.read_text())["hooks"]["SessionStart"]
+
+    def test_odd_and_empty_groups_are_kept(self, tmp_path):
+        path = tmp_path / "settings.json"
+        odd, empty, no_hooks = "not a group", {"matcher": "x", "hooks": []}, {"matcher": "y"}
+        self.write(path, [odd, empty, no_hooks, {"hooks": [self.OURS]}])
+        hook_settings.add_hook(path, Path("/new/claude-session-hook"))
+        new = {"hooks": [{"type": "command", "command": f"{q('/new/claude-session-hook')} start"}]}
+        assert self.groups(path) == [odd, empty, no_hooks, new]
+        hook_settings.remove_hook(path)
+        assert self.groups(path) == [odd, empty, no_hooks]
+
+    def test_ours_beside_other_hooks(self, tmp_path):
+        # The group stays with the other hook; ours moves to a group of its own.
+        path = tmp_path / "settings.json"
+        self.write(path, [{"matcher": "x", "hooks": [self.OTHER, self.OURS]}])
+        hook_settings.add_hook(path, Path("/new/claude-session-hook"))
+        new = {"hooks": [{"type": "command", "command": f"{q('/new/claude-session-hook')} start"}]}
+        assert self.groups(path) == [{"matcher": "x", "hooks": [self.OTHER]}, new]
+        hook_settings.remove_hook(path)
+        assert self.groups(path) == [{"matcher": "x", "hooks": [self.OTHER]}]
+
+    def test_the_same_hook_beside_others_is_left_where_it_is(self, tmp_path):
+        path = tmp_path / "settings.json"
+        ours = {"type": "command", "command": f"{q('/x/claude-session-hook')} start"}
+        self.write(path, [{"hooks": [self.OTHER, ours]}])
+        hook_settings.add_hook(path, Path("/x/claude-session-hook"))
+        assert self.groups(path) == [{"hooks": [self.OTHER, ours]}]
+
+
 class TestHookWithoutAShell:
     """Windows: Claude runs python.exe with the hook script as an argument."""
 
@@ -194,3 +234,59 @@ class TestUnusualFiles:
         assert json.loads(raw)["model"] == "opus"
         assert hook_settings.remove_hook(path)
         assert json.loads(path.read_text()) == {"model": "opus"}
+
+
+def _windows_forms(tmp_path):
+    """What Windows' install writes: cmd /c the .cmd, by %LOCALAPPDATA% or by path."""
+    from claude_launcher.platforms.windows import data_dir
+    from claude_launcher.platforms.windows.setup import WindowsSetup
+
+    env = {"USERPROFILE": str(tmp_path / "Jo Smith"), "LOCALAPPDATA": str(tmp_path / "Jo Smith" / "AppData" / "Local")}
+    return [
+        WindowsSetup(data_dir(env), env={**env, "SystemRoot": "C:\\Windows"}).hook_command(),
+        WindowsSetup(tmp_path / "data", env=env).hook_command(),
+    ]
+
+
+class TestWhichHooksAreOurs:
+    """Ours by the name of what runs, not by a name appearing somewhere."""
+
+    @pytest.mark.parametrize(
+        "hook",
+        [
+            Path("/home/me/.local/bin/claude-session-hook"),  # Linux and WSL
+            Path("/home/John Doe/.local/bin/claude-session-hook"),
+            ["C:\\Python\\python.exe", "-I", "C:\\cl\\bin\\claude-session-hook.py"],  # Windows before the .cmd
+        ],
+        ids=["linux", "spaced", "python"],
+    )
+    def test_every_form_written_is_ours(self, tmp_path, hook):
+        path = tmp_path / "settings.json"
+        hook_settings.add_hook(path, hook)
+        assert hook_settings.remove_hook(path)
+        assert json.loads(path.read_text()) == {}
+
+    def test_windows_forms_are_ours(self, tmp_path):
+        for argv in _windows_forms(tmp_path):
+            path = tmp_path / "settings.json"
+            hook_settings.add_hook(path, argv)
+            assert hook_settings.remove_hook(path)
+            assert json.loads(path.read_text()) == {}
+
+    WRAPPERS = [
+        {"type": "command", "command": "my-claude-session-hook-wrapper start"},
+        {"type": "command", "command": "/x/claude-session-hook-wrapper start"},
+        {"type": "command", "command": "/x/claude-session-hook/run.sh start"},
+        {"type": "command", "command": "bash -c '~/.local/bin/claude-session-hook start; logger hi'"},
+        {"type": "command", "command": "C:\\w\\my-claude-session-hook.cmd", "args": ["start"]},
+    ]
+
+    def test_someone_elses_wrapper_is_left_alone(self, tmp_path):
+        path = tmp_path / "settings.json"
+        theirs = {"hooks": self.WRAPPERS}
+        path.write_text(json.dumps({"hooks": {"SessionStart": [theirs]}}))
+        hook_settings.add_hook(path, Path("/x/claude-session-hook"))
+        groups = json.loads(path.read_text())["hooks"]["SessionStart"]
+        assert groups[0] == theirs and len(groups) == 2
+        hook_settings.remove_hook(path)
+        assert json.loads(path.read_text()) == {"hooks": {"SessionStart": [theirs]}}
