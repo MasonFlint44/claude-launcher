@@ -278,7 +278,7 @@ def test_a_resumed_session_leaves_the_group_once_claude_starts(launch, claude_ho
     t = launch()
     t.wait_for("Select a project directory for Claude")
     t.send("ctrl-s")
-    t.wait_for("↻")
+    t.wait_for("open at the restart")  # its row: the projects view shows a ↻ line too
     t.send("enter")
     t.wait_for("fake claude in")
     assert launch.calls() == [(str(proj), f"--resume {sid}")]
@@ -300,7 +300,7 @@ def test_a_session_claude_cant_resume_stays_in_the_group(launch, claude_home, tm
     t = launch(PATH=str(tmp_path / "bin"))
     t.wait_for("Select a project directory for Claude")
     t.send("ctrl-s")
-    t.wait_for("↻")
+    t.wait_for("open at the restart")
     t.send("enter")
     t.wait_for("claude isn't on your PATH")
     t.wait_for("Select a project directory for Claude")
