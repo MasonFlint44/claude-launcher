@@ -36,6 +36,9 @@ boot_lost: a journal kept only in memory, or a full or cleared event log),
 the latest end among that boot's records stands in for its restart, under
 the same margins. A restart closes every open Claude at once, so those ends
 bunch together; a tab closed by hand well before them wasn't closed by it.
+A record of this boot that nothing closed, from before what the system
+still has (Windows' Fast Startup shuts down without a new boot), waits for
+the boot to end.
 
 Those join the group in restored.json, {session id: {"at": time, "why":
 reason key}}, for KEEP seconds, or until resumed or dismissed. Any other
@@ -395,6 +398,12 @@ class RestartState:
                 events = [*events, Event(boot_end, boot_end, "restart")]
         matches = [e for e in events if closes(e, record.ended)]
         if not matches:
+            # In this boot, the system can still have lost what closed it:
+            # Windows' Fast Startup keeps the boot across shutdowns, and the
+            # log may have dropped one. Then it waits, for the next full
+            # restart and the stand-in above, or until KEEP after its end.
+            if same_boot and self.events.boot_lost(record) is not False:
+                return _UNDECIDED
             return None
         ranks = self.ranks
         best = min(matches, key=lambda e: (ranks.get(e.why, unknown(e.why).rank), e.start))

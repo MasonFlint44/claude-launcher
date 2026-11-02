@@ -394,3 +394,41 @@ def test_a_boot_partly_in_the_log_offers_back_only_what_its_restart_closed(claud
     write_record(claude_home.paths, a, "2" * 32, 2, T, T + 1002)
     state = RestartState(claude_home.paths, el.WindowsEvents(log, sid=lambda: ME), host, now=lambda: now)
     assert state.sort().sessions == {a: Closed(T + 1000, "restart")}
+
+
+def test_a_record_with_no_end_isnt_lost():
+    log = FakeLog([other(T + 100), BOOTED(T + 2000)])
+    assert el.WindowsEvents(log, sid=lambda: ME).boot_lost(Rec(ended=None)) is False
+    assert log.runs == []
+
+
+class TestFastStartupLost:
+    """Fast Startup keeps the boot across nightly shutdowns. If the log has
+    dropped a shutdown's events before the picker opens, that boot's
+    records wait for a full restart instead of going."""
+
+    def state(self, claude_home, log, boot="1" * 32, now=T + 9000):
+        host = FakeHost(boot=boot, started=lambda now: T - 3600)
+        return RestartState(claude_home.paths, el.WindowsEvents(log, sid=lambda: ME), host, now=lambda: now)
+
+    def test_this_boots_records_wait(self, claude_home):
+        log = FakeLog([other(T + 5000)], now=T + 9000)
+        sids = [claude_home.log("/tmp", conversation("x", "/tmp")) for _ in range(3)]
+        for pid, sid in enumerate(sids):
+            write_record(claude_home.paths, sid, "1" * 32, pid, T, T + 1000 + pid)
+        assert self.state(claude_home, log).sort().sessions == {}
+        assert len(list(claude_home.paths.open_records.iterdir())) == 3
+        assert [a for a in log.runs if "/q:*" in a] == [["qe", "System", "/q:*", "/f:xml", "/c:1"]]
+
+    def test_the_full_restart_after_works_it_out(self, claude_home):
+        sid = claude_home.log("/tmp", conversation("x", "/tmp"))
+        write_record(claude_home.paths, sid, "1" * 32, 1, T, T + 1000)
+        assert self.state(claude_home, FakeLog([other(T + 5000)])).sort().sessions == {}
+        log = FakeLog([other(T + 5000), BOOTED(T + 8000)], now=T + 9000)
+        assert self.state(claude_home, log, boot="2" * 32).sort().sessions == {sid: Closed(T + 1000, "restart")}
+
+    def test_a_log_that_still_has_it_decides(self, claude_home):
+        sid = claude_home.log("/tmp", conversation("x", "/tmp"))
+        write_record(claude_home.paths, sid, "1" * 32, 1, T, T + 1000)
+        log = FakeLog([other(T + 10), RESTART(T + 999, "power off"), HIBERNATING(T + 1000.5)])
+        assert self.state(claude_home, log).sort().sessions == {sid: Closed(T + 999, "restart")}

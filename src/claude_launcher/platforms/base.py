@@ -79,11 +79,13 @@ class EventSource(Protocol):
         ...
 
     def boot_lost(self, record: Record) -> bool | None:
-        """Whether the system has lost the end of the record's boot, an
-        earlier one (Linux: the journal no longer lists it; Windows: the
-        System log no longer reaches back to the record's end), so events()
-        can't say whether a restart closed it. restart.py then works out when
-        the boot ended from its records. None if the system can't be asked yet."""
+        """Whether the system has lost what could have closed the record's
+        Claude (Linux: the journal no longer lists its boot; Windows: the
+        System log no longer reaches back to its end), so events() can't say.
+        Asked only about a record with an end: of an earlier boot, for which
+        restart.py then works out when that boot ended from its records, or
+        of this boot when no event closed it, which then waits for the boot
+        to end. None if the system can't be asked yet."""
         ...
 
 

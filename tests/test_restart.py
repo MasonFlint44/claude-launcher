@@ -561,15 +561,50 @@ def test_whether_a_boot_is_lost_can_wait(setup, claude_home):
     assert lost(setup).sort().sessions == {sid: Closed(NOW - 700, "restart")}
 
 
-def test_this_boot_is_never_lost(setup, claude_home):
-    class NeverAsked(FakeEvents):
-        def boot_lost(self, record):
-            raise AssertionError("asked about this boot")
+class NeverAsked(FakeEvents):
+    def boot_lost(self, record):
+        raise AssertionError("asked whether the boot is lost")
 
+
+def test_this_boots_record_an_event_closed_never_asks_if_its_lost(setup, claude_home):
     sid = setup.session()
-    setup.record(sid, boot=THIS_BOOT, ended=NOW - 100)
-    state = RestartState(claude_home.paths, NeverAsked([]), setup.host, now=lambda: NOW)
-    assert state.sort().sessions == {}
+    setup.record(sid, boot=THIS_BOOT, ended=LOGOUT.start + 1)
+    state = RestartState(claude_home.paths, NeverAsked([LOGOUT]), setup.host, now=lambda: NOW)
+    assert state.sort().sessions == {sid: Closed(LOGOUT.start, "logout")}
+
+
+class TestThisBootLost:
+    """Windows' Fast Startup shuts down without a new boot, so a record of
+    this boot can have ended before what the log still has. Nothing closed
+    it as far as the system knows, but it waits rather than go."""
+
+    def test_not_lost_goes(self, setup, claude_home):
+        setup.record(setup.session(), boot=THIS_BOOT, ended=NOW - 100)
+        assert setup.make().sort().sessions == {}
+        assert records(claude_home) == []
+
+    @pytest.mark.parametrize("answer", [True, None], ids=["lost", "cant-say"])
+    def test_lost_waits(self, setup, claude_home, answer):
+        setup.record(setup.session(), boot=THIS_BOOT, ended=NOW - 100)
+        state = setup.make()
+        state.events.lost = answer
+        assert state.sort().sessions == {}
+        assert records(claude_home) == [f"{THIS_BOOT}_100"]
+
+    def test_the_next_full_restart_works_it_out(self, setup, claude_home):
+        by_hand, open_at_shutdown = setup.session(), setup.session()
+        setup.record(by_hand, pid=1, boot=THIS_BOOT, ended=NOW - 5000)
+        setup.record(open_at_shutdown, pid=2, boot=THIS_BOOT, ended=NOW - 3000)
+        assert lost(setup).sort().sessions == {}
+        assert len(records(claude_home)) == 2
+        setup.host.boot = "4" * 32  # a full restart
+        assert lost(setup).sort().sessions == {open_at_shutdown: Closed(NOW - 3000, "restart")}
+        assert records(claude_home) == []
+
+    def test_it_waits_until_keep_after_its_end(self, setup, claude_home):
+        setup.record(setup.session(), boot=THIS_BOOT, started=NOW - KEEP - 100, ended=NOW - KEEP - 1)
+        assert lost(setup).sort().sessions == {}
+        assert records(claude_home) == []
 
 
 class TestMovedAsideByItsOwnClaude:

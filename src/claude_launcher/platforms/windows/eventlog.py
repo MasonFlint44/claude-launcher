@@ -18,7 +18,8 @@ WSL, which runs the same wevtutil.exe through interop.
 - A record that ended before the log's oldest event (the log is full and
   dropped it, or was cleared): boot_lost() says so, and restart.py works out
   when that boot ended from its records. Fast Startup keeps the boot ID
-  across shutdowns, so there only the last of them can be worked out.
+  across shutdowns, so a record of this boot can be lost too; it waits
+  until a full restart ends the boot, then is worked out the same way.
 
 A boot runs from one Kernel-General 12 ("the operating system started") to
 the next.
@@ -250,6 +251,8 @@ class WindowsEvents:
         # Only the log's reach matters: while it goes back to the record's
         # end, the restart that followed is in it too. Kinds the picker
         # doesn't ask for count, so a quiet week isn't taken for a lost log.
+        if record.ended is None:  # restart.py asks only about records with an end
+            return False
         oldest = self.log.oldest()
         return None if oldest is None else oldest > record.ended
 
