@@ -55,6 +55,7 @@ if TYPE_CHECKING:
 # <boot id>_<pid>, or with _<session id> after it: a record the hook moved
 # aside when a new Claude got its pid. "<record>.tmp" is one being written.
 _RECORD_NAME = re.compile(r"[0-9a-f-]{32,36}_[0-9]+(?:_[0-9a-f-]{36})?")
+_TMP_STALE = 60  # a hook writes and renames in milliseconds
 KEEP = 7 * 86400  # how long closed sessions stay in the group
 # How close to a restart or logout a Claude has to have ended to count.
 #
@@ -270,7 +271,8 @@ class RestartState:
         gone: list[tuple[Path, Record, bool]] = []
         for path in sorted(self.paths.open_records.iterdir()):
             if not _RECORD_NAME.fullmatch(path.name):
-                continue  # a record being written
+                self._remove_stale_tmp(path, now)
+                continue
             record = Record.load(path)
             if record is None:
                 decided.append(path)
@@ -303,6 +305,18 @@ class RestartState:
             ):
                 group[record.session_id] = closed
             decided.append(path)
+
+    @staticmethod
+    def _remove_stale_tmp(path: Path, now: float) -> None:
+        """A record being written, left behind by a hook killed before its
+        rename once it's old."""
+        if path.suffix != ".tmp" or not _RECORD_NAME.fullmatch(path.stem):
+            return
+        try:
+            if now - path.stat().st_mtime > _TMP_STALE:
+                _remove(path)
+        except OSError:
+            pass
 
     def _boot_start(self, now: float) -> float:
         """When this boot began, read once per sort: it's worked out from the

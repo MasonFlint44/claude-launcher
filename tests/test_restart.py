@@ -2,6 +2,7 @@
 tests/linux/test_restart_journal.py has the rule with Linux's own events."""
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -166,9 +167,24 @@ def test_sessions_whose_log_is_gone_are_dropped(setup, claude_home):
 def test_bad_records_are_removed_and_ones_being_written_are_left(setup, claude_home):
     claude_home.paths.open_records.mkdir(parents=True)
     (claude_home.paths.open_records / f"{LAST_BOOT}_1").write_text("{not json")
-    (claude_home.paths.open_records / f"{LAST_BOOT}_2.tmp").write_text("{}")
+    writing = claude_home.paths.open_records / f"{LAST_BOOT}_2.tmp"
+    writing.write_text("{}")
+    os.utime(writing, (NOW - 5, NOW - 5))
     setup.make(RESTART).sort()
     assert records(claude_home) == [f"{LAST_BOOT}_2.tmp"]
+
+
+def test_a_record_left_half_written_is_removed_after_a_minute(setup, claude_home):
+    # A hook killed between writing a record and renaming it.
+    claude_home.paths.open_records.mkdir(parents=True)
+    left = claude_home.paths.open_records / f"{LAST_BOOT}_2.tmp"
+    left.write_text("{}")
+    other = claude_home.paths.open_records / "notes.tmp"  # not a record's: left alone
+    other.write_text("")
+    for path in (left, other):
+        os.utime(path, (NOW - 61, NOW - 61))
+    setup.make(RESTART).sort()
+    assert records(claude_home) == ["notes.tmp"]
 
 
 def test_a_record_moved_aside_is_read(setup):
