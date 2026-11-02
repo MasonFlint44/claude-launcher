@@ -286,7 +286,8 @@ def test_a_resumed_session_leaves_the_group_once_claude_starts(launch, claude_ho
     proj.mkdir()
     sid = claude_home.log(proj, conversation("open at the restart", proj))
     in_the_group(claude_home, sid)
-    t = launch()
+    hold = tmp_path / "hold"
+    t = launch(CLAUDE_HOLD=str(hold))
     t.wait_for("Select a project directory for Claude")
     t.send("ctrl-s")
     t.wait_for("open at the restart")  # its row: the projects view shows a ↻ line too
@@ -294,6 +295,10 @@ def test_a_resumed_session_leaves_the_group_once_claude_starts(launch, claude_ho
     t.wait_for("fake claude in")
     assert launch.calls() == [(str(proj), f"--resume {sid}")]
     assert left_the_group(claude_home, sid)
+    assert "Select a project directory" not in t.text()  # while Claude still runs
+    hold.touch()
+    t.wait_for("Select a project directory for Claude")
+    quit_with_esc(t)
 
 
 def test_a_session_claude_cant_resume_stays_in_the_group(launch, claude_home, tmp_path):

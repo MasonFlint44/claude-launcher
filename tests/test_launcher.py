@@ -117,10 +117,26 @@ def test_no_such_directory(tmp_path, capsys):
     assert capsys.readouterr().err.strip() == f"No such directory: {gone}"
 
 
-def test_started_once_claude_runs(monkeypatch, tmp_path):
-    monkeypatch.setattr(launcher, "_claude_command", lambda args: [sys.executable, "-c", "raise SystemExit(3)"])
+# A claude that waits, up to 5 s, for a file: exits 3 if it came, 4 if not.
+WAITS_FOR = """
+import os, sys, time
+end = time.time() + 5
+while not os.path.exists(sys.argv[1]) and time.time() < end:
+    time.sleep(0.02)
+sys.exit(3 if os.path.exists(sys.argv[1]) else 4)
+"""
+
+
+def test_started_while_claude_runs(monkeypatch, tmp_path):
+    release = tmp_path / "release"
+    monkeypatch.setattr(launcher, "_claude_command", lambda args: [sys.executable, "-c", WAITS_FOR, str(release)])
     calls = []
-    assert launcher._claude(RunsForReal(), str(tmp_path), [], lambda: calls.append(1)) == 3
+
+    def started():
+        calls.append(1)
+        release.touch()  # only a claude still running sees it
+
+    assert launcher._claude(RunsForReal(), str(tmp_path), [], started) == 3
     assert calls == [1]
 
 
@@ -209,6 +225,7 @@ def test_a_session_not_in_the_group_leaves_its_file_alone(loop, restart, tmp_pat
     FakePicker.result = Pick(str(tmp_path), "sid")
     loop(0, 0, launcher.QUIT)
     assert restart.dropped == []  # no lock taken, no rewrite
+    assert launcher._ungroup([]) is None
 
 
 def test_a_session_that_cant_start_stays_in_the_group(loop, restart, tmp_path):
@@ -353,32 +370,39 @@ def test_help_after_another_argument_goes_to_claude(monkeypatch, tmp_path):
 
 @pytest.fixture
 def resume(claude_home, monkeypatch, tmp_path):
-    """main() with `--resume <id>`, a session in its own directory, and claude as `command`."""
+    """main() with `--resume <id>`, a session in its own directory, and a
+    claude that runs until it's taken out of the group (WAITS_FOR), or `command`.
+    The file is touched just after the group's, not checked by claude itself:
+    on Windows an open file can't be replaced."""
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
     monkeypatch.setattr(launcher.signal, "signal", lambda *a: None)
     monkeypatch.setattr(launcher, "_theme", lambda run, action: None)
     proj = tmp_path / "proj"
     proj.mkdir()
+    release = tmp_path / "release"
+    real = launcher._ungroup
 
-    def run(command, sid=None):
+    def ungroup(keys):
+        drop = real(keys)
+
+        def started():
+            if drop:
+                drop()
+                release.touch()
+
+        return started
+
+    monkeypatch.setattr(launcher, "_ungroup", ungroup)
+
+    def run(sid=None, command=None):
         sid = sid or claude_home.log(proj, conversation("x", proj))
-        monkeypatch.setattr(launcher, "_claude_command", lambda args: command)
+        monkeypatch.setattr(
+            launcher, "_claude_command", lambda args: command or [sys.executable, "-c", WAITS_FOR, str(release)]
+        )
         return launcher.main(["--resume", sid])
 
     run.proj = proj
     return run
-
-
-# A claude that waits, up to 5 s, for the group to lose the session: exits 0
-# if it did while claude ran, 3 if not.
-WAITS_TO_LEAVE = """
-import json, sys, time
-path, key = sys.argv[1:]
-end = time.time() + 5
-while key in json.load(open(path)) and time.time() < end:
-    time.sleep(0.02)
-sys.exit(3 if key in json.load(open(path)) else 0)
-"""
 
 
 def group(claude_home, *sids):
@@ -395,7 +419,7 @@ def test_resume_takes_the_session_out_of_the_group_while_claude_runs(resume, cla
     sid = claude_home.log(resume.proj, conversation("x", resume.proj))
     other = claude_home.log(resume.proj, conversation("y", resume.proj))
     group(claude_home, sid, other)
-    assert resume([sys.executable, "-c", WAITS_TO_LEAVE, str(claude_home.paths.restored), sid], sid) == 0
+    assert resume(sid) == 3  # the group lost it while claude ran
     assert in_group(claude_home) == {other}
 
 
@@ -404,26 +428,27 @@ def test_resume_takes_out_the_session_it_continues(resume, claude_home):
     entries = [*conversation("older", resume.proj), {"type": "continued-in", "continuedInSessionId": newer}]
     older = claude_home.log(resume.proj, entries)
     group(claude_home, older)
-    assert resume([sys.executable, "-c", WAITS_TO_LEAVE, str(claude_home.paths.restored), older], newer) == 0
+    assert resume(newer) == 3
     assert in_group(claude_home) == set()
 
 
 def test_resume_that_cant_start_stays_in_the_group(resume, claude_home, tmp_path, capsys):
     sid = claude_home.log(resume.proj, conversation("x", resume.proj))
     group(claude_home, sid)
-    assert resume([str(tmp_path / "no-claude")], sid) == 1
+    assert resume(sid, [str(tmp_path / "no-claude")]) == 1
     assert in_group(claude_home) == {sid}
 
 
 def test_resume_outside_the_group_leaves_its_file_alone(resume, claude_home):
     group(claude_home)  # "{}", with no newline: a rewrite would add one
-    assert resume([sys.executable, "-c", ""]) == 0
+    assert resume(command=[sys.executable, "-c", ""]) == 0
     assert claude_home.paths.restored.read_text() == "{}"
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX signals")
 def test_resume_killed_by_a_signal_exits_as_a_shell_would(resume):
-    assert resume([sys.executable, "-c", "import os, signal; os.kill(os.getpid(), signal.SIGKILL)"]) == 128 + 9
+    kill = [sys.executable, "-c", "import os, signal; os.kill(os.getpid(), signal.SIGKILL)"]
+    assert resume(command=kill) == 128 + 9
 
 
 def test_resume_then_help_still_resumes(claude_home, capsys):
