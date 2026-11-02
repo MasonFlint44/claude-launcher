@@ -171,11 +171,17 @@ def test_an_end_without_a_start(config):
     assert (record.started, record.ended) == (150.0, 150.0)
 
 
-def test_another_sessions_record_is_replaced(config):
-    run(config, "start", session="11111111-2222-4333-8444-555555555555")
+def test_an_end_keeps_another_sessions_record_aside(config):
+    # No start was seen for this session: the record under the pid is
+    # another's, which left no end. It's moved aside, as a start does.
+    other = "11111111-2222-4333-8444-555555555555"
+    run(config, "start", session=other)
     run(config, "end", "other", at=150.0)
-    record = Record.load(records(config)[f"{BOOT}_4242"])
-    assert (record.session_id, record.started) == (SID, 150.0)
+    found = records(config)
+    assert set(found) == {f"{BOOT}_4242", f"{BOOT}_4242_{other}"}
+    record, kept = Record.load(found[f"{BOOT}_4242"]), Record.load(found[f"{BOOT}_4242_{other}"])
+    assert (record.session_id, record.started, record.ended) == (SID, 150.0, 150.0)
+    assert (kept.session_id, kept.started, kept.ended) == (other, 100.0, None)
 
 
 def test_a_new_claude_with_the_pid_keeps_the_old_record(config):

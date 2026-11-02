@@ -3,11 +3,12 @@
 claude-session-hook leaves a record in state/open/<boot id>_<pid> for each
 interactive Claude. An exit you chose (/exit, /clear, switching with /resume) deletes it;
 any other end (closing the tab, or the desktop closing every window) keeps it,
-with the time it ended. A new Claude that gets the pid of one whose record
-is still there moves that record to <boot id>_<pid>_<its session id>. So
-does the same Claude when it starts its next session (/clear, /resume)
-before ending this one, so a record moved aside whose own Claude still runs
-was an end it chose, and is deleted.
+with the time it ended. A start or an unchosen end that finds another
+session's record under its name moves it to <boot id>_<pid>_<its session
+id>: a new Claude got the pid of one whose record is still there, or the
+same Claude started its next session (/clear, /resume) before ending this
+one. So a record moved aside whose own Claude still runs was an end it
+chose, and is deleted.
 
 A record is one line of JSON (`Record.load` reads it and ignores keys it
 doesn't know): "session_id", "pid", "boot_id", "login_session" (the login

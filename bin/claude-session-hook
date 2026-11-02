@@ -8,7 +8,8 @@
 # ${CLAUDE_CONFIG_DIR:-~/.claude}/state/claude-launcher/open/<boot id>_<pid>
 # (pids start over each boot, so the boot keeps a new Claude from taking over
 # the record of one a restart closed). Start writes the record, first moving
-# another session's record under that name to <boot id>_<pid>_<its session id>.
+# another session's record under that name to <boot id>_<pid>_<its session id>
+# (as an end without a start does).
 # An end you chose (/exit, /clear, switching with /resume, Claude's /logout)
 # deletes it. Any other end, like closing the tab or the desktop
 # closing every window for a restart or logout, keeps it with the time it
@@ -105,23 +106,29 @@ old=
 mine=
 [[ $old == '{'*'}' && $old == *"\"session_id\":\"$session_id\""* ]] && mine=1
 
+# Another session's record under this pid: a Claude killed with no end (a
+# logout, say) whose pid came back before the launcher sorted it, or this
+# Claude's session before, when no start was seen for this one. Keep it
+# aside, under its session's ID, for the launcher to find.
+move_aside() {
+  if [[ $old =~ \"session_id\":\"($uuid)\" && ${BASH_REMATCH[1]} != "$session_id" ]]; then
+    mv -f "$record" "${record}_${BASH_REMATCH[1]}"
+  fi
+}
+
 case ${1:-} in
   start)
-    # Another session's record under this pid: a Claude killed with no end
-    # (a logout, say) whose pid came back before the launcher sorted it. Keep
-    # it aside, under its session's ID, for the launcher to find.
-    if [[ $old =~ \"session_id\":\"($uuid)\" && ${BASH_REMATCH[1]} != "$session_id" ]]; then
-      mv -f "$record" "${record}_${BASH_REMATCH[1]}"
-    fi
+    move_aside
     write "{$fields,\"started_at\":$EPOCHREALTIME}" ;;
   end)
     case $reason in
-      # Only this session's record: another's (no start was seen for this
-      # one) is left for the launcher to sort.
+      # Only this session's record: another's is left for the launcher to sort.
       prompt_input_exit|clear|resume|logout) [[ -n $mine ]] && rm -f "$record" ;;
       *)
-        # Another session's record: start afresh.
-        [[ -n $mine ]] || old="{$fields,\"started_at\":$EPOCHREALTIME}"
+        if [[ -z $mine ]]; then
+          move_aside
+          old="{$fields,\"started_at\":$EPOCHREALTIME}"
+        fi
         write "${old%\}},\"end_reason\":\"$reason\",\"ended_at\":$EPOCHREALTIME}" ;;
     esac ;;
 esac
