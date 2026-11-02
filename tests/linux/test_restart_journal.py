@@ -288,6 +288,61 @@ def test_a_boot_listed_without_its_last_entry_is_looked_up(setup):
     assert ["-b", boot_key(LAST_BOOT), "-n", "1"] in [c[:4] for c in journal.calls]
 
 
+def lookup_fails(journal):
+    """`journal` with LAST_BOOT listed but its last entry not to be had: its
+    `-n 1` lookup fails (timed out, say), and JSON's listing leaves it out."""
+
+    def run(args):
+        if args[0] == "--list-boots" and not journal.text_boots:
+            boots = json.loads(journal(args))
+            boots[0]["last_entry"] = None
+            return json.dumps(boots)
+        if args[:2] == ["-b", boot_key(LAST_BOOT)] and args[2:4] == ["-n", "1"]:
+            journal.calls.append(list(args))
+            return None
+        return journal(args)
+
+    return run
+
+
+@pytest.mark.parametrize("text_boots", [False, True], ids=["json", "before-251"])
+class TestLastEntryLookupFails:
+    """A boot the journal lists but whose last entry can't be looked up isn't
+    a boot the journal lost: its records wait for the next sort."""
+
+    def test_ended_waits(self, setup, claude_home, text_boots):
+        make, record, session, _ = setup
+        sid = session()
+        record(100, sid, ended=NOW - 900)  # long before the reboot: not a ↻ row once the journal answers
+        assert len(make(lookup_fails(FakeJournal(text_boots=text_boots))).sort()) == 0
+        assert records(claude_home) == ["100"]
+        assert len(make(FakeJournal(text_boots=text_boots)).sort()) == 0
+        assert records(claude_home) == []
+
+    def test_closed_by_the_reboot_once_it_can_be_asked(self, setup, claude_home, text_boots):
+        make, record, session, _ = setup
+        sid = session()
+        record(100, sid, ended=REBOOT + 0.8)
+        assert len(make(lookup_fails(FakeJournal(text_boots=text_boots))).sort()) == 0
+        assert make(FakeJournal(text_boots=text_boots)).sort().sessions == {sid: Closed(REBOOT, "restart")}
+
+    def test_a_boot_not_listed_is_still_lost(self, setup, text_boots):
+        make, record, session, _ = setup
+        sid = session()
+        record(100, sid, boot="33333333-3333-3333-3333-333333333333", ended=NOW - 900)
+        assert make(lookup_fails(FakeJournal(text_boots=text_boots))).sort().sessions == {
+            sid: Closed(NOW - 900, "restart")
+        }
+
+    def test_asked_once_per_sort(self, setup, text_boots):
+        make, record, session, _ = setup
+        journal = FakeJournal(text_boots=text_boots)
+        for pid in (100, 101):
+            record(pid, session(), ended=NOW - 900)
+        make(lookup_fails(journal)).sort()
+        assert [c[:4] for c in journal.calls].count(["-b", boot_key(LAST_BOOT), "-n", "1"]) == 1
+
+
 class TestLogout:
     LOGOUT = NOW - 120  # the desktop session logged out two minutes ago
 
