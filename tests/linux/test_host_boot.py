@@ -86,3 +86,23 @@ def test_start_ticks_tell_a_claude_that_got_the_pid_since(tmp_path):
     a_claude(tmp_path, 700, start_ticks=100 * HZ)
     assert host.claude_running(700, started=NOW, start_ticks=100 * HZ)
     assert not host.claude_running(700, started=NOW, start_ticks=100 * HZ - 1)  # exact, no margin
+
+
+def test_a_claude_whose_start_cant_be_read_is_taken_as_the_records(tmp_path, monkeypatch):
+    # Taken as the record's, so the record waits instead of being sorted while its Claude may still run.
+    import time
+
+    host = fake_proc(tmp_path, release="6.8.0-31-generic")
+    monkeypatch.setattr(time, "time", lambda: NOW)
+    a_claude(tmp_path, 700, start_ticks=100 * HZ)
+    (tmp_path / "700" / "stat").unlink()
+    assert host.claude_running(700, started=NOW - 5000 + 50, start_ticks=100 * HZ)
+    assert host.claude_running(700, started=NOW - 5000 + 50)  # an older hook's record
+
+
+def test_without_the_uptime_an_older_records_claude_is_its_own(tmp_path):
+    host = fake_proc(tmp_path, release="6.8.0-31-generic")
+    a_claude(tmp_path, 700, start_ticks=100 * HZ)
+    (tmp_path / "uptime").unlink()
+    assert host.claude_running(700, started=NOW - 5000 + 50)
+    assert host.claude_running(700, started=None)

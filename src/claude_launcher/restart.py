@@ -8,11 +8,13 @@ is still there moves that record to <boot id>_<pid>_<its session id>.
 
 A record is one line of JSON (`Record.load` reads it and ignores keys it
 doesn't know): "session_id", "pid", "boot_id", "login_session" (the login
-session's ID, or ""), "started_at" (a Unix time), and once it ended
-"end_reason" and "ended_at". Optionally "start_ticks", when the process
-started in the platform's own units (Linux: field 22 of /proc/<pid>/stat),
-which the host matches exactly to tell its Claude from one that got the pid
-since; without it, the host compares "started_at" with a margin.
+session's ID, or ""; on Linux the audit session, which is logind's for an
+SSH login but on a desktop with systemd 256 or later the user manager's),
+"started_at" (a Unix time), and once it ended "end_reason" and "ended_at".
+Optionally "start_ticks", when the process started in the platform's own
+units (Linux: field 22 of /proc/<pid>/stat), which the host matches exactly
+to tell its Claude from one that got the pid since; without it, the host
+compares "started_at" with a margin.
 
 `sort()` runs each time the picker opens and decides, for each record whose
 Claude has gone, whether a restart or a logout closed it. Both are an event

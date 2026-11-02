@@ -78,7 +78,10 @@ if [[ ${release,,} == *microsoft* ]] && read -r init 2>/dev/null < "$proc/1/stat
     printf -v boot_id '%s%012x' "${boot_id:0:20}" "${init[19]}"
   fi
 fi
-# The login session Claude runs in: for an SSH session, its end closes Claude.
+# The login session Claude runs in (its audit session ID). For an SSH login
+# that's logind's session, whose end closes Claude. On a desktop with systemd
+# 256 or later it's the user manager's session instead, so desktop logouts are
+# found by graphical-session.target stopping (platforms/linux/journal.py).
 login_session=
 read -r login_session < "/proc/$pid/sessionid" 2>/dev/null
 [[ $login_session == 4294967295 ]] && login_session=  # none
