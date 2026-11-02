@@ -234,6 +234,17 @@ def test_too_old_and_nothing_else(tmp_path, pythons, monkeypatch):
     assert done.returncode == windows_setup.TOO_OLD and "needs Python 99.0 or newer (found" in done.stderr
 
 
+def test_a_python_in_a_directory_cmd_would_trip_on(probe, tmp_path_factory):
+    # The search's lines expand the path when cmd reads them: the
+    # %a:\WindowsApps\=% test and the parenthesised set lines must keep
+    # & ( ) % ! in it as they are.
+    root = tmp_path_factory.mktemp("hostile") / "A&B (x) 100% !y!"
+    real, store = venv(root / "real"), venv(root / "WindowsApps")
+    assert ran(run_probe(probe, real), real)
+    # A WindowsApps one first and no py: set aside, then run after all.
+    assert ran(run_probe(probe, store, real), store)
+
+
 def drives():
     import ctypes
 
