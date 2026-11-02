@@ -11,6 +11,7 @@ import pytest
 
 from claude_launcher import launcher, platforms
 from claude_launcher.picker import FzfTooOld, Pick
+from conftest import conversation
 
 
 class FakePicker:
@@ -119,6 +120,14 @@ def test_started_once_claude_runs(monkeypatch, tmp_path):
     calls = []
     assert launcher._claude(RunsForReal(), str(tmp_path), [], lambda: calls.append(1)) == 3
     assert calls == [1]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX signals")
+def test_claude_killed_by_a_signal_exits_as_a_shell_would(monkeypatch, tmp_path):
+    kill = [sys.executable, "-c", "import os, signal; os.kill(os.getpid(), signal.SIGKILL)"]
+    monkeypatch.setattr(launcher, "_claude_command", lambda args: kill)
+    assert launcher._claude(RunsForReal(), str(tmp_path), []) == 128 + 9
+    assert launcher._claude(RunsForReal(), str(tmp_path), [], lambda: None) == 128 + 9
 
 
 def test_not_started_when_claude_cant_start(monkeypatch, tmp_path):
@@ -338,6 +347,29 @@ def test_help_after_another_argument_goes_to_claude(monkeypatch, tmp_path):
     assert launcher.main(["--model", "opus", "--help"]) == 0
     assert launcher.main(["--append-system-prompt", "--version"]) == 0
     assert passed == [["--model", "opus", "--help"], ["--append-system-prompt", "--version"]]
+
+
+@pytest.fixture
+def resume(claude_home, monkeypatch, tmp_path):
+    """main() with `--resume <id>`, a session in its own directory, and claude as `command`."""
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    monkeypatch.setattr(launcher.signal, "signal", lambda *a: None)
+    monkeypatch.setattr(launcher, "_theme", lambda run, action: None)
+    proj = tmp_path / "proj"
+    proj.mkdir()
+
+    def run(command, sid=None):
+        sid = sid or claude_home.log(proj, conversation("x", proj))
+        monkeypatch.setattr(launcher, "_claude_command", lambda args: command)
+        return launcher.main(["--resume", sid])
+
+    run.proj = proj
+    return run
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX signals")
+def test_resume_killed_by_a_signal_exits_as_a_shell_would(resume):
+    assert resume([sys.executable, "-c", "import os, signal; os.kill(os.getpid(), signal.SIGKILL)"]) == 128 + 9
 
 
 def test_resume_then_help_still_resumes(claude_home, capsys):
