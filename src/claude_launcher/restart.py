@@ -5,10 +5,15 @@ interactive Claude. An exit you chose (/exit, /clear, switching with /resume) de
 any other end (closing the tab, or the desktop closing every window) keeps it,
 with the time it ended. A start or an unchosen end that finds another
 session's record under its name moves it to <boot id>_<pid>_<its session
-id>: a new Claude got the pid of one whose record is still there, or the
-same Claude started its next session (/clear, /resume) before ending this
-one. So a record moved aside whose own Claude still runs was an end it
-chose, and is deleted.
+id>: a new Claude got the pid of one whose record is still there. Unless
+it's the same Claude's: its session before, ended with /clear or /resume,
+whose end hook Claude killed (it waits only a moment for it before starting
+the next session). Then the hook deletes it, if it can tell: the bash hook
+by start_ticks, Windows' by when the process began. Here, a record moved
+aside whose own Claude still runs, or (with start_ticks) whose Claude has a
+later record under the same name, was an end it chose, and is deleted: one
+an older hook moved aside, or on Windows one the hook couldn't tell (that
+Claude's process couldn't be read), while that Claude runs.
 
 A record is one line of JSON (`Record.load` reads it and ignores keys it
 doesn't know): "session_id", "pid", "boot_id", "login_session" (the login
@@ -138,6 +143,11 @@ class Group:
 def normalize_boot_id(boot_id: str) -> str:
     """Boot IDs without dashes, in lower case: Linux's /proc has dashes, journalctl doesn't."""
     return boot_id.replace("-", "").lower()
+
+
+def _process_name(path: Path) -> str:
+    """<boot id>_<pid>, from a record's name, moved aside or not."""
+    return "_".join(path.name.split("_")[:2])
 
 
 def closes(event: Event, ended: float) -> bool:
@@ -293,6 +303,7 @@ class RestartState:
         # group from an older record of it read later.
         running: set[str] = set()
         gone: list[tuple[Path, Record, bool]] = []
+        loaded: list[tuple[Path, Record]] = []
         for path in sorted(self.paths.open_records.iterdir()):
             if not _RECORD_NAME.fullmatch(path.name):
                 self._remove_stale_tmp(path, now)
@@ -300,6 +311,28 @@ class RestartState:
             record = Record.load(path)
             if record is None:
                 decided.append((path, None))
+                continue
+            loaded.append((path, record))
+        # The latest start among each Claude's records, where the hook wrote
+        # start_ticks: the same <boot id>_<pid> and the same ticks are one
+        # process.
+        latest: dict[tuple[str, int], float] = {}
+        for path, record in loaded:
+            if record.start_ticks is not None:
+                key = (_process_name(path), record.start_ticks)
+                latest[key] = max(latest.get(key, record.started), record.started)
+        for path, record in loaded:
+            if (
+                path.name.count("_") == 2
+                and record.ended is None
+                and record.start_ticks is not None
+                and latest[(_process_name(path), record.start_ticks)] > record.started
+            ):
+                # Moved aside, and its Claude went on to another session: an
+                # end it chose (/clear, /resume), whose hook it killed before
+                # it deleted this. An older hook's doing: the hook now
+                # deletes it itself.
+                decided.append((path, record))
                 continue
             same_boot = record.boot_id == this_boot
             if (
