@@ -16,7 +16,8 @@ earlier: the stop itself leaves no trace (WSL kills everything, the hook
 included), and the record knows only its own start. So its ↻ day can be
 later than the stop, and it stays in the group up to that much longer
 than KEEP; nothing is lost. A Windows restart or logoff in between is
-still found at its own time.
+still found at its own time, while the System log reaches back that far
+(boot_lost: as on native Windows).
 """
 
 from __future__ import annotations
@@ -49,3 +50,9 @@ class WslEvents:
             self._stopped = self.host.boot_start(self.now())
         stopped = self._stopped
         return [*(found or []), Event(stopped, stopped, "wsl-stop")]
+
+    def boot_lost(self, record) -> bool | None:
+        # A tab closed by hand has an end; one WSL stopping killed has none.
+        # So a lost log matters only for Windows' restarts and logoffs. As in
+        # events(), Windows out of reach (no interop) isn't a reason to wait.
+        return bool(self.windows.boot_lost(record))

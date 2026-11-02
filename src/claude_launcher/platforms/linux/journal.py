@@ -105,6 +105,11 @@ class Journal:
     def available(self) -> bool:
         return self._boots() is not None
 
+    def lists(self, boot_id: str) -> bool | None:
+        """Whether the journal has boot `boot_id`, or None if it can't be read."""
+        boots = self._boots()
+        return None if boots is None else normalize_boot_id(boot_id) in boots
+
     def last_entry(self, boot_id: str) -> float | None:
         """When boot `boot_id` last logged anything, or None if the journal
         doesn't have it. Raises LookupFailed if the journal lists it but
@@ -249,10 +254,9 @@ class JournalEvents:
       journal can be read), a restart starts at the boot's last journal entry.
       With only your own journal, that's often your desktop session ending, so
       a logout followed later by a restart may be counted as the restart.
-    - A record from a boot the journal no longer has (a journal kept only in
-      memory, vacuumed, or cleared): a restart when its Claude ended, so it's
-      offered back even if you closed it yourself. One with no end gets this
-      boot's start (restart.py).
+    - A record from a boot the journal no longer lists (a journal kept only
+      in memory, vacuumed, or cleared): boot_lost() says so, and restart.py
+      works out when that boot ended from its records.
     """
 
     def __init__(self, journal: Journal, user: Callable[[], str]):
@@ -279,9 +283,8 @@ class JournalEvents:
             restart = self.journal.restart_time(record.boot_id)
             if restart is not None:
                 events.append(Event(restart, self.journal.last_entry(record.boot_id) or restart, "restart"))
-            elif record.ended is not None:
-                # The journal doesn't list that boot any more (kept only in memory,
-                # vacuumed, or cleared), so the restart may have been when
-                # this Claude ended. A false ↻ row is cheap; a missed session isn't.
-                events.append(Event(record.ended, record.ended, "restart"))
         return events
+
+    def boot_lost(self, record) -> bool | None:
+        listed = self.journal.lists(record.boot_id)
+        return None if listed is None else not listed

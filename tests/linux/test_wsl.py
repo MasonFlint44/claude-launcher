@@ -63,12 +63,15 @@ def test_wsl_is_picked_inside_wsl(monkeypatch):
 
 
 class FakeWindowsEvents:
-    def __init__(self, found):
-        self.found, self.asked = found, []
+    def __init__(self, found, lost=False):
+        self.found, self.lost, self.asked = found, lost, []
 
     def events(self, record, same_boot):
         self.asked.append(same_boot)
         return None if self.found is None else list(self.found)
+
+    def boot_lost(self, record):
+        return self.lost
 
 
 def source(found):
@@ -91,6 +94,14 @@ def test_another_boot_adds_wsl_stopping():
         WINDOWS_RESTART,
         Event(WSL_STARTED, WSL_STARTED, "wsl-stop"),
     ]
+
+
+def test_whether_windows_log_is_lost_is_windows_to_say():
+    host = FakeHost(boot=THIS_BOOT, started=lambda now: WSL_STARTED)
+    assert WslEvents(host, FakeWindowsEvents([], lost=True), now=lambda: NOW).boot_lost(None) is True
+    assert WslEvents(host, FakeWindowsEvents([], lost=False), now=lambda: NOW).boot_lost(None) is False
+    # Without interop, as for its events: not a reason to wait.
+    assert WslEvents(host, FakeWindowsEvents(None, lost=None), now=lambda: NOW).boot_lost(None) is False
 
 
 def test_without_interop_wsl_stopping_still_counts():

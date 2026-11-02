@@ -15,7 +15,7 @@ from claude_launcher.platforms.linux.journal import (
     Journal,
     JournalEvents,
 )
-from claude_launcher.restart import KEEP, Closed, RestartState
+from claude_launcher.restart import KEEP, Closed, Record, RestartState
 from conftest import NOW, FakeHost, conversation, write_record
 
 THIS_BOOT = "11111111-1111-1111-1111-111111111111"
@@ -229,13 +229,24 @@ class TestRestart:
         assert make().sort().sessions == {sid: Closed(BOOT_STARTED, "restart")}
 
     def test_boot_not_in_the_journal(self, setup, claude_home):
-        # A journal kept only in memory, vacuumed or cleared: offered back,
-        # since it may have ended at that boot's restart.
+        # A journal kept only in memory, vacuumed or cleared: the sessions
+        # that ended at that boot's last moment are offered back, and a tab
+        # closed by hand well before them isn't.
         make, record, session, _ = setup
-        sid = session()
-        record(100, sid, boot="33333333-3333-3333-3333-333333333333", ended=NOW - 900)
-        assert make().sort().sessions == {sid: Closed(NOW - 900, "restart")}
+        lost = "33333333-3333-3333-3333-333333333333"
+        by_hand, a, b = session(), session(), session()
+        record(100, by_hand, boot=lost, ended=NOW - 5000)
+        record(101, a, boot=lost, ended=NOW - 903)
+        record(102, b, boot=lost, ended=NOW - 900)
+        assert make().sort().sessions == {a: Closed(NOW - 900, "restart"), b: Closed(NOW - 900, "restart")}
         assert records(claude_home) == []
+
+    def test_whether_a_boot_is_lost(self, setup):
+        events = JournalEvents(Journal(FakeJournal()), lambda: USER)
+        rec = lambda boot: Record("s", 1, boot_key(boot), "", NOW - 3600, NOW - 900)  # noqa: E731
+        assert events.boot_lost(rec(LAST_BOOT)) is False
+        assert events.boot_lost(rec("33333333-3333-3333-3333-333333333333")) is True
+        assert JournalEvents(Journal(FakeJournal(readable=False)), lambda: USER).boot_lost(rec(LAST_BOOT)) is None
 
 
 class TestSystemdBefore251:
@@ -263,7 +274,10 @@ class TestSystemdBefore251:
         assert make(journal).sort().sessions == {sid: Closed(logout, "logout")}
 
     def test_boot_not_in_the_journal(self, setup):
-        assert Journal(FakeJournal(text_boots=True)).last_entry("33333333-3333-3333-3333-333333333333") is None
+        journal = Journal(FakeJournal(text_boots=True))
+        assert journal.last_entry("33333333-3333-3333-3333-333333333333") is None
+        assert journal.lists("33333333-3333-3333-3333-333333333333") is False
+        assert journal.lists(LAST_BOOT) is True
 
 
 def test_a_boot_listed_without_its_last_entry_is_looked_up(setup):
@@ -493,9 +507,17 @@ class TestJournalUnreadable:
 
     def test_old_undecided_records_are_dropped(self, setup, claude_home):
         make, record, session, _ = setup
-        record(100, session(), started=NOW - KEEP - 10, ended=NOW - KEEP)
+        record(100, session(), started=NOW - KEEP - 10, ended=NOW - KEEP - 1)
         make(FakeJournal(readable=False)).sort()
         assert records(claude_home) == []
+
+    def test_a_long_running_claudes_record_waits_from_its_end(self, setup, claude_home):
+        # Started over KEEP ago, ended at the restart: it waits, so it still
+        # counts toward when its boot ended once the journal answers.
+        make, record, session, _ = setup
+        record(100, session(), started=NOW - KEEP - 10, ended=NOW - 900)
+        make(FakeJournal(readable=False)).sort()
+        assert records(claude_home) == ["100"]
 
 
 class TestGroup:

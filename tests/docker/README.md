@@ -5,7 +5,7 @@ The test suite runs on this machine's Ubuntu, Python, fzf and terminal. These ru
 ```sh
 ./run.sh distro [IMAGE...]      # install.sh and the test suite, on each distro
 ./run.sh terminals [NAME...]    # every terminal, live on a virtual display
-./run.sh systemd [IMAGE...]     # logout, restart and power-off detection under real systemd
+./run.sh systemd [IMAGE...]     # logout, restart and power-off detection under real systemd, and a lost journal
 ```
 
 Logs go to `.work/` (gitignored). CI (`.github/workflows/test.yml`) runs all three.
@@ -38,8 +38,10 @@ Colors are read off screenshots and compared with `themes/claude-dark`. A failed
 
 Then it reboots the container, leaves another Claude open, and powers the container off and starts it again. After each logout, the reboot and the power-off, it checks the ↻ group (a power-off counts as a restart, from logind's "System is powering down.", the same message ID as "System is rebooting."), with and without the systemd-journal group. Each container start is a new boot: `systemd/boot.sh` mounts a fresh boot ID over the kernel's, as systemd-nspawn does.
 
+Last, it switches journald to a journal kept only in memory (`Storage=volatile`, in `/run`, which each container start empties), leaves a Claude open, adds one closed by hand ten minutes earlier, and reboots. The journal then no longer lists that boot, and only the Claude left open should be back, at the time it ended. That's with the systemd-journal group: in memory, journald keeps one file that only its groups can read, so without one there's no journal to ask, and it checks the records wait.
+
 It can't test what a real desktop closes first, or a power cut. On systemd 257 and later, logind in a container doesn't name sessions after their audit IDs, so the SSH check is skipped there.
 
-It needs `--cgroupns=private --cap-add SYS_ADMIN --security-opt apparmor=unconfined --tmpfs /run --tmpfs /run/lock`, not `--privileged`; override with `RUN_OPTS=`. `KEEP=1` leaves the containers to look at. A run takes about 4 minutes, with the distros in parallel.
+It needs `--cgroupns=private --cap-add SYS_ADMIN --security-opt apparmor=unconfined --tmpfs /run --tmpfs /run/lock`, not `--privileged`; override with `RUN_OPTS=`. `KEEP=1` leaves the containers to look at. A run takes about 5 minutes, with the distros in parallel.
 
 Images stay after a run. Remove them with `docker images 'claude-launcher-*' -q | xargs docker rmi`.

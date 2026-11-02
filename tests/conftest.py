@@ -141,12 +141,16 @@ class FakeHost:
 @dataclass
 class FakeEvents:
     """A platform EventSource: the same events for every record, or None for
-    a system that can't be asked."""
+    a system that can't be asked; `lost` is boot_lost's answer for every record."""
 
     found: list | None = None
+    lost: bool | None = False
 
     def events(self, record, same_boot):
         return None if self.found is None else list(self.found)
+
+    def boot_lost(self, record):
+        return self.lost
 
 
 class FakePlatform:

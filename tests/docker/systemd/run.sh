@@ -3,7 +3,8 @@
 # Each container boots systemd as PID 1, check.py logs sessions out and checks
 # the ↻ group, the container reboots (a new boot ID, see boot.sh), and
 # check.py checks the restart; then the same for powering off, which counts
-# as a restart too. usage: run.sh [IMAGE...] (all in parallel)
+# as a restart too, and for a journal kept only in memory.
+# usage: run.sh [IMAGE...] (all in parallel)
 # KEEP=1 leaves the containers (claude-launcher-systemd-<distro>) to look at.
 set -euo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -52,6 +53,11 @@ one() {
   docker wait "$name" >/dev/null
   docker start "$name" >/dev/null
   booted "$name" && { docker exec "$name" python3 /check/check.py poweroff-after || status=1; } || status=1
+  docker exec "$name" python3 /check/check.py volatile-before || status=1
+  docker exec "$name" systemctl reboot || true
+  docker wait "$name" >/dev/null
+  docker start "$name" >/dev/null
+  booted "$name" && { docker exec "$name" python3 /check/check.py volatile-after || status=1; } || status=1
   [[ ${KEEP:-} == 1 ]] || docker rm -f "$name" >/dev/null
   return $status
 }

@@ -78,6 +78,14 @@ class EventSource(Protocol):
         the system can't be asked yet; the record is then decided later."""
         ...
 
+    def boot_lost(self, record: Record) -> bool | None:
+        """Whether the system has lost the end of the record's boot, an
+        earlier one (Linux: the journal no longer lists it; Windows: the
+        System log no longer reaches back to the record's end), so events()
+        can't say whether a restart closed it. restart.py then works out when
+        the boot ended from its records. None if the system can't be asked yet."""
+        ...
+
 
 class Setup(Protocol):
     """What the installer (install.py) sets up for this platform beyond fzf

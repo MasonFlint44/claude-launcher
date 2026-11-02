@@ -15,6 +15,10 @@ WSL, which runs the same wevtutil.exe through interop.
   the 42. Hibernating on its own logs no 1074, and Claude keeps running.
 - Logoff: Winlogon's logoff notification (7002) for this user. Windows logs
   one at a restart too; the restart wins, as on Linux.
+- A record that ended before the log's oldest event (the log is full and
+  dropped it, or was cleared): boot_lost() says so, and restart.py works out
+  when that boot ended from its records. Fast Startup keeps the boot ID
+  across shutdowns, so there only the last of them can be worked out.
 
 A boot runs from one Kernel-General 12 ("the operating system started") to
 the next.
@@ -43,8 +47,9 @@ _FAST_STARTUP_GAP = 120
 # How far before a Claude started to look: a restart can't have closed it
 # before then, but its boot's last events can come just before a record.
 _BEFORE = 60
-# The first query reaches back this far, so one query serves every record:
-# a record waits at most restart.KEEP (7 days) to be decided.
+# The first query reaches back this far, so one query usually serves every
+# record: a record waits at most restart.KEEP (7 days) from its end to be
+# decided. One that started earlier (a long-running Claude) asks again.
 _LOOKBACK = 8 * 86400
 # `shutdown /t` schedules a restart for up to 10 years later, and
 # `shutdown /a` calls one off; either leaves a 1074 long before the boot
@@ -157,6 +162,16 @@ class EventLog:
         found = self._since[1]
         return None if found is None else [e for e in found if e.at >= t]
 
+    def oldest(self) -> float | None:
+        """When the log's oldest event of any kind was logged, or None if it
+        can't be read. The log drops its oldest events once it's full, and
+        clearing it leaves only "the log was cleared", so it's never empty.
+        The first in the log's order, which is what the log drops first, though
+        a clock set wrong and then right can give it a later time: then a
+        record reads as lost, and the stand-in adds at most a ↻ row to dismiss."""
+        found = self.query("*", count=1)
+        return found[0].at if found else None
+
     def last_before(self, t: float) -> LogEvent | None:
         """The last event of any kind before `t`: where a boot that crashed ended."""
         found = self.query(f"*[System[TimeCreated[@SystemTime<'{format_time(t)}']]]", newest_first=True, count=1)
@@ -230,6 +245,13 @@ class WindowsEvents:
         if not same_boot and next_boot is not None:
             events.append(self._restart(in_boot, next_boot, {begun for begun, _ in fast}))
         return events
+
+    def boot_lost(self, record) -> bool | None:
+        # Only the log's reach matters: while it goes back to the record's
+        # end, the restart that followed is in it too. Kinds the picker
+        # doesn't ask for count, so a quiet week isn't taken for a lost log.
+        oldest = self.log.oldest()
+        return None if oldest is None else oldest > record.ended
 
     def _restart(self, in_boot: list[LogEvent], next_boot: float, fast: set[float]) -> Event:
         ended = [e.at for e in in_boot if (e.provider, e.id) == (KERNEL, SHUTTING_DOWN)]

@@ -45,6 +45,8 @@ In any other terminal tab, `claude-launcher` switches that tab to Claude Dark wh
 
 A session that ended in that span, or up to 30 seconds before or 10 seconds after it, was closed by it. So was one that never recorded an end. Anything else, like a tab you closed yourself, isn't listed.
 
+Once the System log is full it drops its oldest events (it usually holds weeks of them), and clearing it drops them all. For a session that ended before the log's oldest event, the last session to end in that boot stands in for its restart: that one and any that ended up to 30 seconds before it are listed. If none was open at the restart, the last tab you closed yourself is listed, and Ctrl-X dismisses it.
+
 ## Updating
 
 ```powershell

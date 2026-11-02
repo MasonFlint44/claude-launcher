@@ -28,6 +28,12 @@ own reasons (WSL stopping) after both. One that never recorded an end (the
 power was cut, or the hook never got to run) was closed by the first event
 after it started.
 
+When the system has lost an earlier boot's end (the event source's
+boot_lost: a journal kept only in memory, or a full or cleared event log),
+the latest end among that boot's records stands in for its restart, under
+the same margins. A restart closes every open Claude at once, so those ends
+bunch together; a tab closed by hand well before them wasn't closed by it.
+
 Those join the group in restored.json, {session id: {"at": time, "why":
 reason key}}, for KEEP seconds, or until resumed or dismissed. Any other
 record is deleted once its Claude has gone, and only once the group is
@@ -298,13 +304,23 @@ class RestartState:
                 gone.append((path, record, same_boot))
         for session_id in running:
             group.pop(session_id, None)  # it's open again
+        # The latest end in each earlier boot, from every record of it (one
+        # whose session is open again, or whose log is gone, too): the nearest
+        # thing to when that boot ended, for a boot the system has lost.
+        boot_ends: dict[str, float] = {}
+        for _, record, same_boot in gone:
+            if not same_boot and record.ended is not None:
+                boot_ends[record.boot_id] = max(boot_ends.get(record.boot_id, record.ended), record.ended)
         for path, record, same_boot in gone:
             if record.session_id in running:
                 decided.append((path, record))
                 continue
-            closed = self._closed_by(record, same_boot, now)
+            closed = self._closed_by(record, same_boot, now, boot_ends.get(record.boot_id))
             if closed is _UNDECIDED:
-                if now - record.started > KEEP:
+                # Past KEEP from its end it couldn't join the group anyway.
+                # From its start, a long-running Claude's record would go
+                # before its boot is decided, and with it the latest end there.
+                if now - (record.started if record.ended is None else record.ended) > KEEP:
                     decided.append((path, record))
                 continue  # decide once the system can be asked
             if (
@@ -336,9 +352,12 @@ class RestartState:
             self._boot_started = self.host.boot_start(now)
         return self._boot_started
 
-    def _closed_by(self, record: Record, same_boot: bool, now: float) -> Closed | None | object:
+    def _closed_by(
+        self, record: Record, same_boot: bool, now: float, boot_end: float | None = None
+    ) -> Closed | None | object:
         """The restart or logout that closed the record's Claude, None if
-        neither did, or _UNDECIDED if the system can't say yet."""
+        neither did, or _UNDECIDED if the system can't say yet. `boot_end`:
+        the latest end among the records of the record's boot."""
         events = self.events.events(record, same_boot)
         if events is None:  # the system can't be asked
             if record.ended is None and not same_boot:
@@ -352,6 +371,18 @@ class RestartState:
             if not same_boot:  # it was open when that boot ended, though the system no longer says when
                 return Closed(self._boot_start(now), "restart")
             return None  # it crashed, or was killed
+        if not same_boot:
+            lost = self.events.boot_lost(record)
+            if lost is None:
+                return _UNDECIDED
+            if lost and boot_end is not None:
+                # A restart closes every Claude still open within seconds, so
+                # their ends bunch at the boot's last moment, and the latest
+                # end stands in for the restart. If none was open then, the
+                # last tab closed by hand comes back: a ↻ row to dismiss.
+                from .platforms import Event  # here: platforms imports this module
+
+                events = [*events, Event(boot_end, boot_end, "restart")]
         matches = [e for e in events if closes(e, record.ended)]
         if not matches:
             return None
