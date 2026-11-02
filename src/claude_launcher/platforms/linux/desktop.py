@@ -169,7 +169,7 @@ def _icon_targets(ctx: Context) -> list[Path]:
 
 def _png_size(path: Path) -> int | None:
     head = path.read_bytes()[:24]
-    if head[:8] != b"\x89PNG\r\n\x1a\n":
+    if len(head) < 24 or head[:8] != b"\x89PNG\r\n\x1a\n":  # short: a cut-off download
         return None
     width, height = struct.unpack(">II", head[16:24])
     return width if width == height else None

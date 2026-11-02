@@ -137,14 +137,20 @@ def test_last_times_terminal_gone_stops_before_anything(tmp_path, run):
     assert not (home / ".claude").exists() and not (home / ".config").exists()
 
 
-@pytest.mark.parametrize(("name", "error"), [("x.jpg", "svg or .png"), ("wide.png", "square")])
-def test_a_bad_icon_stops_before_anything(tmp_path, name, error, run):
+WIDE_PNG = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR" + (64).to_bytes(4, "big") + (32).to_bytes(4, "big")
+
+
+@pytest.mark.parametrize(
+    ("name", "content", "error"),
+    [("x.jpg", WIDE_PNG, "svg or .png"), ("wide.png", WIDE_PNG, "square"), ("short.png", WIDE_PNG[:18], "square")],
+)
+def test_a_bad_icon_stops_before_anything(tmp_path, name, content, error, run):
     home = tmp_path / "home"
     icon = tmp_path / name
-    icon.write_bytes(b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR" + (64).to_bytes(4, "big") + (32).to_bytes(4, "big"))
+    icon.write_bytes(content)
     done = run(home, "--icon", str(icon))
     assert done.returncode != 0
-    assert error in done.stderr
+    assert error in done.stderr and "Traceback" not in done.stderr
     nothing_written(home)
 
 

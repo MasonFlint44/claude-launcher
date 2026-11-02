@@ -228,6 +228,7 @@ def test_check_lets_a_new_terminal_replace_last_times(home, tmp_path, monkeypatc
         ("x.jpg", b"", "svg or .png"),
         ("missing.svg", None, "svg or .png"),
         ("wide.png", b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR" + (64).to_bytes(4, "big") + (32).to_bytes(4, "big"), "square"),
+        ("short.png", b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0", "square"),
     ],
 )
 def test_check_turns_down_an_icon(home, tmp_path, name, content, error):
