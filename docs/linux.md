@@ -42,7 +42,7 @@ The installer picks the first of these that's installed, unless you give `--term
 | Guake | A new tab in Guake with the picker in it, and Guake shown (started first if it isn't running). Quitting the picker leaves you at a shell in that tab. | Guake's remote control |
 | any other | Your desktop's default terminal, with the picker in its first window. | the desktop's default-terminal setting |
 
-In each, quitting the picker closes its tab (except in Guake), and if the launcher fails, the tab drops to a shell instead.
+In each, quitting the picker closes its tab (except in Guake), and if the launcher fails, the tab drops to a shell instead. The launcher runs in your login shell (bash, zsh or fish; any other gets bash), started as an interactive shell, so Claude has the PATH your `~/.bashrc` or `~/.zshrc` sets up, as in any terminal tab. Re-run the installer after changing your shell.
 
 Profiles are the only change made to a terminal's own settings (Ptyxis's also gets a Claude Dark palette, since Ptyxis ignores the background the launcher sets), and `--uninstall` (or switching `--terminal` away) takes them out. A Ghostty Flatpak can't run your `claude` from its sandbox; use Ghostty from your distro or a snap. Under GNOME on Wayland, Guake's own show/hide hotkey doesn't work; set a GNOME keyboard shortcut that runs `guake -t` instead.
 

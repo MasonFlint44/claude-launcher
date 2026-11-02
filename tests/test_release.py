@@ -36,7 +36,7 @@ def notes(version, changelog=None):
 def test_this_versions_notes():
     done = notes(__version__)
     assert done.returncode == 0, done.stderr
-    assert done.stdout.strip() and "## " not in done.stdout.split("\n")[0]
+    assert done.stdout.strip() and not done.stdout.startswith("## ")  # no version heading
 
 
 @posix_only

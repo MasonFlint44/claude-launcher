@@ -2,6 +2,12 @@
 
 What changed in each release of claude-launcher. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/). To update to the latest release, see Updating in [Linux](docs/linux.md#updating), [Windows](docs/windows.md#updating) or [WSL](docs/wsl.md#updating).
 
+## [0.1.1] - 2026-11-02
+
+### Fixed
+
+- **Claude gets your terminal's PATH again.** The desktop launcher and WSL's Windows Terminal profile now start the launcher in your own login shell (bash, zsh or fish; any other gets bash) as an interactive shell, the way a terminal tab starts. Before, a shell that wasn't interactive skipped what tools like nvm add to `~/.bashrc` or `~/.zshrc`, so Claude, and the hooks it runs, didn't find them. In WSL that showed as a hook failing with "node: Permission denied", from Windows' node. Re-run `install.sh` to update the launcher or profile, and again after changing your shell.
+
 ## [0.1.0] - 2026-11-02
 
 The first release. It runs on Linux with systemd, Windows 10 and 11, and WSL 2, with Python 3.10 or newer.
@@ -15,4 +21,5 @@ The first release. It runs on Linux with systemd, Windows 10 and 11, and WSL 2, 
 - **A Claude Code app.** On Linux, a desktop entry and profile for Ghostty, kitty, WezTerm, Ptyxis, GNOME Terminal, Konsole, Guake, or the desktop's default terminal. On Windows and in WSL, a Windows Terminal profile.
 - **Installers.** `install.sh` on Linux and in WSL and `install.ps1` on Windows, with `--terminal`, `--icon` and `--uninstall`. They fetch a checked fzf when the system's is older than 0.67.
 
+[0.1.1]: https://github.com/MasonFlint44/claude-launcher/releases/tag/v0.1.1
 [0.1.0]: https://github.com/MasonFlint44/claude-launcher/releases/tag/v0.1.0

@@ -131,10 +131,10 @@ def home(tmp_path):
     return home
 
 
-def make(windows, home, **env):
+def make(windows, home, shell=lambda user: "bash", **env):
     base = {"WSL_DISTRO_NAME": "Ubuntu", "HOME": str(home), "PATH": f"{home}/.local/bin:/usr/bin:/bin"}
     env = {k: v for k, v in {**base, **env}.items() if v is not None}
-    return WslSetup(env, windows.run, str(windows.mounts), user=lambda: "me")
+    return WslSetup(env, windows.run, str(windows.mounts), user=lambda: "me", shell=shell)
 
 
 def fragment_dir(windows, distro="Ubuntu"):
@@ -230,6 +230,16 @@ def test_no_system32_is_no_interop(tmp_path):
 # --- The profile ------------------------------------------------------------
 
 
+def test_the_profile_runs_your_login_shell(windows, home):
+    asked = []
+    setup = make(windows, home, shell=lambda user: asked.append(user) or "/usr/bin/zsh")
+    list(setup.install(None, None))
+    assert asked == ["me"]
+    assert profile_of(windows)["commandline"] == (
+        'wsl.exe -d Ubuntu -u me --cd ~ -- /usr/bin/zsh -lic "~/.local/bin/claude-launcher || exec /usr/bin/zsh"'
+    )
+
+
 def test_writes_a_profile_for_this_distro_and_user(windows, home):
     setup = make(windows, home)
     lines = list(setup.install(None, None))
@@ -237,7 +247,7 @@ def test_writes_a_profile_for_this_distro_and_user(windows, home):
     assert profile["name"] == "Claude Code (Ubuntu)"
     assert profile["guid"] != terminal.PROFILE_GUID  # beside native Windows' profile
     assert profile["commandline"] == (
-        'wsl.exe -d Ubuntu -u me --cd ~ -- bash -lc "~/.local/bin/claude-launcher || exec bash"'
+        'wsl.exe -d Ubuntu -u me --cd ~ -- bash -lic "~/.local/bin/claude-launcher || exec bash"'
     )
     assert profile["startingDirectory"] == "\\\\wsl.localhost\\Ubuntu\\" + str(home).lstrip("/").replace("/", "\\")
     assert profile["icon"] == "C:\\Users\\José\\AppData\\Local\\Microsoft\\Windows Terminal\\Fragments\\" + (
