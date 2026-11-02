@@ -192,6 +192,59 @@ def test_a_new_claude_with_the_pid_keeps_the_old_record(config):
     assert _RECORD_NAME.fullmatch(f"{BOOT}_4242_{other}")
 
 
+OTHER, THIRD = "11111111-2222-4333-8444-555555555555", "66666666-7777-4888-8999-aaaaaaaaaaaa"
+
+
+def test_each_claude_the_pid_comes_back_to_keeps_its_record(config):
+    run(config, "start", session=OTHER, at=100.0)
+    run(config, "start", at=150.0)
+    run(config, "start", session=THIRD, at=200.0)
+    found = records(config)
+    assert set(found) == {f"{BOOT}_4242", f"{BOOT}_4242_{OTHER}", f"{BOOT}_4242_{SID}"}
+    assert Record.load(found[f"{BOOT}_4242_{OTHER}"]).started == 100.0
+    assert Record.load(found[f"{BOOT}_4242_{SID}"]).started == 150.0
+    assert Record.load(found[f"{BOOT}_4242"]).session_id == THIRD
+
+
+def test_a_record_moved_aside_again_replaces_the_older_one(config):
+    # OTHER, then SID, then OTHER resumed, then THIRD: the newer of OTHER's records wins.
+    run(config, "start", session=OTHER, at=100.0)
+    run(config, "start", at=150.0)
+    run(config, "start", session=OTHER, at=200.0)
+    run(config, "start", session=THIRD, at=250.0)
+    found = records(config)
+    assert set(found) == {f"{BOOT}_4242", f"{BOOT}_4242_{OTHER}", f"{BOOT}_4242_{SID}"}
+    assert Record.load(found[f"{BOOT}_4242_{OTHER}"]).started == 200.0
+
+
+def test_a_move_aside_that_stays_busy_still_writes_the_new_record(config, monkeypatch):
+    # Windows refuses every try: the old record is lost, but the new Claude has one.
+    run(config, "start", session=OTHER)
+    real, refused = os.replace, []
+
+    def busy_aside(src, dst):
+        if str(dst).endswith(OTHER):
+            refused.append(dst)
+            raise PermissionError(13, "in use")
+        real(src, dst)
+
+    monkeypatch.setattr(hook.os, "replace", busy_aside)
+    monkeypatch.setattr(hook, "_PAUSE", 0)
+    run(config, "start", at=150.0)
+    assert len(refused) == hook._TRIES
+    assert set(records(config)) == {f"{BOOT}_4242"}
+    assert Record.load(records(config)[f"{BOOT}_4242"]).session_id == SID
+
+
+@pytest.mark.parametrize("reason", ["prompt_input_exit", "clear", "resume", "logout"])
+def test_a_chosen_end_leaves_another_sessions_record(config, reason):
+    # No start was seen for this session: the record under its pid is another's.
+    run(config, "start", session=OTHER)
+    run(config, "end", reason)
+    record = Record.load(records(config)[f"{BOOT}_4242"])
+    assert (record.session_id, record.ended) == (OTHER, None)
+
+
 def test_the_same_session_starting_again_keeps_one_record(config):
     run(config, "start")
     run(config, "start", at=150.0)

@@ -68,16 +68,19 @@ def run(event, payload, env, boot_id=windows_boot_id, now=time.time):
     record = os.path.join(folder, f"{boot}_{pid}")
     fresh = {"session_id": session_id, "pid": pid, "boot_id": boot, "login_session": "", "started_at": now()}
 
-    if event == "end" and reason in CHOSEN_ENDS:
-        with contextlib.suppress(OSError):
-            _retry(os.remove, record)
-        return
     try:
         with open(record, encoding="utf-8") as f:
             old = json.load(f)
     except (OSError, ValueError):
         old = None
     old_session = str(old.get("session_id", "")) if isinstance(old, dict) else ""
+    if event == "end" and reason in CHOSEN_ENDS:
+        # Only this session's record: another's (no start was seen for this
+        # one) is left for the launcher to sort.
+        if old_session == session_id:
+            with contextlib.suppress(OSError):
+                _retry(os.remove, record)
+        return
     if event == "start":
         # Another session's record under this pid: a Claude killed with no end
         # (a logoff or Fast Startup, say) whose pid came back before the

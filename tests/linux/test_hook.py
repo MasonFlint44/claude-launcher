@@ -141,6 +141,37 @@ def test_a_new_claude_with_the_pid_keeps_the_old_record(run_hook):
     assert _RECORD_NAME.fullmatch(name) and _RECORD_NAME.fullmatch(kept_name)
 
 
+THIRD = "7b2f1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b"
+
+
+def test_each_claude_the_pid_comes_back_to_keeps_its_record(run_hook):
+    found = run_hook(("start", {"session_id": OTHER}), ("start", {"session_id": SID}), ("start", {"session_id": THIRD}))
+    [name] = [n for n, r in found.items() if r["session_id"] == THIRD]
+    assert set(found) == {name, f"{name}_{OTHER}", f"{name}_{SID}"}
+    assert found[f"{name}_{OTHER}"]["session_id"] == OTHER and found[f"{name}_{SID}"]["session_id"] == SID
+
+
+def test_a_record_moved_aside_again_replaces_the_older_one(run_hook):
+    # OTHER, then SID, then OTHER resumed, then THIRD: OTHER's record is moved
+    # aside twice, and the newer one wins.
+    found = run_hook(
+        ("start", {"session_id": OTHER}),
+        ("start", {"session_id": SID}),
+        ("start", {"session_id": OTHER}),
+        ("start", {"session_id": THIRD}),
+    )
+    [name] = [n for n, r in found.items() if r["session_id"] == THIRD]
+    assert set(found) == {name, f"{name}_{OTHER}", f"{name}_{SID}"}
+    assert found[f"{name}_{OTHER}"]["started_at"] > found[f"{name}_{SID}"]["started_at"]
+
+
+@pytest.mark.parametrize("reason", ["prompt_input_exit", "clear", "resume", "logout"])
+def test_a_chosen_end_leaves_another_sessions_record(run_hook, reason):
+    # No start was seen for this session: the record under its pid is another's.
+    [record] = run_hook(("start", {"session_id": OTHER}), ("end", {"session_id": SID, "reason": reason})).values()
+    assert record["session_id"] == OTHER and "ended_at" not in record
+
+
 def test_the_same_session_starting_again_keeps_one_record(run_hook):
     # Claude starts a session again after /compact, with the same ID.
     [record] = run_hook(("start", {"session_id": SID}), ("start", {"session_id": SID, "source": "compact"})).values()
