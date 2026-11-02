@@ -13,12 +13,11 @@ from __future__ import annotations
 import os
 import platform
 import re
-import shutil
 import subprocess
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
-from .paths import REPO_DIR
+from .paths import REPO_DIR, which
 
 # Fetching's modules (urllib, hashlib, tarfile, zipfile) are imported where
 # they're used: the picker imports this module on every key press.
@@ -66,9 +65,9 @@ def show(v: tuple[int, ...] | None) -> str:
     return ".".join(map(str, v)) if v else "none"
 
 
-def candidates(own_dir: Path, env: Mapping[str, str] = os.environ) -> list[str]:
+def candidates(own_dir: Path, env: Mapping[str, str] = os.environ, windows: bool = os.name == "nt") -> list[str]:
     """The system's fzf first, then the launcher's own copy."""
-    found = [p for p in (shutil.which("fzf", path=env.get("PATH")),) if p]
+    found = [p for p in (which("fzf", env, windows),) if p]
     found += [str(own) for own in (own_dir / "fzf", own_dir / "fzf.exe") if own.is_file() and os.access(own, os.X_OK)]
     return found
 

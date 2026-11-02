@@ -57,6 +57,18 @@ def test_none_at_all(env, own):
     assert fzf.find(own, env) == (None, None)
 
 
+def test_windows_never_takes_one_from_the_current_directory(tmp_path, monkeypatch, env, own):
+    # A cloned repo with a fzf.bat in it, and the launcher run from there.
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "fzf.bat").write_text("")
+    monkeypatch.chdir(project)
+    assert fzf.candidates(own, env, windows=True) == []
+    (tmp_path / "sysbin").mkdir()
+    (tmp_path / "sysbin" / "fzf.exe").write_text("")
+    assert fzf.candidates(own, env, windows=True) == [str(tmp_path / "sysbin" / "fzf.exe")]
+
+
 def test_private_dir_is_bin_in_the_data_dir(tmp_path):
     assert fzf.private_dir(tmp_path) == tmp_path / "bin"
 
