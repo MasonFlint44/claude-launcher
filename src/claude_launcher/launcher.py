@@ -108,7 +108,14 @@ def _resume(args: Sequence[str]) -> tuple[str, list[str]] | int | None:
     if directory is None:
         print(f"No session with ID {session_id}", file=sys.stderr)
         return 1
-    group = RestartState(paths).load()
+    # Sorted first, as opening the picker does: a session a restart closed
+    # joins the group now, and so leaves it, instead of coming back as a ↻
+    # row at the next picker although it was resumed.
+    state = RestartState(paths)
+    try:
+        group = state.sort()
+    except OSError:  # can't write the group: resume anyway, from what's there
+        group = state.load()
     key = group_of(session_id, group, lambda: logs.scan_sessions(paths.all_log_dirs())[1])
     return resume_dir(directory, paths), ungroup_keys(session_id, key)
 

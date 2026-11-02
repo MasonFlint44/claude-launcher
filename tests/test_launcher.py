@@ -13,7 +13,8 @@ import pytest
 
 from claude_launcher import launcher, platforms
 from claude_launcher.picker import FzfTooOld, Pick
-from conftest import conversation
+from claude_launcher.restart import RestartState
+from conftest import LAST_BOOT, THIS_BOOT, FakeEvents, FakeHost, conversation, write_record
 
 
 class FakePicker:
@@ -443,6 +444,28 @@ def test_resume_outside_the_group_leaves_its_file_alone(resume, claude_home):
     group(claude_home)  # "{}", with no newline: a rewrite would add one
     assert resume(command=[sys.executable, "-c", ""]) == 0
     assert claude_home.paths.restored.read_text() == "{}"
+
+
+def test_resume_sorts_the_group_first(resume, claude_home, monkeypatch):
+    # A restart closed it, and no picker has sorted since: resumed, it
+    # mustn't come back as a ↻ row at the next one.
+    host = FakeHost(boot=THIS_BOOT)
+    monkeypatch.setattr(launcher, "RestartState", lambda paths: RestartState(paths, FakeEvents([]), host))
+    sid = claude_home.log(resume.proj, conversation("x", resume.proj))
+    write_record(claude_home.paths, sid, LAST_BOOT, 100, time.time() - 3600)
+    assert resume(sid) == 3  # it joined the group, then left it while claude ran
+    assert RestartState(claude_home.paths, FakeEvents([]), host).sort().sessions == {}
+
+
+def test_resume_when_the_group_cant_be_sorted(resume, claude_home, monkeypatch):
+    def fail(self):
+        raise PermissionError(13, "denied")
+
+    monkeypatch.setattr(RestartState, "sort", fail)
+    sid = claude_home.log(resume.proj, conversation("x", resume.proj))
+    group(claude_home, sid)
+    assert resume(sid) == 3  # still resumed, and taken out of the group it loaded
+    assert in_group(claude_home) == set()
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX signals")
