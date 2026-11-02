@@ -159,6 +159,35 @@ def test_path_check_ignores_case_and_a_trailing_backslash(tmp_path):
     assert any("is not on your PATH" in line for line in lines)
 
 
+def test_path_check_takes_a_quoted_entry(tmp_path):
+    # PATH entries may be quoted, as a directory with ; in it must be.
+    me = tmp_path / "Me"
+    env = {"USERPROFILE": str(me), "Path": f'C:\\x; "{me / ".local" / "bin"}" ;D:\\y'}
+    lines = list(WindowsSetup(tmp_path / "data", env=env).install(None, None))
+    assert not any("PATH" in line for line in lines)
+
+
+@pytest.mark.parametrize("name", ["claude-launcher.cmd", "claude-session-hook.cmd", "claude-launcher.py"])
+def test_a_failed_write_leaves_the_old_file(setup, env, monkeypatch, name):
+    # A disk that fills up partway: a .cmd cut short would run half its lines.
+    list(setup.install(None, None))
+    shim = Path(env["USERPROFILE"]) / ".local" / "bin" / "claude-launcher.cmd"
+    before = {p: p.read_bytes() for p in [*setup.data_dir.iterdir(), shim]}
+    write_text = Path.write_text
+
+    def disk_full(self, text, *args, **kwargs):
+        if self.name.startswith(name):
+            write_text(self, text[:20], *args, **kwargs)
+            raise OSError(28, "No space left on device")
+        return write_text(self, text, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", disk_full)
+    with pytest.raises(OSError):
+        list(WindowsSetup(setup.data_dir, env=env).install(None, None))
+    assert {p: p.read_bytes() for p in before} == before
+    assert not list(setup.data_dir.glob("*.tmp")) and not list(shim.parent.glob("*.tmp"))
+
+
 def run_entry(tmp_path, target: Path, *args, env=None):
     entry = tmp_path / "entry.py"
     entry.write_text(windows_setup.entry_script(target), encoding="ascii")

@@ -222,7 +222,28 @@ def _bin_dir(env: Mapping[str, str] = os.environ) -> Path:
 
 
 def _same_dir(a: str, b: str) -> bool:
-    return a.replace("/", "\\").rstrip("\\").lower() == b.replace("/", "\\").rstrip("\\").lower()
+    """Whether two directories are one: case, slashes, a trailing separator
+    and quotes around a PATH entry ("C:\\x y\\bin") don't count."""
+
+    def key(d: str) -> str:
+        d = d.strip()
+        if len(d) >= 2 and d[0] == d[-1] == '"':
+            d = d[1:-1]
+        return d.replace("/", "\\").rstrip("\\").lower()
+
+    return key(a) == key(b)
+
+
+def _write(path: Path, text: str) -> None:
+    """Write a whole file or leave the old one: a .cmd cut short would run
+    half its lines."""
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        tmp.write_text(text, encoding="ascii", newline="")
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 class WindowsSetup:
@@ -278,13 +299,13 @@ class WindowsSetup:
             self._launcher_cmd.name: run_cmd("claude-launcher.py"),
         }
         for name, text in files.items():
-            (self.data_dir / name).write_text(text, encoding="ascii", newline="")
+            _write(self.data_dir / name, text)
         shim = _bin_dir(self.env) / "claude-launcher.cmd"
         if shim.exists() and _SHIM_MARK not in shim.read_text(encoding="utf-8", errors="replace"):
             yield f"warning: {shim} isn't one of ours; leaving it alone"
         else:
             shim.parent.mkdir(parents=True, exist_ok=True)
-            shim.write_text(shim_cmd(), encoding="ascii", newline="")
+            _write(shim, shim_cmd())
             yield f"Wrote {shim}"
         path = (_getenv(self.env, "PATH") or "").split(";")
         if not any(_same_dir(str(shim.parent), p) for p in path):
