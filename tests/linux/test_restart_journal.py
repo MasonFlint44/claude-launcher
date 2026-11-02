@@ -39,6 +39,12 @@ class FakeJournal:
     `sessions` lists USER's login sessions that ended, as (boot, session id,
     type, logged out at), optionally followed by how long removal took
     (default 0.5 s) and whether the "logged out" message is there (default yes).
+
+    As journalctl does, a query of a boot it doesn't list fails (`-b` exits
+    1), in the system journal and in your own (`user_boots`: the boots your
+    journal has, both by default). `failing` makes per-boot queries of a
+    listed boot fail too (a timeout, say), as (kind, boot) pairs, kind one of
+    "last_entry", "shutdown", "logouts", "desktop".
     """
 
     def __init__(
@@ -50,20 +56,29 @@ class FakeJournal:
         desktop=(),
         system=True,
         text_boots=False,
+        failing=(),
+        user_boots=(LAST_BOOT, THIS_BOOT),
     ):
         self.shutdown_message, self.last_entry, self.readable = shutdown_message, last_entry, readable
         self.sessions = list(sessions)
         self.desktop = list(desktop)  # (boot, when graphical-session.target stopped)
         self.system = system  # False: only the user journal can be read
         self.text_boots = text_boots  # True: systemd before 251, whose --list-boots ignores -o json
+        self.failing = {(kind, boot_key(boot)) for kind, boot in failing}
+        self.user_boots = {boot_key(b) for b in user_boots}
         self.calls = []
 
     def __call__(self, args):
         self.calls.append(list(args))
         if not self.readable:
             return None
+        if args[:2] == ["--user", "--list-boots"]:
+            boots = [{"boot_id": b, "first_entry": 1, "last_entry": 2} for b in sorted(self.user_boots)]
+            return json.dumps(boots)
         if args[0] == "--user":
             boot = args[2]
+            if boot not in self.user_boots or ("desktop", boot) in self.failing:
+                return None
             assert f"USER_UNIT={GRAPHICAL_SESSION_UNIT}" in args and f"MESSAGE_ID={UNIT_STOPPED_MESSAGE_ID}" in args
             lines = [
                 {"JOB_TYPE": "stop", "JOB_RESULT": "done", "__REALTIME_TIMESTAMP": stamp(t)}
@@ -85,6 +100,17 @@ class FakeJournal:
             ]
             return json.dumps(boots)
         boot = args[1]
+        if boot not in (boot_key(LAST_BOOT), boot_key(THIS_BOOT)):
+            return None  # "No journal boot entry found for the specified boot"
+        kind = (
+            "last_entry"
+            if args[2:4] == ["-n", "1"]
+            else "shutdown"
+            if f"MESSAGE_ID={SHUTDOWN_MESSAGE_ID}" in args
+            else "logouts"
+        )
+        if (kind, boot) in self.failing:
+            return None
         if args[2:4] == ["-n", "1"]:  # a boot's last entry
             last = {boot_key(LAST_BOOT): self.last_entry, boot_key(THIS_BOOT): NOW}.get(boot)
             return "" if last is None else json.dumps({"__REALTIME_TIMESTAMP": stamp(last)}) + "\n"
@@ -355,6 +381,73 @@ class TestLastEntryLookupFails:
             record(pid, session(), ended=NOW - 900)
         make(lookup_fails(journal)).sort()
         assert [c[:4] for c in journal.calls].count(["-b", boot_key(LAST_BOOT), "-n", "1"]) == 1
+
+
+def query_kind(args):
+    """Which of FakeJournal's per-boot queries `args` is, and of which boot."""
+    if args[0] == "--user":
+        return ("desktop", args[2]) if args[1] == "-b" else None
+    if args[0] != "-b":
+        return None
+    if args[2:4] == ["-n", "1"]:
+        return ("last_entry", args[1])
+    return ("shutdown" if f"MESSAGE_ID={SHUTDOWN_MESSAGE_ID}" in args else "logouts", args[1])
+
+
+class TestQueryFails:
+    """A query of a boot the journal lists that fails (timed out, say) says
+    nothing: the boot's records wait, rather than read as nothing closed them."""
+
+    @pytest.mark.parametrize("kind", ["shutdown", "logouts", "desktop"])
+    def test_an_earlier_boots_record_waits(self, setup, claude_home, kind):
+        make, record, session, _ = setup
+        sid = session()
+        record(100, sid, ended=REBOOT + 0.8)
+        assert len(make(FakeJournal(failing=[(kind, LAST_BOOT)])).sort()) == 0
+        assert records(claude_home) == ["100"]
+        assert make(FakeJournal()).sort().sessions == {sid: Closed(REBOOT, "restart")}
+        assert records(claude_home) == []
+
+    @pytest.mark.parametrize("kind", ["logouts", "desktop"])
+    def test_this_boots_record_waits(self, setup, claude_home, kind):
+        make, record, session, _ = setup
+        sid = session()
+        logout = NOW - 120
+        record(100, sid, boot=THIS_BOOT, ended=logout + 0.2)
+        journal = FakeJournal(desktop=[(THIS_BOOT, logout)], failing=[(kind, THIS_BOOT)])
+        assert len(make(journal).sort()) == 0
+        assert records(claude_home) == ["100"]
+        assert make(FakeJournal(desktop=[(THIS_BOOT, logout)])).sort().sessions == {sid: Closed(logout, "logout")}
+
+    @pytest.mark.parametrize("kind", ["shutdown", "logouts", "desktop"])
+    def test_asked_once_per_sort(self, setup, kind):
+        make, record, session, _ = setup
+        journal = FakeJournal(failing=[(kind, LAST_BOOT)])
+        for pid in (100, 101):
+            record(pid, session(), ended=REBOOT + 0.8)
+        make(journal).sort()
+        asked = [query_kind(c) for c in journal.calls]
+        assert asked.count((kind, boot_key(LAST_BOOT))) == 1
+
+
+def test_a_boot_your_journal_doesnt_have_has_no_desktop_ends(setup):
+    # --user -b fails for a boot the system journal lists but yours doesn't
+    # (you weren't logged in then): that's no desktop ending, not a failure.
+    make, record, session, _ = setup
+    sid = session()
+    record(100, sid, ended=REBOOT + 0.8)
+    journal = FakeJournal(user_boots=[THIS_BOOT])
+    assert make(journal).sort().sessions == {sid: Closed(REBOOT, "restart")}
+    assert ["--user", "--list-boots", "-o", "json"] in journal.calls
+
+
+def test_a_boot_not_listed_reads_as_empty(setup):
+    # journalctl -b exits 1 for a boot it doesn't list; that's a lost boot, not a failure.
+    lost = "33333333-3333-3333-3333-333333333333"
+    journal = Journal(FakeJournal())
+    assert journal.logouts(lost, USER) == []
+    assert journal.desktop_ends(lost) == []
+    assert journal.restart_time(lost) is None
 
 
 class TestLogout:
