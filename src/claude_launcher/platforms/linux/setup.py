@@ -89,14 +89,17 @@ class LinuxSetup:
         yield from desktop.install_terminals(ctx, _names(terminal_names))
 
     def check(self, terminal_names: str | None, icon: str | None) -> None:
-        """--terminal (or last time's, without it) and --icon, before anything
-        is changed."""
+        """--terminal and --icon (or last time's, without them), before
+        anything is changed."""
         names = _names(terminal_names)
+        ctx = _context(bin_dir() / "claude-launcher")
         if names:
             desktop.check_terminals(names)
         else:
-            desktop.check_saved_terminals(_context(bin_dir() / "claude-launcher"))
-        if icon and icon != "default":
+            desktop.check_saved_terminals(ctx)
+        if not icon:
+            desktop.check_kept_icon(ctx)
+        elif icon != "default":
             desktop.check_icon(icon)
 
     def uninstall(self) -> Iterator[str]:

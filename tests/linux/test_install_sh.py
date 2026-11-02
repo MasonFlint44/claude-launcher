@@ -154,6 +154,24 @@ def test_a_bad_icon_stops_before_anything(tmp_path, name, content, error, run):
     nothing_written(home)
 
 
+def test_a_damaged_kept_icon_stops_before_anything(tmp_path, run):
+    home = tmp_path / "home"
+    icon = tmp_path / "mine.png"
+    shutil.copyfile(REPO_DIR / "share" / "icons" / "claude-launcher-64.png", icon)
+    assert run(home, "--icon", str(icon)).returncode == 0
+    kept = home / ".local" / "share" / "claude-launcher" / "icon.png"
+    kept.write_bytes(b"not a png")
+
+    def snapshot():
+        return {str(p): os.readlink(p) if p.is_symlink() else p.read_bytes() for p in home.rglob("*") if not p.is_dir()}
+
+    before = snapshot()
+    done = run(home)
+    assert done.returncode != 0
+    assert done.stderr.endswith(f"{kept} isn't a square PNG any more; run install.sh --icon FILE (or --icon default)\n")
+    assert snapshot() == before
+
+
 def test_a_failed_step_says_so(tmp_path, run):
     home = tmp_path / "home"
     (home / ".local" / "share").mkdir(parents=True)
