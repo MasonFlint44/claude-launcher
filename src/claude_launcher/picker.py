@@ -332,6 +332,8 @@ class Picker:
         home_used = 0.0
         rows = []
         for used, directory in logs.recent_projects(self.paths):
+            if not text.is_utf8(directory):  # fzf couldn't hand it back
+                continue
             if directory == home:
                 home_used = used
             else:
@@ -409,7 +411,8 @@ class Picker:
         rows = [] if partial else [DirRow(parent, typed, self._note(parent_own, parent_inside), is_parent=True)]
         try:
             with os.scandir(parent) as entries:
-                # A name with control characters can't be typed or shown as it is.
+                # A name with control characters, or bytes that aren't UTF-8,
+                # can't be typed or shown as it is.
                 names = [e.name for e in entries if _is_dir(e) and text.printable(e.name) == e.name]
         except OSError:
             return rows

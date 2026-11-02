@@ -125,6 +125,15 @@ class TestProjects:
         [row] = [r for r in p.rows() if r.startswith(str(odd) + "\t")]
         assert "\x1b[31m" not in row.split("\t", 1)[1] and "/ab" in row
 
+    @posix_only  # Windows names are UTF-16
+    def test_directory_that_isnt_utf8_left_out(self, env):
+        # A log can name one (JSON can hold any code point), and fzf reads UTF-8.
+        project(env, os.fsdecode(b"latin1-\xe9dir"), NOW - 600)
+        ok = project(env, "ok", NOW - 900)
+        p, _ = start(env)
+        assert keys(p.rows()) == [str(env.home), str(ok)]
+        (env.run / "rows").read_text(encoding="utf-8")
+
     def test_home_first_then_most_recent(self, env):
         a = project(env, "a", NOW - 600)
         b = project(env, "b", NOW - 7200)
@@ -261,6 +270,15 @@ class TestPathMode:
         make_dirs(env, "ok", "bad\nname", "esc\x1b[31m")
         p, _ = start(env)
         assert listed(p.rows(query="~/"))[1:] == ["~/ok"]
+
+    @posix_only  # Windows names are UTF-16
+    def test_names_that_arent_utf8_left_out(self, env):
+        # fzf reads UTF-8, and the core writes rows as UTF-8.
+        make_dirs(env, "ok", os.fsdecode(b"latin1-\xe9dir"))
+        p, _ = start(env)
+        rows = p.rows(query="~/")
+        assert listed(rows)[1:] == ["~/ok"]
+        "".join(rows).encode("utf-8")
 
     def test_missing_directory(self, env):
         p, _ = start(env)
@@ -649,6 +667,14 @@ class TestSessions:
         assert "Recent Claude sessions" in out
         assert displayed(p.rows())[1].split()[-1] == "hello"
         assert "Select a project directory" in env.picker().on_sessions()
+
+    def test_title_that_isnt_utf8(self, env):
+        env.log("/tmp", conversation("caf\udce9 time", "/tmp"))
+        p, _ = start(env)
+        p.on_sessions()
+        rows = env.picker().rows()
+        "".join(rows).encode("utf-8")
+        assert displayed(rows)[1].split()[-2:] == ["caf", "time"]
 
     def test_no_sessions(self, env):
         p, _ = start(env)
