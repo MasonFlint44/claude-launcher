@@ -77,6 +77,18 @@ def check_terminals(names: list[str] | None) -> list[Terminal]:
     return chosen
 
 
+def check_saved_terminals(ctx: Context) -> None:
+    """Raises if a terminal chosen last time, which a run without --terminal
+    sets up again, isn't installed any more."""
+    missing = [TERMINALS[n].label for n in saved_terminals(ctx) or [] if not TERMINALS[n].installed()]
+    if missing:
+        verb = "isn't" if len(missing) == 1 else "aren't"
+        raise ValueError(
+            f"{' and '.join(missing)}, which the launcher was set up with, {verb} installed any more;"
+            " run install.sh --terminal auto (or --terminal NAME)"
+        )
+
+
 def install_terminals(ctx: Context, names: list[str] | None) -> list[str]:
     """Set up the desktop entries (and any profiles) for `names`, or the ones
     chosen last time, or the first installed terminal. Returns what it did.
@@ -193,9 +205,14 @@ def install_icon(ctx: Context, icon: str | None) -> str:
     elif icon:
         src = check_icon(icon)
         own_dir.mkdir(parents=True, exist_ok=True)
+        # Copied in beside the old one first: --icon can name the kept copy.
+        kept = own_dir / f"icon{src.suffix.lower()}"
+        tmp = own_dir / ".icon.tmp"
+        shutil.copyfile(src, tmp)
+        os.replace(tmp, kept)
         for old in own_dir.glob("icon.*"):
-            old.unlink()
-        shutil.copyfile(src, own_dir / f"icon{src.suffix.lower()}")
+            if old != kept:
+                old.unlink()
     remove_icon(ctx)
     theme = ctx.data_home / "icons" / "hicolor"
     own = next(iter(sorted(own_dir.glob("icon.*"))), None)

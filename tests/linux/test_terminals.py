@@ -229,6 +229,36 @@ class TestProfiles:
         with pytest.raises(RuntimeError, match="can't read Ptyxis"):
             TERMINALS["ptyxis"].install(ctx)
 
+    @pytest.mark.parametrize("name", ["ptyxis", "gnome-terminal"])
+    def test_profiles_unreadable_says_whose(self, ctx, name):
+        ctx.run = lambda argv: subprocess.CompletedProcess(argv, 1, "", "No such schema")
+        label = TERMINALS[name].label
+        with pytest.raises(RuntimeError, match=f"can't read {label}'s profiles \\(is {label} installed\\?\\)"):
+            TERMINALS[name].install(ctx)
+
+    @pytest.mark.parametrize("listed", ["not a list", "['aaaa'", "'aaaa'", "[1, 2]", "@as {}"])
+    def test_profiles_list_unparsable(self, ctx, listed):
+        ctx.run.values[("org.gnome.Ptyxis", "profile-uuids")] = listed
+        with pytest.raises(RuntimeError, match="can't read Ptyxis"):
+            TERMINALS["ptyxis"].install(ctx)
+        assert ctx.run.values == {("org.gnome.Ptyxis", "profile-uuids"): listed}  # nothing set
+
+    def test_gsettings_set_failing_says_so(self, ctx):
+        fake = ctx.run
+
+        def run(argv):
+            if argv[:2] == ["gsettings", "set"]:
+                fake.calls.append(list(argv))
+                return subprocess.CompletedProcess(argv, 1, "", "The schema is not installed\n")
+            return fake(argv)
+
+        ctx.run = run
+        profile = f"org.gnome.Terminal.Legacy.Profile:/org/gnome/terminal/legacy/profiles:/:{PROFILE_UUID}/"
+        with pytest.raises(RuntimeError) as e:
+            TERMINALS["gnome-terminal"].install(ctx)
+        key = fake.calls[-1][3]
+        assert str(e.value) == f"gsettings set {profile} {key} failed: The schema is not installed"
+
     def test_konsole(self, ctx):
         konsole = TERMINALS["konsole"]
         konsole.install(ctx)
@@ -267,6 +297,16 @@ class TestGuake:
         ctx.run, calls = self.fake(lambda: bool(started))
         TERMINALS["guake"].open(ctx, spawn=started.append)
         assert started == [["guake", "-e", shlex.join(ctx.argv), "--show"]]
+        assert not [c for c in calls if c[0] == "guake"]
+
+    def test_not_running_gives_up_after_5_seconds(self, ctx, monkeypatch):
+        slept = []
+        monkeypatch.setattr(terminals.time, "sleep", slept.append)
+        started = []
+        ctx.run, calls = self.fake(lambda: False)
+        TERMINALS["guake"].open(ctx, spawn=started.append)
+        assert started == [["guake", "-e", shlex.join(ctx.argv), "--show"]]  # started once, not again
+        assert sum(slept) == pytest.approx(5)
         assert not [c for c in calls if c[0] == "guake"]
 
     def test_exec_line(self, ctx):
@@ -384,6 +424,23 @@ class TestIcon:
         mine.unlink()  # a copy is kept, so the icon survives this
         desktop.install_icon(ctx, None)
         assert (ctx.data_home / "icons/hicolor/scalable/apps" / f"{APP_ID}.svg").read_text() == "<svg/>"
+
+    def test_the_kept_copy_given_again(self, ctx, tmp_path):
+        mine = tmp_path / "clawd.svg"
+        mine.write_text("<svg/>")
+        desktop.install_icon(ctx, str(mine))
+        kept = ctx.data_home / "claude-launcher" / "icon.svg"
+        assert desktop.install_icon(ctx, str(kept)) == f"Installed your icon ({kept})"
+        assert kept.read_text() == "<svg/>"
+        assert self.installed(ctx) == ["scalable/apps/" + APP_ID + ".svg"]
+
+    def test_a_new_kind_of_icon_replaces_the_kept_one(self, ctx, tmp_path):
+        mine = tmp_path / "clawd.svg"
+        mine.write_text("<svg/>")
+        desktop.install_icon(ctx, str(mine))
+        desktop.install_icon(ctx, self.png(tmp_path / "clawd.png", 256))
+        assert sorted(p.name for p in (ctx.data_home / "claude-launcher").iterdir()) == ["icon.png"]
+        assert self.installed(ctx) == [f"256x256/apps/{APP_ID}.png"]
 
     def test_your_png_goes_by_its_size(self, ctx):
         desktop.install_icon(ctx, str(desktop.ICONS_DIR / "claude-launcher-256.png"))

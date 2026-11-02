@@ -139,9 +139,11 @@ def _gsettings_list(ctx: Context, schema: str, key: str) -> list[str] | None:
     if text.startswith("@as"):
         text = text[3:].strip()
     try:
-        return json.loads(text.replace("'", '"'))
+        ids = json.loads(text.replace("'", '"'))
     except ValueError:
         return None
+    # Anything but a list of strings would be split up or lost when set back.
+    return ids if isinstance(ids, list) and all(isinstance(i, str) for i in ids) else None
 
 
 def _gsettings_set(ctx: Context, schema: str, key: str, value: object) -> None:
