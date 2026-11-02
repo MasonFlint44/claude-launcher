@@ -115,9 +115,12 @@ def _terminal(args: list[str]) -> int:
     if args == ["list"]:
         print(" ".join(terminals.TERMINALS))
         return 0
-    term = terminals.TERMINALS.get(args[1]) if len(args) > 1 else None
-    if args[:1] != ["open"] or not isinstance(term, terminals.Guake):
-        print(f"can't open {' '.join(args[1:])}", file=sys.stderr)
+    if args[:1] != ["open"] or len(args) < 2:
+        print("usage: terminal list | terminal open NAME [LAUNCHER]", file=sys.stderr)
+        return 2
+    term = terminals.TERMINALS.get(args[1])
+    if not isinstance(term, terminals.Guake):
+        print(f"can't open {args[1]} this way; only Guake's desktop entry uses terminal open", file=sys.stderr)
         return 2
     term.open(_context(args[2] if len(args) > 2 else None))
     return 0
