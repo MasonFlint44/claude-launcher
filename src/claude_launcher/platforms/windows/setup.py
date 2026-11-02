@@ -17,7 +17,6 @@ Nothing on a command line cmd parses holds the user's own text either; see
 
 from __future__ import annotations
 
-import ntpath
 import os
 import re
 from collections.abc import Callable, Iterator, Mapping
@@ -27,7 +26,7 @@ from ... import files
 from ...paths import REPO_DIR, THEME_FILE
 from ...theme import Theme
 from . import getenv as _getenv
-from . import terminal
+from . import system32, terminal
 
 LAUNCHER = REPO_DIR / "bin" / "claude-launcher"
 HOOK = REPO_DIR / "bin" / "claude-session-hook.py"
@@ -289,8 +288,7 @@ class WindowsSetup:
         after that, and the value isn't parsed again, so % and ! in it are
         kept too. System32's cmd.exe, not %ComSpec%, which can be another
         shell (TCC) that reads /d and /c its own way."""
-        root = _getenv(self.env, "SystemRoot")
-        cmd = ntpath.join(root, "System32", "cmd.exe") if root else "cmd.exe"
+        cmd = system32(self.env, "cmd.exe")
         form = env_form(self._hook_cmd, self.env)
         if form:
             name, rest = form
