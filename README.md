@@ -97,7 +97,7 @@ Text that matches nothing shows "Nothing matches"; either way the list comes bac
 
 **Where the list comes from:** each directory under `~/.claude/projects/` (or `$CLAUDE_CONFIG_DIR/projects/`) holds session logs for one project. The picker reads the working directory from the newest log in each, sorts by that log's date, and skips directories that no longer exist. Your home directory is always first. A directory you've never used Claude in won't be listed until you open it once by typing its path.
 
-**Options for Claude:** `claude-launcher --model opus` passes `--model opus` to every Claude it starts. `claude-launcher --help` (or `-h`) shows how to run it, and `--version` its version; as the first argument these two are the launcher's own, and anywhere after another one they go to Claude.
+**Options for Claude:** `claude-launcher --model opus` passes `--model opus` to every Claude it starts. `claude-launcher --help` (or `-h`) shows how to run it, and `--version` its version. `--help`, `-h` and `--version` count only as the first argument; after another one they go to Claude.
 
 ## Resuming a session
 
@@ -154,7 +154,7 @@ When a restart or logging out closed Claude sessions, the picker shows which:
 
 There's a line for each restart or logout, newest first. With more than three, only the newest two get a line, and the sessions from the rest are counted on a third ("↻ 5 more from earlier"). In WSL, WSL stopping on its own (`wsl --shutdown`) gets its own line too, "open when WSL stopped"; if Windows restarted or you logged out, that's what it says instead.
 
-Press Ctrl-S and they're at the top of the Sessions view, marked ↻ with what closed each and the day, like "today restart" or "Mon restart" (and at the top of their directory's sessions too). Enter resumes one, and it leaves the group once Claude has started (if Claude can't start, it stays); Ctrl-X takes it out without resuming, and Alt-X twice takes out every ↻ session the view shows. A session stays in the group for 7 days, unless you resume or dismiss it first, or start it again from anywhere else.
+Press Ctrl-S and they're at the top of the Sessions view, marked ↻ with what closed each and the day, like "today restart" or "Mon restart" (and at the top of their directory's sessions too). Enter resumes one (so does `claude-launcher --resume <id>`), and it leaves the group once Claude has started (if Claude can't start, it stays); Ctrl-X takes it out without resuming, and Alt-X twice takes out every ↻ session the view shows. A session stays in the group for 7 days, unless you resume or dismiss it first, or start it again from anywhere else.
 
 **How it knows:** `claude-session-hook` keeps a small record for each interactive Claude. An exit you chose (`/exit`, `/clear`, switching with `/resume`) deletes it; closing the tab, or the desktop closing every window, keeps it with the time the session ended. When the picker opens, it checks those times against the system's own record of restarts and logouts. A session that ended during one, or just before or after it, was closed by it; anything else, like a tab you closed yourself, isn't listed. On Linux that record is the systemd journal ([docs/linux.md](docs/linux.md#how-it-knows-what-a-restart-or-logout-closed) has the details, and what it needs); on Windows and in WSL, Windows' System event log ([docs/windows.md](docs/windows.md#how-it-knows-what-a-restart-or-logoff-closed)).
 

@@ -61,6 +61,8 @@ from .text import width as text_width
 from .theme import Theme
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from .platforms import Platform
 
 MAX_WIDTH = 120  # widest the picker gets, in columns
@@ -774,12 +776,7 @@ class Picker:
         for r in self._sessions():
             if r["id"] == session_id:
                 return r["group"]
-        group = self.restart.load()
-        if not group.sessions:
-            return None
-        if session_id in group.sessions:  # no need to read the logs
-            return session_id
-        return _group_key(session_id, group, self._scan()[1])
+        return group_of(session_id, self.restart.load(), lambda: self._scan()[1])
 
     def pick(self, query: str) -> Pick | str:
         """What Enter chose, or a message saying why nothing was."""
@@ -819,8 +816,7 @@ class Picker:
             directory = logs.session_dir(self.paths, session_id)
             if directory is None:
                 return f"No session with ID {session_id}"
-            group = self._group_of(session_id)
-            ungroup = list(dict.fromkeys([session_id, group] if group else [session_id]))
+            ungroup = ungroup_keys(session_id, self._group_of(session_id))
             return Pick(resume_dir(directory, self.paths), session_id, ungroup)
         if choice:
             return Pick(choice) if os.path.isdir(choice) else f"Not a directory: {choice}"
@@ -897,6 +893,23 @@ def resume_dir(directory: str, paths: Paths) -> str:
     print(f"{paths.tilde(directory)} not found, so resuming from ~", file=sys.stderr)
     time.sleep(1)  # Claude clears the screen when it starts
     return str(paths.home)
+
+
+def group_of(session_id: str, group: Group, continued_from: Callable[[], dict[str, str]]) -> str | None:
+    """The session's key in the restart group, if it's in it. `continued_from`
+    (which sessions continue which, from the logs) is read only when needed."""
+    if not group.sessions:
+        return None
+    if session_id in group.sessions:  # no need to read the logs
+        return session_id
+    return _group_key(session_id, group, continued_from())
+
+
+def ungroup_keys(session_id: str, key: str | None) -> list[str]:
+    """What resuming a session takes out of the restart group once Claude has
+    started: the session and the key it's listed under. None if it isn't in
+    the group, so an ordinary resume leaves the group's file alone."""
+    return list(dict.fromkeys([session_id, key])) if key else []
 
 
 def _group_key(session_id: str, group: Group, continued_from: dict[str, str]) -> str | None:

@@ -25,7 +25,7 @@ from pathlib import Path
 
 from . import fzf, logs, text, theme, title
 from .paths import Paths
-from .picker import FzfTooOld, Pick, Picker, resume_dir
+from .picker import FzfTooOld, Pick, Picker, group_of, resume_dir, ungroup_keys
 from .restart import RestartState
 
 USAGE = """\
@@ -94,18 +94,23 @@ class _Signals:
                 raise _Exit(self.pending)
 
 
-def _resume_dir(args: Sequence[str]) -> str | int | None:
-    """`--resume <id>` / `-r <id>`: the directory to resume that session in.
-    None if the arguments don't ask to resume one; 1 if there's no such session."""
-    for flag, value in zip(args, args[1:], strict=False):
-        if flag in ("--resume", "-r") and logs.is_session_id(value):
-            paths = Paths.from_env()
-            directory = logs.session_dir(paths, value)
-            if directory is None:
-                print(f"No session with ID {value}", file=sys.stderr)
-                return 1
-            return resume_dir(directory, paths)
-    return None
+def _resume(args: Sequence[str]) -> tuple[str, list[str]] | int | None:
+    """`--resume <id>` / `-r <id>`: the directory to resume that session in,
+    and what to take out of the restart group once Claude has started, as
+    Enter in the picker does. None if the arguments don't ask to resume one;
+    1 if there's no such session."""
+    pairs = zip(args, args[1:], strict=False)
+    session_id = next((v for f, v in pairs if f in ("--resume", "-r") and logs.is_session_id(v)), None)
+    if session_id is None:
+        return None
+    paths = Paths.from_env()
+    directory = logs.session_dir(paths, session_id)
+    if directory is None:
+        print(f"No session with ID {session_id}", file=sys.stderr)
+        return 1
+    group = RestartState(paths).load()
+    key = group_of(session_id, group, lambda: logs.scan_sessions(paths.all_log_dirs())[1])
+    return resume_dir(directory, paths), ungroup_keys(session_id, key)
 
 
 def _tty() -> int | None:
@@ -207,7 +212,8 @@ def _claude(
     signals: _Signals, directory: str, args: Sequence[str], started: Callable[[], None] | None = None
 ) -> int | None:
     """Run claude in `directory`, calling `started` once it has. Its exit
-    code, or None if it couldn't start."""
+    code as a shell gives it (128 + the signal, if one killed it), or None if
+    it couldn't start."""
     if not os.path.isdir(directory):  # Windows says "directory name is invalid", not "not found"
         print(f"No such directory: {directory}", file=sys.stderr)
         return None
@@ -215,7 +221,8 @@ def _claude(
     if os.name != "nt":  # as a shell's cd would: cwd alone leaves PWD naming where the launcher started
         env = {**os.environ, "PWD": directory}
     try:
-        return signals.run(_claude_command(args), started=started, cwd=directory, env=env).returncode
+        code = signals.run(_claude_command(args), started=started, cwd=directory, env=env).returncode
+        return 128 - code if code < 0 else code
     except ValueError as e:
         print(e, file=sys.stderr)
     except FileNotFoundError as e:
@@ -315,7 +322,7 @@ def main(args: list[str]) -> int:
         print(e, file=sys.stderr)
         return 1
     # `--resume <id>`: straight to that session, in the directory it was started in.
-    resume = _resume_dir(args)
+    resume = _resume(args)
     if isinstance(resume, int):  # an error, already shown
         return resume
     signals = _Signals()
@@ -325,7 +332,7 @@ def main(args: list[str]) -> int:
         # Claude Dark for this tab while the launcher runs, Claude included.
         _theme(run, "apply")
         if resume is not None:
-            code = _claude(signals, resume, args)
+            code = _claude(signals, resume[0], args, _ungroup(resume[1]))
             return 1 if code is None else code
         return _loop(signals, run, args)
     except _Exit as e:

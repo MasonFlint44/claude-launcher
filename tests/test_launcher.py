@@ -3,14 +3,17 @@ test_e2e.py runs the real thing in a pseudo-terminal."""
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
+import time
 
 import pytest
 
 from claude_launcher import launcher, platforms
 from claude_launcher.picker import FzfTooOld, Pick
+from conftest import conversation
 
 
 class FakePicker:
@@ -114,11 +117,35 @@ def test_no_such_directory(tmp_path, capsys):
     assert capsys.readouterr().err.strip() == f"No such directory: {gone}"
 
 
-def test_started_once_claude_runs(monkeypatch, tmp_path):
-    monkeypatch.setattr(launcher, "_claude_command", lambda args: [sys.executable, "-c", "raise SystemExit(3)"])
+# A claude that waits, up to 5 s, for a file: exits 3 if it came, 4 if not.
+WAITS_FOR = """
+import os, sys, time
+end = time.time() + 5
+while not os.path.exists(sys.argv[1]) and time.time() < end:
+    time.sleep(0.02)
+sys.exit(3 if os.path.exists(sys.argv[1]) else 4)
+"""
+
+
+def test_started_while_claude_runs(monkeypatch, tmp_path):
+    release = tmp_path / "release"
+    monkeypatch.setattr(launcher, "_claude_command", lambda args: [sys.executable, "-c", WAITS_FOR, str(release)])
     calls = []
-    assert launcher._claude(RunsForReal(), str(tmp_path), [], lambda: calls.append(1)) == 3
+
+    def started():
+        calls.append(1)
+        release.touch()  # only a claude still running sees it
+
+    assert launcher._claude(RunsForReal(), str(tmp_path), [], started) == 3
     assert calls == [1]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX signals")
+def test_claude_killed_by_a_signal_exits_as_a_shell_would(monkeypatch, tmp_path):
+    kill = [sys.executable, "-c", "import os, signal; os.kill(os.getpid(), signal.SIGKILL)"]
+    monkeypatch.setattr(launcher, "_claude_command", lambda args: kill)
+    assert launcher._claude(RunsForReal(), str(tmp_path), []) == 128 + 9
+    assert launcher._claude(RunsForReal(), str(tmp_path), [], lambda: None) == 128 + 9
 
 
 def test_not_started_when_claude_cant_start(monkeypatch, tmp_path):
@@ -192,6 +219,13 @@ def test_a_resumed_session_leaves_the_group_once_claude_starts(loop, restart, tm
     FakePicker.result = Pick(str(tmp_path), "sid", ["sid", "older"])
     loop(0, 0, launcher.QUIT)
     assert restart.dropped == [["sid", "older"]]
+
+
+def test_a_session_not_in_the_group_leaves_its_file_alone(loop, restart, tmp_path):
+    FakePicker.result = Pick(str(tmp_path), "sid")
+    loop(0, 0, launcher.QUIT)
+    assert restart.dropped == []  # no lock taken, no rewrite
+    assert launcher._ungroup([]) is None
 
 
 def test_a_session_that_cant_start_stays_in_the_group(loop, restart, tmp_path):
@@ -332,6 +366,89 @@ def test_help_after_another_argument_goes_to_claude(monkeypatch, tmp_path):
     assert launcher.main(["--model", "opus", "--help"]) == 0
     assert launcher.main(["--append-system-prompt", "--version"]) == 0
     assert passed == [["--model", "opus", "--help"], ["--append-system-prompt", "--version"]]
+
+
+@pytest.fixture
+def resume(claude_home, monkeypatch, tmp_path):
+    """main() with `--resume <id>`, a session in its own directory, and a
+    claude that runs until it's taken out of the group (WAITS_FOR), or `command`.
+    The file is touched just after the group's, not checked by claude itself:
+    on Windows an open file can't be replaced."""
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    monkeypatch.setattr(launcher.signal, "signal", lambda *a: None)
+    monkeypatch.setattr(launcher, "_theme", lambda run, action: None)
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    release = tmp_path / "release"
+    real = launcher._ungroup
+
+    def ungroup(keys):
+        drop = real(keys)
+
+        def started():
+            if drop:
+                drop()
+                release.touch()
+
+        return started
+
+    monkeypatch.setattr(launcher, "_ungroup", ungroup)
+
+    def run(sid=None, command=None):
+        sid = sid or claude_home.log(proj, conversation("x", proj))
+        monkeypatch.setattr(
+            launcher, "_claude_command", lambda args: command or [sys.executable, "-c", WAITS_FOR, str(release)]
+        )
+        return launcher.main(["--resume", sid])
+
+    run.proj = proj
+    return run
+
+
+def group(claude_home, *sids):
+    claude_home.paths.state.mkdir(parents=True, exist_ok=True)
+    closed = {"at": time.time() - 3600, "why": "restart"}
+    claude_home.paths.restored.write_text(json.dumps({sid: closed for sid in sids}))
+
+
+def in_group(claude_home):
+    return set(json.loads(claude_home.paths.restored.read_text()))
+
+
+def test_resume_takes_the_session_out_of_the_group_while_claude_runs(resume, claude_home):
+    sid = claude_home.log(resume.proj, conversation("x", resume.proj))
+    other = claude_home.log(resume.proj, conversation("y", resume.proj))
+    group(claude_home, sid, other)
+    assert resume(sid) == 3  # the group lost it while claude ran
+    assert in_group(claude_home) == {other}
+
+
+def test_resume_takes_out_the_session_it_continues(resume, claude_home):
+    newer = claude_home.log(resume.proj, conversation("newer", resume.proj))
+    entries = [*conversation("older", resume.proj), {"type": "continued-in", "continuedInSessionId": newer}]
+    older = claude_home.log(resume.proj, entries)
+    group(claude_home, older)
+    assert resume(newer) == 3
+    assert in_group(claude_home) == set()
+
+
+def test_resume_that_cant_start_stays_in_the_group(resume, claude_home, tmp_path, capsys):
+    sid = claude_home.log(resume.proj, conversation("x", resume.proj))
+    group(claude_home, sid)
+    assert resume(sid, [str(tmp_path / "no-claude")]) == 1
+    assert in_group(claude_home) == {sid}
+
+
+def test_resume_outside_the_group_leaves_its_file_alone(resume, claude_home):
+    group(claude_home)  # "{}", with no newline: a rewrite would add one
+    assert resume(command=[sys.executable, "-c", ""]) == 0
+    assert claude_home.paths.restored.read_text() == "{}"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX signals")
+def test_resume_killed_by_a_signal_exits_as_a_shell_would(resume):
+    kill = [sys.executable, "-c", "import os, signal; os.kill(os.getpid(), signal.SIGKILL)"]
+    assert resume(command=kill) == 128 + 9
 
 
 def test_resume_then_help_still_resumes(claude_home, capsys):
