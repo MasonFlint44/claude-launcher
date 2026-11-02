@@ -99,17 +99,18 @@ def _resume(args: Sequence[str]) -> tuple[str, list[str]] | int | None:
     and what to take out of the restart group once Claude has started, as
     Enter in the picker does. None if the arguments don't ask to resume one;
     1 if there's no such session."""
-    for flag, value in zip(args, args[1:], strict=False):
-        if flag in ("--resume", "-r") and logs.is_session_id(value):
-            paths = Paths.from_env()
-            directory = logs.session_dir(paths, value)
-            if directory is None:
-                print(f"No session with ID {value}", file=sys.stderr)
-                return 1
-            group = RestartState(paths).load()
-            key = group_of(value, group, lambda: logs.scan_sessions(paths.all_log_dirs())[1])
-            return resume_dir(directory, paths), ungroup_keys(value, key)
-    return None
+    pairs = zip(args, args[1:], strict=False)
+    session_id = next((v for f, v in pairs if f in ("--resume", "-r") and logs.is_session_id(v)), None)
+    if session_id is None:
+        return None
+    paths = Paths.from_env()
+    directory = logs.session_dir(paths, session_id)
+    if directory is None:
+        print(f"No session with ID {session_id}", file=sys.stderr)
+        return 1
+    group = RestartState(paths).load()
+    key = group_of(session_id, group, lambda: logs.scan_sessions(paths.all_log_dirs())[1])
+    return resume_dir(directory, paths), ungroup_keys(session_id, key)
 
 
 def _tty() -> int | None:
