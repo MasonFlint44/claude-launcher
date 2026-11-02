@@ -19,12 +19,12 @@ The installer:
 4. Links the theme to `~/.config/ghostty/themes/claude-dark`.
 5. Adds the app icon and a **Claude Code** desktop launcher for your terminal (see below), with a Claude Code profile in terminals that use profiles.
 
-Re-running it is safe; it updates what's already there, and remembers the options you gave it last time. It never replaces a file that isn't one of its own links.
+It checks `--terminal` and `--icon` first, and changes nothing if one is wrong. Re-running it is safe; it updates what's already there, and remembers the options you gave it last time. It never replaces a file that isn't one of its own links.
 
 | Option | Does |
 |---|---|
 | `--terminal NAME[,NAME...]` | The terminal(s) **Claude Code** opens: `ghostty`, `kitty`, `wezterm`, `ptyxis`, `gnome-terminal`, `konsole`, `guake` or `default`. The first gets the plain name, the others "Claude Code (Guake)" and so on. `auto` goes back to picking. |
-| `--icon FILE` | Your own app icon, an `.svg` or a square `.png`. A copy is kept, so the original can move. `--icon default` goes back to the one in `share/icons`. |
+| `--icon FILE` | Your own app icon, an `.svg` or a square `.png` (512 by 512 or bigger looks sharpest; any size works). A copy is kept, so the original can move. `--icon default` goes back to the one in `share/icons`. |
 | `--uninstall` | Takes everything out again. |
 
 ## The Claude Code app

@@ -225,6 +225,14 @@ def _same_dir(a: str, b: str) -> bool:
     return a.replace("/", "\\").rstrip("\\").lower() == b.replace("/", "\\").rstrip("\\").lower()
 
 
+def check_icon(icon: str) -> None:
+    """--icon's file, for Windows Terminal (WSL's profile too)."""
+    if not icon.lower().endswith(".png"):
+        raise ValueError("the icon for Windows Terminal must be a .png")
+    if not os.path.isfile(icon):
+        raise ValueError(f"not a file: {icon}")
+
+
 class WindowsSetup:
     what = "the Windows Terminal profile"
     done = 'Restart Windows Terminal and open a "Claude Code" tab, or run claude-launcher in any terminal.'
@@ -305,14 +313,15 @@ class WindowsSetup:
         if icon and icon.lower() == "default":
             kept.unlink(missing_ok=True)
         elif icon:
-            if not icon.lower().endswith(".png"):
-                raise ValueError("the icon for Windows Terminal must be a .png")
+            check_icon(icon)
             kept.parent.mkdir(parents=True, exist_ok=True)
             terminal.copy_icon(icon, kept)
         return kept if kept.is_file() else DEFAULT_ICON
 
-    def check(self) -> None:
-        """Nothing to check before installing here."""
+    def check(self, terminal_names: str | None, icon: str | None) -> None:
+        """--icon, before anything is changed."""
+        if icon and icon.lower() != "default":
+            check_icon(icon)
 
     def uninstall(self) -> Iterator[str]:
         shim = _bin_dir(self.env) / "claude-launcher.cmd"

@@ -15,7 +15,7 @@ Logs go to `.work/` (gitignored). CI (`.github/workflows/test.yml`) runs all thr
 - the links, the hook in settings.json, and the desktop entry (`desktop-file-validate`);
 - that fzf is usable after install: the distro's, or the launcher's own download where the distro's is too old;
 - a second install;
-- the whole test suite on the distro's Python, with PyGObject and a comma-decimal locale so nothing is skipped but the Ghostty theme check;
+- the whole test suite on the distro's Python, with PyGObject, the hicolor icon theme and a comma-decimal locale, so the only skips are the Ghostty theme check, the old-Python check (`test_on_a_real_old_python`, where there's no Python older than 3.10) and the live WSL tests (`tests/wsl/test_interop_live.py`); any other skip fails the run;
 - `--uninstall`, and that everything it set up is gone.
 
 pytest and pyte are in a venv built on the system Python; the launcher never uses it. About 35 s a distro once the images are built.

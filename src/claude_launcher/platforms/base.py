@@ -99,9 +99,10 @@ class Setup(Protocol):
         `terminal_names` and `icon` are the installer's --terminal and --icon."""
         ...
 
-    def check(self) -> None:
-        """Raise if this machine can't be set up at all, before the installer
-        changes anything (WSL: which distro this is)."""
+    def check(self, terminal_names: str | None, icon: str | None) -> None:
+        """Raise if this machine can't be set up (WSL: which distro this is),
+        or install() would turn down --terminal or --icon, before the
+        installer changes anything."""
         ...
 
     def uninstall(self) -> Iterator[str]:
