@@ -907,7 +907,7 @@ def group_of(session_id: str, group: Group, continued_from: Callable[[], dict[st
 
 def ungroup_keys(session_id: str, key: str | None) -> list[str]:
     """What resuming a session takes out of the restart group once Claude has
-    started: the session and the key it's listed under. None if it isn't in
+    started: the session and the key it's listed under. Empty if it isn't in
     the group, so an ordinary resume leaves the group's file alone."""
     return list(dict.fromkeys([session_id, key])) if key else []
 

@@ -110,8 +110,20 @@ def _resume(args: Sequence[str]) -> tuple[str, list[str]] | int | None:
     if directory is None:
         print(f"No session with ID {session_id}", file=sys.stderr)
         return 1
-    group = RestartState(paths).load()
-    key = group_of(session_id, group, lambda: logs.scan_sessions(paths.all_log_dirs())[1])
+    # Sorted first, as opening the picker does: a session a restart closed
+    # joins the group now, and so leaves it, instead of coming back as a ↻
+    # row at the next picker although it was resumed.
+    state = RestartState(paths)
+    try:
+        group = state.sort()
+    except OSError:  # can't write the group: resume anyway, from what's there
+        group = state.load()
+
+    def continued_from() -> dict[str, str]:
+        log = paths.log_for(session_id)  # continuations never leave their log directory
+        return logs.scan_sessions([log.parent] if log else [])[1]
+
+    key = group_of(session_id, group, continued_from)
     return resume_dir(directory, paths), ungroup_keys(session_id, key)
 
 
@@ -334,7 +346,10 @@ def main(args: list[str]) -> int:
         print(e, file=sys.stderr)
         return 1
     # `--resume <id>`: straight to that session, in the directory it was started in.
-    resume = _resume(args)
+    try:
+        resume = _resume(args)
+    except KeyboardInterrupt:  # Ctrl-C in the pause before resuming from ~
+        return QUIT
     if isinstance(resume, int):  # an error, already shown
         return resume
     signals = _Signals()
