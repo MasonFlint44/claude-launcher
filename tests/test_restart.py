@@ -525,14 +525,31 @@ def test_a_lost_boots_last_moment_counts_a_session_whose_log_is_gone(setup):
     assert lost(setup).sort().sessions == {}
 
 
-def test_a_lost_boots_session_with_no_end_still_counts_from_this_boot(setup):
+def test_a_lost_boots_session_with_no_end_shares_its_restart(setup):
+    # One restart, one time: not this boot's start for one and the boot's
+    # last moment for the others.
     open_, ended = setup.session(), setup.session()
     setup.record(open_, pid=1)
     setup.record(ended, pid=2, ended=NOW - 700)
     assert lost(setup).sort().sessions == {
-        open_: Closed(BOOT_STARTED, "restart"),
+        open_: Closed(NOW - 700, "restart"),
         ended: Closed(NOW - 700, "restart"),
     }
+
+
+def test_a_session_with_no_end_started_after_the_boots_last_end_counts_from_this_boot(setup):
+    open_, ended = setup.session(), setup.session()
+    setup.record(open_, pid=1, started=NOW - 650)
+    setup.record(ended, pid=2, ended=NOW - 700)
+    assert lost(setup).sort().sessions[open_] == Closed(BOOT_STARTED, "restart")
+
+
+def test_a_session_with_no_end_shares_its_boots_last_end_when_the_system_cant_be_asked(setup, claude_home):
+    open_, ended = setup.session(), setup.session()
+    setup.record(open_, pid=1)
+    setup.record(ended, pid=2, ended=NOW - 700)
+    assert setup.make(readable=False).sort().sessions == {open_: Closed(NOW - 700, "restart")}
+    assert records(claude_home) == [f"{LAST_BOOT}_2"]  # the one with an end waits
 
 
 def test_a_lost_boots_events_still_count(setup):

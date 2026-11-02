@@ -29,7 +29,8 @@ seconds after it ended was closed by it; when several did, the reason with
 the lowest rank wins: a restart over the logout it causes, and a platform's
 own reasons (WSL stopping) after both. One that never recorded an end (the
 power was cut, or the hook never got to run) was closed by the first event
-after it started.
+after it started, or, with none from an earlier boot, when that boot ended:
+the latest end among its records, as below, else this boot's start.
 
 When the system has lost an earlier boot's end (the event source's
 boot_lost: a journal kept only in memory, or a full or cleared event log),
@@ -365,6 +366,15 @@ class RestartState:
             self._boot_started = self.host.boot_start(now)
         return self._boot_started
 
+    def _open_at_boot_end(self, record: Record, now: float, boot_end: float | None) -> Closed:
+        """An earlier boot's record with no end, that no event closed: it was
+        open when that boot ended. The latest end among the boot's records
+        stands in for when, as for a lost boot, so one restart is one time;
+        without one after it started, this boot's start."""
+        if boot_end is not None and boot_end >= record.started:
+            return Closed(boot_end, "restart")
+        return Closed(self._boot_start(now), "restart")
+
     def _closed_by(
         self, record: Record, same_boot: bool, now: float, boot_end: float | None = None
     ) -> Closed | None | object:
@@ -374,7 +384,7 @@ class RestartState:
         events = self.events.events(record, same_boot)
         if events is None:  # the system can't be asked
             if record.ended is None and not same_boot:
-                return Closed(self._boot_start(now), "restart")  # it was open when that boot ended
+                return self._open_at_boot_end(record, now, boot_end)
             return _UNDECIDED
         if record.ended is None:
             after = [e for e in events if e.start >= record.started]
@@ -382,7 +392,7 @@ class RestartState:
             if first:
                 return Closed(first.start, first.why)
             if not same_boot:  # it was open when that boot ended, though the system no longer says when
-                return Closed(self._boot_start(now), "restart")
+                return self._open_at_boot_end(record, now, boot_end)
             return None  # it crashed, or was killed
         if not same_boot:
             lost = self.events.boot_lost(record)
