@@ -3,9 +3,11 @@ test_e2e.py runs the real thing in a pseudo-terminal."""
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -365,6 +367,58 @@ def resume(claude_home, monkeypatch, tmp_path):
 
     run.proj = proj
     return run
+
+
+# A claude that waits, up to 5 s, for the group to lose the session: exits 0
+# if it did while claude ran, 3 if not.
+WAITS_TO_LEAVE = """
+import json, sys, time
+path, key = sys.argv[1:]
+end = time.time() + 5
+while key in json.load(open(path)) and time.time() < end:
+    time.sleep(0.02)
+sys.exit(3 if key in json.load(open(path)) else 0)
+"""
+
+
+def group(claude_home, *sids):
+    claude_home.paths.state.mkdir(parents=True, exist_ok=True)
+    closed = {"at": time.time() - 3600, "why": "restart"}
+    claude_home.paths.restored.write_text(json.dumps({sid: closed for sid in sids}))
+
+
+def in_group(claude_home):
+    return set(json.loads(claude_home.paths.restored.read_text()))
+
+
+def test_resume_takes_the_session_out_of_the_group_while_claude_runs(resume, claude_home):
+    sid = claude_home.log(resume.proj, conversation("x", resume.proj))
+    other = claude_home.log(resume.proj, conversation("y", resume.proj))
+    group(claude_home, sid, other)
+    assert resume([sys.executable, "-c", WAITS_TO_LEAVE, str(claude_home.paths.restored), sid], sid) == 0
+    assert in_group(claude_home) == {other}
+
+
+def test_resume_takes_out_the_session_it_continues(resume, claude_home):
+    newer = claude_home.log(resume.proj, conversation("newer", resume.proj))
+    entries = [*conversation("older", resume.proj), {"type": "continued-in", "continuedInSessionId": newer}]
+    older = claude_home.log(resume.proj, entries)
+    group(claude_home, older)
+    assert resume([sys.executable, "-c", WAITS_TO_LEAVE, str(claude_home.paths.restored), older], newer) == 0
+    assert in_group(claude_home) == set()
+
+
+def test_resume_that_cant_start_stays_in_the_group(resume, claude_home, tmp_path, capsys):
+    sid = claude_home.log(resume.proj, conversation("x", resume.proj))
+    group(claude_home, sid)
+    assert resume([str(tmp_path / "no-claude")], sid) == 1
+    assert in_group(claude_home) == {sid}
+
+
+def test_resume_outside_the_group_leaves_its_file_alone(resume, claude_home):
+    group(claude_home)  # "{}", with no newline: a rewrite would add one
+    assert resume([sys.executable, "-c", ""]) == 0
+    assert claude_home.paths.restored.read_text() == "{}"
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX signals")

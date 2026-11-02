@@ -25,7 +25,7 @@ from pathlib import Path
 
 from . import fzf, logs, text, theme, title
 from .paths import Paths
-from .picker import FzfTooOld, Pick, Picker, resume_dir
+from .picker import FzfTooOld, Pick, Picker, group_of, resume_dir, ungroup_keys
 from .restart import RestartState
 
 USAGE = """\
@@ -94,9 +94,11 @@ class _Signals:
                 raise _Exit(self.pending)
 
 
-def _resume_dir(args: Sequence[str]) -> str | int | None:
-    """`--resume <id>` / `-r <id>`: the directory to resume that session in.
-    None if the arguments don't ask to resume one; 1 if there's no such session."""
+def _resume(args: Sequence[str]) -> tuple[str, list[str]] | int | None:
+    """`--resume <id>` / `-r <id>`: the directory to resume that session in,
+    and what to take out of the restart group once Claude has started, as
+    Enter in the picker does. None if the arguments don't ask to resume one;
+    1 if there's no such session."""
     for flag, value in zip(args, args[1:], strict=False):
         if flag in ("--resume", "-r") and logs.is_session_id(value):
             paths = Paths.from_env()
@@ -104,7 +106,9 @@ def _resume_dir(args: Sequence[str]) -> str | int | None:
             if directory is None:
                 print(f"No session with ID {value}", file=sys.stderr)
                 return 1
-            return resume_dir(directory, paths)
+            group = RestartState(paths).load()
+            key = group_of(value, group, lambda: logs.scan_sessions(paths.all_log_dirs())[1])
+            return resume_dir(directory, paths), ungroup_keys(value, key)
     return None
 
 
@@ -317,7 +321,7 @@ def main(args: list[str]) -> int:
         print(e, file=sys.stderr)
         return 1
     # `--resume <id>`: straight to that session, in the directory it was started in.
-    resume = _resume_dir(args)
+    resume = _resume(args)
     if isinstance(resume, int):  # an error, already shown
         return resume
     signals = _Signals()
@@ -327,7 +331,7 @@ def main(args: list[str]) -> int:
         # Claude Dark for this tab while the launcher runs, Claude included.
         _theme(run, "apply")
         if resume is not None:
-            code = _claude(signals, resume, args)
+            code = _claude(signals, resume[0], args, _ungroup(resume[1]))
             return 1 if code is None else code
         return _loop(signals, run, args)
     except _Exit as e:
