@@ -3,6 +3,7 @@ the System event log for restarts and logoffs (eventlog.py)."""
 
 from __future__ import annotations
 
+import ntpath
 import os
 import re
 import sys
@@ -26,6 +27,14 @@ def getenv(env: Mapping[str, str], name: str) -> str | None:
         return env[name]
     folded = name.upper()
     return next((v for k, v in env.items() if k.upper() == folded), None)
+
+
+def system32(env: Mapping[str, str], program: str) -> str:
+    """`program` in System32, by full path: by its bare name CreateProcess
+    looks in the current directory first, which is the user's project.
+    Without SystemRoot (a scrubbed environment), the bare name, as for cmd."""
+    root = getenv(env, "SystemRoot")
+    return ntpath.join(root, "System32", program) if root else program
 
 
 def local_app_data(env: Mapping[str, str]) -> Path:

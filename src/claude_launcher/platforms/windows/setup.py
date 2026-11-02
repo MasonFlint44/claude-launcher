@@ -314,13 +314,13 @@ class WindowsSetup:
         if terminal_names:
             yield "warning: --terminal is for Linux desktops; on Windows the launcher opens in Windows Terminal"
         self.data_dir.mkdir(parents=True, exist_ok=True)
-        files = {
+        written = {
             "claude-session-hook.py": entry_script(HOOK),
             "claude-launcher.py": entry_script(LAUNCHER),
             self._hook_cmd.name: run_cmd("claude-session-hook.py", "-I"),
             self._launcher_cmd.name: run_cmd("claude-launcher.py"),
         }
-        for name, text in files.items():
+        for name, text in written.items():
             _write(self.data_dir / name, text)
         shim = _bin_dir(self.env) / "claude-launcher.cmd"
         if shim.exists() and _SHIM_MARK not in shim.read_text(encoding="utf-8", errors="replace"):

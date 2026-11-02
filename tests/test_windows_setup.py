@@ -248,6 +248,31 @@ def test_a_failed_write_leaves_the_old_file(setup, env, monkeypatch, name):
     assert not list(setup.data_dir.glob("*.tmp")) and not list(shim.parent.glob("*.tmp"))
 
 
+@pytest.mark.parametrize("where", ["write", "replace"])
+def test_a_failed_fragment_write_leaves_the_old_one_and_no_tmp(setup, env, monkeypatch, where):
+    list(setup.install(None, None))
+    fragments = terminal.fragments_dir(env)
+    before = {p: p.read_bytes() for p in fragments.iterdir()}
+    write_text = Path.write_text
+
+    def disk_full(self, text, *args, **kwargs):
+        if self.name == "claude-launcher.json.tmp":
+            write_text(self, text[:20], *args, **kwargs)
+            raise OSError(28, "No space left on device")
+        return write_text(self, text, *args, **kwargs)
+
+    def held(tmp, path):
+        raise PermissionError(13, "The process cannot access the file")
+
+    if where == "write":
+        monkeypatch.setattr(Path, "write_text", disk_full)
+    else:
+        monkeypatch.setattr(terminal.files, "replace", held)
+    with pytest.raises(OSError):
+        list(WindowsSetup(setup.data_dir, env=env).install(None, None))
+    assert {p: p.read_bytes() for p in fragments.iterdir()} == before
+
+
 def test_files_already_as_they_should_be_are_left_alone(setup, env, monkeypatch):
     # cmd reads a running .cmd by its byte offset, so running install.ps1
     # again mustn't touch one that open launcher tabs are running.
