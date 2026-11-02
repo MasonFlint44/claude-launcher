@@ -210,3 +210,15 @@ def test_an_icon_that_isnt_there(tmp_path, name, run):
 def test_help_lists_its_own_options(tmp_path, run):
     done = run(tmp_path, "--help")
     assert "install.sh -h|--help" in done.stdout
+
+
+def test_icon_equals_expands_a_tilde(tmp_path, run):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "mine.svg").write_text("<svg/>")
+    done = run(home, "--icon=~/mine.svg")
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert (home / ".local" / "share" / "claude-launcher" / "icon.svg").read_text() == "<svg/>"
+    done = run(home, "--icon=~")
+    assert done.returncode == 1
+    assert done.stderr.strip().endswith(f"not a file: {home}")
