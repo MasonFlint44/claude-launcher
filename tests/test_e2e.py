@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import signal
+import time
 
 import pytest
 
@@ -260,6 +262,46 @@ def test_resume_from_the_sessions_view(launch, claude_home, tmp_path):
     t.send("enter")
     t.wait_for("fake claude in")
     assert launch.calls() == [(str(proj), f"--resume {sid}")]
+
+
+def in_the_group(claude_home, sid):
+    """Put a session in the restart group, as a restart an hour ago would have."""
+    claude_home.paths.state.mkdir(parents=True, exist_ok=True)
+    claude_home.paths.restored.write_text(json.dumps({sid: {"at": time.time() - 3600, "why": "restart"}}))
+
+
+def test_a_resumed_session_leaves_the_group_once_claude_starts(launch, claude_home, tmp_path):
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    sid = claude_home.log(proj, conversation("open at the restart", proj))
+    in_the_group(claude_home, sid)
+    t = launch()
+    t.wait_for("Select a project directory for Claude")
+    t.send("ctrl-s")
+    t.wait_for("↻")
+    t.send("enter")
+    t.wait_for("fake claude in")
+    assert launch.calls() == [(str(proj), f"--resume {sid}")]
+    end = time.time() + 5  # the launcher takes it out just after starting claude
+    while sid in json.loads(claude_home.paths.restored.read_text()) and time.time() < end:
+        time.sleep(0.05)
+    assert sid not in json.loads(claude_home.paths.restored.read_text())
+
+
+def test_a_session_claude_cant_resume_stays_in_the_group(launch, claude_home, tmp_path):
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    sid = claude_home.log(proj, conversation("open at the restart", proj))
+    in_the_group(claude_home, sid)
+    (tmp_path / "bin" / "claude").unlink()
+    t = launch()
+    t.wait_for("Select a project directory for Claude")
+    t.send("ctrl-s")
+    t.wait_for("↻")
+    t.send("enter")
+    t.wait_for("claude isn't on your PATH")
+    t.wait_for("Select a project directory for Claude")
+    assert sid in json.loads(claude_home.paths.restored.read_text())
 
 
 def test_ctrl_s_and_esc_go_back(launch, claude_home):
