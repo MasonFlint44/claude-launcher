@@ -394,3 +394,70 @@ def test_a_boot_partly_in_the_log_offers_back_only_what_its_restart_closed(claud
     write_record(claude_home.paths, a, "2" * 32, 2, T, T + 1002)
     state = RestartState(claude_home.paths, el.WindowsEvents(log, sid=lambda: ME), host, now=lambda: now)
     assert state.sort().sessions == {a: Closed(T + 1000, "restart")}
+
+
+class Ran:
+    """Stands in for subprocess.run, keeping each argv."""
+
+    def __init__(self, stdout=b""):
+        self.argv: list[list[str]] = []
+        self.stdout = stdout
+
+    def __call__(self, argv, **kwargs):
+        self.argv.append(argv)
+        return el.subprocess.CompletedProcess(argv, 0, self.stdout, b"")
+
+
+@pytest.mark.parametrize(
+    ("env", "system32"),
+    [
+        ({"SystemRoot": "C:\\Windows"}, "C:\\Windows\\System32"),
+        ({"SYSTEMROOT": "D:\\Win"}, "D:\\Win\\System32"),
+        ({"systemroot": "\\\\server\\share\\Windows"}, "\\\\server\\share\\Windows\\System32"),
+    ],
+)
+def test_wevtutil_and_whoami_run_from_system32_by_full_path(monkeypatch, env, system32):
+    # By its bare name CreateProcess would look in the current directory
+    # (the user's project) first.
+    monkeypatch.setattr(el.os, "environ", env)
+    ran = Ran(b'"me\\mason","S-1-5-21-1-2-3-1000"\r\n')
+    monkeypatch.setattr(el.subprocess, "run", ran)
+    el._wevtutil(["qe", "System"])
+    assert el.user_sid() == "S-1-5-21-1-2-3-1000"
+    assert [argv[0] for argv in ran.argv] == [f"{system32}\\wevtutil.exe", f"{system32}\\whoami.exe"]
+    assert ran.argv[0][1:] == ["qe", "System"]
+
+
+def test_without_systemroot_the_bare_name_as_for_cmd(monkeypatch):
+    monkeypatch.setattr(el.os, "environ", {})
+    ran = Ran()
+    monkeypatch.setattr(el.subprocess, "run", ran)
+    el._wevtutil(["qe", "System"])
+    el.user_sid()
+    assert [argv[0] for argv in ran.argv] == ["wevtutil.exe", "whoami.exe"]
+
+
+def test_wsl_runs_them_through_interop_not_here(monkeypatch):
+    from claude_launcher.platforms.wsl.events import WslEvents
+
+    class Interop:
+        def __init__(self):
+            self.asked: list[str] = []
+
+        def wevtutil(self, args):
+            self.asked.append("wevtutil.exe")
+            return ""
+
+        def user_sid(self):
+            self.asked.append("whoami.exe")
+            return ME
+
+    monkeypatch.setattr(el.os, "environ", {"SystemRoot": "C:\\Windows"})
+    ran = Ran()
+    monkeypatch.setattr(el.subprocess, "run", ran)
+    interop = Interop()
+    events = WslEvents(FakeHost(), interop=interop)
+    assert events.windows.sid() == ME
+    assert events.windows.log.since(0) == []
+    assert sorted(interop.asked) == ["wevtutil.exe", "whoami.exe"]
+    assert ran.argv == []

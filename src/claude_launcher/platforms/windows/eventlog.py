@@ -27,6 +27,7 @@ the next.
 from __future__ import annotations
 
 import calendar
+import os
 import re
 import subprocess
 import time
@@ -35,6 +36,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
 from ..base import Event
+from . import system32
 
 _NS = "{http://schemas.microsoft.com/win/2004/08/events/event}"
 KERNEL = "Microsoft-Windows-Kernel-General"
@@ -109,7 +111,7 @@ def parse_events(xml: str) -> list[LogEvent]:
 
 def _wevtutil(args: Sequence[str]) -> str | None:
     try:
-        done = subprocess.run(["wevtutil.exe", *args], capture_output=True, timeout=15)
+        done = subprocess.run([system32(os.environ, "wevtutil.exe"), *args], capture_output=True, timeout=15)
     except (OSError, subprocess.SubprocessError):
         return None
     if done.returncode != 0:
@@ -195,10 +197,11 @@ def _fast_startups(events: list[LogEvent]) -> list[tuple[float, float]]:
 
 
 def user_sid() -> str | None:
-    """The Windows user's SID, which logoffs are logged under. whoami.exe, so
-    WSL can ask too."""
+    """The Windows user's SID, which logoffs are logged under, from
+    whoami.exe. WSL asks through interop (Interop.user_sid) instead."""
     try:
-        done = subprocess.run(["whoami.exe", "/user", "/fo", "csv", "/nh"], capture_output=True, timeout=10)
+        argv = [system32(os.environ, "whoami.exe"), "/user", "/fo", "csv", "/nh"]
+        done = subprocess.run(argv, capture_output=True, timeout=10)
     except (OSError, subprocess.SubprocessError):
         return None
     m = re.search(rb'"(S-1-[0-9-]+)"', done.stdout)
