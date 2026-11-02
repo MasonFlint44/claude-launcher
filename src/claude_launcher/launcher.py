@@ -12,6 +12,7 @@ exit, as a shell would, so Claude is never left running without the launcher.
 from __future__ import annotations
 
 import contextlib
+import errno
 import os
 import secrets
 import shutil
@@ -25,6 +26,7 @@ from pathlib import Path
 
 from . import fzf, logs, text, theme, title
 from .paths import Paths
+from .paths import which as _which
 from .picker import FzfTooOld, Pick, Picker, group_of, resume_dir, ungroup_keys
 from .restart import RestartState
 
@@ -186,16 +188,22 @@ def _batch_arg(arg: str) -> str:
 
 
 def _claude_command(
-    args: Sequence[str], which=shutil.which, windows: bool = os.name == "nt", comspec: str | None = None
+    args: Sequence[str],
+    which: Callable[[str], str | None] | None = None,
+    windows: bool = os.name == "nt",
+    comspec: str | None = None,
 ) -> list[str] | str:
     """How to run claude with `args`. On Windows, npm installs it as
     claude.cmd, which CreateProcess can't start by name (it doesn't try
-    PATHEXT), so it's found on PATH and run through cmd."""
+    PATHEXT), so it's found on PATH and run through cmd. Never by its bare
+    name there: CreateProcess would look in the current directory first."""
     if not windows:
         return ["claude", *args]
-    found = which("claude")
-    if not found or not found.lower().endswith((".cmd", ".bat")):
-        return [found or "claude", *args]
+    found = which("claude") if which else _which("claude", windows=True)
+    if not found:
+        raise FileNotFoundError(errno.ENOENT, "claude isn't on your PATH", "claude")
+    if not found.lower().endswith((".cmd", ".bat")):
+        return [found, *args]
     if any(c in a for a in args for c in "\r\n\0"):
         raise ValueError("Can't pass a line break to claude.cmd")
     line = " ".join([f'"{found}"', *(_batch_arg(a) for a in args)])
@@ -203,8 +211,9 @@ def _claude_command(
     # System32's cmd.exe, not %ComSpec%, which can be another shell (TCC)
     # that reads these switches its own way.
     if comspec is None:
-        root = os.environ.get("SYSTEMROOT")  # os.environ ignores case on Windows
-        comspec = os.path.join(root, "System32", "cmd.exe") if root else "cmd.exe"
+        from .platforms.windows import system32
+
+        comspec = system32(os.environ, "cmd.exe")
     return f'"{comspec}" /d /e:on /v:off /s /c "{line}"'
 
 
@@ -282,7 +291,7 @@ def _loop(signals: _Signals, run: Path, args: list[str]) -> int:
             time.sleep(1)
 
 
-def version() -> str:
+def version(windows: bool = os.name == "nt") -> str:
     """The version, with the commit when the launcher runs from a git clone
     (how it's installed). Leaves the commit out if git can't say."""
     from . import __version__
@@ -290,9 +299,12 @@ def version() -> str:
 
     if not (REPO_DIR / ".git").exists():  # git would look in the directories above
         return __version__
+    git = _which("git", windows=windows)
+    if not git:
+        return __version__
     try:
         done = subprocess.run(
-            ["git", "-C", str(REPO_DIR), "describe", "--tags", "--always", "--dirty"],
+            [git, "-C", str(REPO_DIR), "describe", "--tags", "--always", "--dirty"],
             capture_output=True,
             text=True,
             timeout=5,

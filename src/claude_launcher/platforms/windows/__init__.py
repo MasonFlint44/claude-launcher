@@ -37,6 +37,33 @@ def system32(env: Mapping[str, str], program: str) -> str:
     return ntpath.join(root, "System32", program) if root else program
 
 
+_PATHEXT = ".COM;.EXE;.BAT;.CMD"
+
+
+def on_path(env: Mapping[str, str], program: str, cwd: str | None = None) -> str | None:
+    """`program` (a bare name) by its full path on PATH, trying PATHEXT's
+    extensions as shutil.which does, but never in the current directory:
+    shutil.which looks there first on Windows, and a cloned repo could plant
+    a fzf.bat or claude.cmd. PATH entries that are relative, or are the
+    current directory, are skipped too."""
+    here = _folded(cwd or os.getcwd())
+    # Lower case, as programs are usually named; Windows ignores case anyway.
+    exts = [e.lower() for e in (getenv(env, "PATHEXT") or _PATHEXT).split(";") if e]
+    names = [program] if program.lower().endswith(tuple(exts)) else [program + e for e in exts]
+    for entry in (getenv(env, "PATH") or "").split(os.pathsep):
+        if not os.path.isabs(entry) or _folded(entry) == here:
+            continue
+        for name in names:
+            path = os.path.join(entry, name)
+            if os.path.isfile(path):
+                return path
+    return None
+
+
+def _folded(path: str) -> str:
+    return os.path.normcase(os.path.realpath(path)).casefold()
+
+
 def local_app_data(env: Mapping[str, str]) -> Path:
     """%LOCALAPPDATA%, or where it is by default when it isn't set."""
     home = getenv(env, "USERPROFILE") or str(Path.home())

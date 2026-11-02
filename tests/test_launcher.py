@@ -260,8 +260,37 @@ class TestClaudeCommand:
         found = "C:\\Users\\me\\.local\\bin\\claude.exe"
         assert launcher._claude_command(["-c"], which=lambda name: found, windows=True) == [found, "-c"]
 
-    def test_windows_not_found_is_left_to_fail(self):
-        assert launcher._claude_command(["-c"], which=lambda name: None, windows=True) == ["claude", "-c"]
+    def test_windows_not_found_never_runs_it_by_name(self):
+        # By its bare name, CreateProcess would look in the current directory first.
+        with pytest.raises(FileNotFoundError) as e:
+            launcher._claude_command(["-c"], which=lambda name: None, windows=True)
+        assert e.value.filename == "claude"
+
+    def test_windows_never_takes_one_from_the_current_directory(self, tmp_path, monkeypatch):
+        project = tmp_path / "project"
+        project.mkdir()
+        (project / "claude.cmd").write_text("")
+        monkeypatch.chdir(project)
+        monkeypatch.setenv("PATH", str(tmp_path / "bin"))
+        with pytest.raises(FileNotFoundError):
+            launcher._claude_command(["-c"], windows=True)
+        (tmp_path / "bin").mkdir()
+        (tmp_path / "bin" / "claude.exe").write_text("")
+        assert launcher._claude_command(["-c"], windows=True) == [str(tmp_path / "bin" / "claude.exe"), "-c"]
+
+    def test_windows_not_found_says_so(self, monkeypatch, tmp_path, capsys):
+        real = launcher._claude_command
+        monkeypatch.setattr(launcher, "_claude_command", lambda args: real(args, which=lambda n: None, windows=True))
+        assert launcher._claude(FakeSignals(0), str(tmp_path), []) is None
+        assert capsys.readouterr().err == "claude isn't on your PATH\n"
+
+    @pytest.mark.parametrize("key", ["SystemRoot", "SYSTEMROOT", "systemroot"])
+    def test_windows_npm_cmd_through_system32s_cmd_whatever_the_case(self, monkeypatch, key):
+        for k in [k for k in os.environ if k.upper() == "SYSTEMROOT"]:
+            monkeypatch.delenv(k)
+        monkeypatch.setenv(key, "E:\\Windows")
+        line = launcher._claude_command([], which=lambda name: "C:\\npm\\claude.cmd", windows=True)
+        assert line.startswith('"E:\\Windows\\System32\\cmd.exe" ')  # not ComSpec, and no C: assumed
 
     def test_windows_npm_cmd_through_cmd(self):
         found = "C:\\Users\\me\\AppData\\Roaming\\npm\\claude.CMD"
@@ -353,8 +382,30 @@ def test_version_from_git(monkeypatch, tmp_path, described, shown):
     monkeypatch.setattr(paths, "REPO_DIR", tmp_path)
     (tmp_path / ".git").mkdir()
     out = described.format(v=__version__) + "\n"
+    monkeypatch.setattr(launcher, "_which", lambda name, windows: "/usr/bin/git")
     monkeypatch.setattr(subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(argv, 0, stdout=out))
     assert launcher.version() == shown.format(v=__version__)
+
+
+def test_version_on_windows_never_runs_git_from_the_current_directory(monkeypatch, tmp_path):
+    from claude_launcher import __version__, paths
+
+    monkeypatch.setattr(paths, "REPO_DIR", tmp_path / "repo")
+    (tmp_path / "repo" / ".git").mkdir(parents=True)
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "git.bat").write_text("")
+    monkeypatch.chdir(project)
+    monkeypatch.setenv("PATH", str(tmp_path / "bin"))
+    ran = []
+    out = subprocess.CompletedProcess([], 0, stdout="abc1234\n")
+    monkeypatch.setattr(subprocess, "run", lambda argv, **kw: ran.append(argv) or out)
+    assert launcher.version(windows=True) == __version__  # no git but the planted one: no commit
+    assert ran == []
+    (tmp_path / "bin").mkdir()
+    (tmp_path / "bin" / "git.exe").write_text("")
+    assert launcher.version(windows=True) == f"{__version__} (abc1234)"
+    assert ran[0][0] == str(tmp_path / "bin" / "git.exe")
 
 
 def test_help_after_another_argument_goes_to_claude(monkeypatch, tmp_path):
