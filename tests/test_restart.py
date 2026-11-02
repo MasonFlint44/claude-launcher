@@ -194,6 +194,23 @@ def test_a_record_moved_aside_is_read(setup):
     assert setup.make(LOGOUT).sort().sessions == {sid: Closed(LOGOUT.start, "logout")}
 
 
+def test_a_record_moved_aside_whose_session_runs_again_is_deleted(setup, claude_home):
+    sid = setup.session()
+    setup.record(sid, boot=THIS_BOOT, started=LOGOUT.start - 100, name=f"{THIS_BOOT}_100_{sid}")
+    setup.record(sid, boot=THIS_BOOT, pid=200, started=NOW - 60)
+    setup.host.running.add(200)
+    assert len(setup.make(LOGOUT).sort()) == 0
+    assert records(claude_home) == [f"{THIS_BOOT}_200"]
+
+
+def test_a_record_moved_aside_that_crashed_is_deleted(setup, claude_home):
+    # No end, and nothing after it started in this boot: it crashed or was killed.
+    sid = setup.session()
+    setup.record(sid, boot=THIS_BOOT, started=LOGOUT.end + 10, name=f"{THIS_BOOT}_100_{sid}")
+    assert len(setup.make(LOGOUT).sort()) == 0
+    assert records(claude_home) == []
+
+
 def test_drop_and_drop_all(setup):
     a, b = setup.session(), setup.session()
     setup.record(a, pid=1, ended=NOW - 695)
