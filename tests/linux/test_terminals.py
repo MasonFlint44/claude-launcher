@@ -391,6 +391,20 @@ class TestInstallTerminals:
         assert (ctx.data_home / "applications" / f"{APP_ID}.desktop").read_text() == before
         assert desktop.saved_terminals(ctx) == ["ghostty"]
 
+    def test_ptyxis_palette_goes_without_gsettings(self, ctx):
+        desktop.install_terminals(ctx, ["ptyxis"])
+
+        run = ctx.run
+
+        def no_gsettings(argv):
+            if argv[0] == "gsettings":
+                raise FileNotFoundError(argv[0])
+            return run(argv)
+
+        ctx.run = no_gsettings
+        desktop.remove_terminals(ctx)
+        assert not TERMINALS["ptyxis"].palette_file(ctx).exists()
+
     def test_remove(self, ctx):
         desktop.install_terminals(ctx, ["konsole", "guake"])
         desktop.remove_terminals(ctx)
