@@ -61,7 +61,7 @@ A session that ended in that span, or up to 30 seconds before it began (desktops
 
 Anything else, like a tab you closed yourself, isn't listed. The group is kept in `~/.claude/state/claude-launcher/restored.json`.
 
-This works out of the box on Ubuntu, Debian and Fedora with GNOME or KDE. Desktop logouts come from your own user journal, which you can always read. Restarts are most precise with the system journal, and the end of an SSH login is only in it; reading it needs your user in the `adm`, `wheel` or `systemd-journal` group, as the first user on those distros is. Without it (on Arch, say, until you add yourself to one), the last thing in your own journal, usually your desktop session ending, stands in for the restart. It needs systemd, and a journal kept across reboots, as these distros do by default.
+This works out of the box on Ubuntu, Debian and Fedora with GNOME or KDE. Desktop logouts come from your own user journal, which you can always read. Restarts are most precise with the system journal, and the end of an SSH login is only in it; reading it needs your user in the `adm`, `wheel` or `systemd-journal` group, as the first user on those distros is. Without it (on Arch, say, until you add yourself to one), the last thing in your own journal, usually your desktop session ending, stands in for the restart. It needs systemd, and works best with a journal kept across reboots, as these distros do by default. When the journal no longer has the boot a session ran in (it's kept only in memory, or was cleared), there's no telling what closed it, so every session from then that didn't end with an exit you chose is listed.
 
 Only interactive Claude sessions in a terminal are recorded: not `claude -p`, SDK runs or an editor's Claude panel.
 

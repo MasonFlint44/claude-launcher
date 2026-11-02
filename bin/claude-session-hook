@@ -7,9 +7,10 @@
 # It keeps one small record per running Claude, in
 # ${CLAUDE_CONFIG_DIR:-~/.claude}/state/claude-launcher/open/<boot id>_<pid>
 # (pids start over each boot, so the boot keeps a new Claude from taking over
-# the record of one a restart closed). Start
-# writes the record. An end you chose (/exit, /clear, switching with /resume,
-# Claude's /logout) deletes it. Any other end, like closing the tab or the desktop
+# the record of one a restart closed). Start writes the record, first moving
+# another session's record under that name to <boot id>_<pid>_<its session id>.
+# An end you chose (/exit, /clear, switching with /resume, Claude's /logout)
+# deletes it. Any other end, like closing the tab or the desktop
 # closing every window for a restart or logout, keeps it with the time it
 # ended: the launcher decides later, from the journal, which it was.
 #
@@ -77,7 +78,10 @@ if [[ ${release,,} == *microsoft* ]] && read -r init 2>/dev/null < "$proc/1/stat
     printf -v boot_id '%s%012x' "${boot_id:0:20}" "${init[19]}"
   fi
 fi
-# The login session Claude runs in: for an SSH session, its end closes Claude.
+# The login session Claude runs in (its audit session ID). For an SSH login
+# that's logind's session, whose end closes Claude. On a desktop with systemd
+# 256 or later it's the user manager's session instead, so desktop logouts are
+# found by graphical-session.target stopping (platforms/linux/journal.py).
 login_session=
 read -r login_session < "/proc/$pid/sessionid" 2>/dev/null
 [[ $login_session == 4294967295 ]] && login_session=  # none
@@ -95,6 +99,14 @@ write() {  # atomically, so the launcher never reads half a record
 
 case ${1:-} in
   start)
+    # Another session's record under this pid: a Claude killed with no end
+    # (a logout, say) whose pid came back before the launcher sorted it. Keep
+    # it aside, under its session's ID, for the launcher to find.
+    old=
+    [[ -f $record ]] && read -r old < "$record"
+    if [[ $old =~ \"session_id\":\"($uuid)\" && ${BASH_REMATCH[1]} != "$session_id" ]]; then
+      mv -f "$record" "${record}_${BASH_REMATCH[1]}"
+    fi
     write "{$fields,\"started_at\":$EPOCHREALTIME}" ;;
   end)
     case $reason in

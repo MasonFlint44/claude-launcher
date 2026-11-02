@@ -55,6 +55,13 @@ class Logout:
     graphical: bool  # a desktop session, whose end closes every terminal window
 
 
+def _seconds(usec: object) -> float | None:
+    """A journal time in microseconds, as a Unix time."""
+    if isinstance(usec, (int, float)) and not isinstance(usec, bool):
+        return usec / 1e6
+    return None
+
+
 class Journal:
     def __init__(self, run: Runner = run_journalctl):
         self._run = run
@@ -72,12 +79,16 @@ class Journal:
             if out is not None:
                 try:
                     boots = json.loads(out)
+                except ValueError:
+                    boots = None
+                if isinstance(boots, list):
+                    # A last entry that isn't a number is looked up when needed.
                     self._last_entries = {
-                        normalize_boot_id(b["boot_id"]): b["last_entry"] / 1e6
+                        normalize_boot_id(b["boot_id"]): _seconds(b.get("last_entry"))
                         for b in boots
-                        if isinstance(b, dict) and "boot_id" in b and "last_entry" in b
+                        if isinstance(b, dict) and isinstance(b.get("boot_id"), str)
                     }
-                except (ValueError, TypeError, KeyError):
+                else:
                     # Before systemd 251, --list-boots ignores -o and prints
                     # "IDX BOOT_ID FIRST—LAST" in local time. Take the IDs; the
                     # times come from each boot's last entry when needed.
@@ -228,6 +239,10 @@ class JournalEvents:
       journal can be read), a restart starts at the boot's last journal entry.
       With only your own journal, that's often your desktop session ending, so
       a logout followed later by a restart may be counted as the restart.
+    - A record from a boot the journal no longer has (a journal kept only in
+      memory, vacuumed, or cleared): a restart when its Claude ended, so it's
+      offered back even if you closed it yourself. One with no end gets this
+      boot's start (restart.py).
     """
 
     def __init__(self, journal: Journal, user: Callable[[], str]):
@@ -248,4 +263,9 @@ class JournalEvents:
             restart = self.journal.restart_time(record.boot_id)
             if restart is not None:
                 events.append(Event(restart, self.journal.last_entry(record.boot_id) or restart, "restart"))
+            elif record.ended is not None:
+                # The journal no longer has that boot (kept only in memory,
+                # vacuumed, or cleared), so the restart may have been when
+                # this Claude ended. A false ↻ row is cheap; a missed session isn't.
+                events.append(Event(record.ended, record.ended, "restart"))
         return events

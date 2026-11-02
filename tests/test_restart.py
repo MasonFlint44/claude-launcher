@@ -2,6 +2,7 @@
 tests/linux/test_restart_journal.py has the rule with Linux's own events."""
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -107,6 +108,19 @@ def test_still_running_stays_and_leaves_the_group(setup, claude_home):
     assert records(claude_home) == [f"{THIS_BOOT}_200"]
 
 
+@pytest.mark.parametrize(("this_boot", "last_boot"), [("0" * 32, "f" * 32), ("f" * 32, "0" * 32)])
+def test_running_again_stays_out_whichever_record_is_read_last(setup, claude_home, this_boot, last_boot):
+    # Records are read in name order, and names start with the boot ID: the
+    # last boot's record of a session running again can come after its own.
+    setup.host.boot = this_boot
+    sid = setup.session()
+    setup.record(sid, boot=last_boot, ended=RESTART.start + 1)
+    setup.record(sid, boot=this_boot, pid=200, started=NOW - 60)
+    setup.host.running.add(200)
+    assert len(setup.make(RESTART).sort()) == 0
+    assert records(claude_home) == [f"{this_boot}_200"]
+
+
 def test_the_newer_closing_wins_whichever_record_is_read_last(setup):
     # One session resumed in another boot and closed again: two records.
     # Records are read in name order, and the boot read last holds the older one.
@@ -153,9 +167,31 @@ def test_sessions_whose_log_is_gone_are_dropped(setup, claude_home):
 def test_bad_records_are_removed_and_ones_being_written_are_left(setup, claude_home):
     claude_home.paths.open_records.mkdir(parents=True)
     (claude_home.paths.open_records / f"{LAST_BOOT}_1").write_text("{not json")
-    (claude_home.paths.open_records / f"{LAST_BOOT}_2.tmp").write_text("{}")
+    writing = claude_home.paths.open_records / f"{LAST_BOOT}_2.tmp"
+    writing.write_text("{}")
+    os.utime(writing, (NOW - 5, NOW - 5))
     setup.make(RESTART).sort()
     assert records(claude_home) == [f"{LAST_BOOT}_2.tmp"]
+
+
+def test_a_record_left_half_written_is_removed_after_a_minute(setup, claude_home):
+    # A hook killed between writing a record and renaming it.
+    claude_home.paths.open_records.mkdir(parents=True)
+    left = claude_home.paths.open_records / f"{LAST_BOOT}_2.tmp"
+    left.write_text("{}")
+    other = claude_home.paths.open_records / "notes.tmp"  # not a record's: left alone
+    other.write_text("")
+    for path in (left, other):
+        os.utime(path, (NOW - 61, NOW - 61))
+    setup.make(RESTART).sort()
+    assert records(claude_home) == ["notes.tmp"]
+
+
+def test_a_record_moved_aside_is_read(setup):
+    # The hook keeps a record under <name>_<session id> when a new Claude gets its pid.
+    sid = setup.session()
+    setup.record(sid, boot=THIS_BOOT, ended=LOGOUT.start + 1, name=f"{THIS_BOOT}_100_{sid}")
+    assert setup.make(LOGOUT).sort().sessions == {sid: Closed(LOGOUT.start, "logout")}
 
 
 def test_drop_and_drop_all(setup):
@@ -336,6 +372,25 @@ def test_record_loads_start_ticks_if_there(tmp_path, extra, ticks):
     path.write_text(json.dumps(data))
     record = Record.load(path)
     assert record is not None and record.start_ticks == ticks and record.started == NOW
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"started_at": "nan"},
+        {"started_at": "inf"},
+        {"ended_at": "nan"},
+        {"ended_at": "-inf"},
+        {"started_at": float("nan")},
+    ],
+)
+def test_record_times_that_arent_times_are_bad(tmp_path, bad):
+    from claude_launcher.restart import Record
+
+    path = tmp_path / "record"
+    data = {"session_id": "s", "pid": 7, "boot_id": THIS_BOOT, "login_session": "", "started_at": NOW, **bad}
+    path.write_text(json.dumps(data))
+    assert Record.load(path) is None
 
 
 def test_the_host_gets_the_records_start_ticks(setup, claude_home):

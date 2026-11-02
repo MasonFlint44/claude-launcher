@@ -3,15 +3,18 @@
 claude-session-hook leaves a record in state/open/<boot id>_<pid> for each
 interactive Claude. An exit you chose (/exit, /clear, switching with /resume) deletes it;
 any other end (closing the tab, or the desktop closing every window) keeps it,
-with the time it ended.
+with the time it ended. A new Claude that gets the pid of one whose record
+is still there moves that record to <boot id>_<pid>_<its session id>.
 
 A record is one line of JSON (`Record.load` reads it and ignores keys it
 doesn't know): "session_id", "pid", "boot_id", "login_session" (the login
-session's ID, or ""), "started_at" (a Unix time), and once it ended
-"end_reason" and "ended_at". Optionally "start_ticks", when the process
-started in the platform's own units (Linux: field 22 of /proc/<pid>/stat),
-which the host matches exactly to tell its Claude from one that got the pid
-since; without it, the host compares "started_at" with a margin.
+session's ID, or ""; on Linux the audit session, which is logind's for an
+SSH login but on a desktop with systemd 256 or later the user manager's),
+"started_at" (a Unix time), and once it ended "end_reason" and "ended_at".
+Optionally "start_ticks", when the process started in the platform's own
+units (Linux: field 22 of /proc/<pid>/stat), which the host matches exactly
+to tell its Claude from one that got the pid since; without it, the host
+compares "started_at" with a margin.
 
 `sort()` runs each time the picker opens and decides, for each record whose
 Claude has gone, whether a restart or a logout closed it. Both are an event
@@ -37,6 +40,7 @@ formats are what each platform's hook and event source agree on.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import time
@@ -51,7 +55,10 @@ from .paths import Paths
 if TYPE_CHECKING:
     from .platforms import Event, EventSource, Host
 
-_RECORD_NAME = re.compile(r"[0-9a-f-]{32,36}_[0-9]+")
+# <boot id>_<pid>, or with _<session id> after it: a record the hook moved
+# aside when a new Claude got its pid. "<record>.tmp" is one being written.
+_RECORD_NAME = re.compile(r"[0-9a-f-]{32,36}_[0-9]+(?:_[0-9a-f-]{36})?")
+_TMP_STALE = 60  # a hook writes and renames in milliseconds
 KEEP = 7 * 86400  # how long closed sessions stay in the group
 # How close to a restart or logout a Claude has to have ended to count.
 #
@@ -171,15 +178,18 @@ class Record:
     def load(cls, path: Path) -> Record | None:
         data = _load(path) or {}
         try:
-            ended = data.get("ended_at")
+            started = float(data["started_at"])
+            ended = None if data.get("ended_at") is None else float(data["ended_at"])
+            if not math.isfinite(started) or not math.isfinite(ended or 0.0):  # "nan" and "inf" are floats too
+                return None
             ticks = data.get("start_ticks")
             return cls(
                 session_id=str(data["session_id"]),
                 pid=data.get("pid"),
                 boot_id=normalize_boot_id(str(data.get("boot_id", ""))),
                 login_session=str(data.get("login_session", "")),
-                started=float(data["started_at"]),
-                ended=None if ended is None else float(ended),
+                started=started,
+                ended=ended,
                 start_ticks=ticks if isinstance(ticks, int) and not isinstance(ticks, bool) else None,
             )
         except (KeyError, TypeError, ValueError):
@@ -261,9 +271,14 @@ class RestartState:
         now = self._now()
         self._boot_started = None
         this_boot = normalize_boot_id(self.host.boot_id())
+        # The running sessions first: a session open again mustn't rejoin the
+        # group from an older record of it read later.
+        running: set[str] = set()
+        gone: list[tuple[Path, Record, bool]] = []
         for path in sorted(self.paths.open_records.iterdir()):
             if not _RECORD_NAME.fullmatch(path.name):
-                continue  # a record being written
+                self._remove_stale_tmp(path, now)
+                continue
             record = Record.load(path)
             if record is None:
                 decided.append(path)
@@ -274,7 +289,14 @@ class RestartState:
                 and record.ended is None
                 and self.host.claude_running(record.pid, record.started, record.start_ticks)
             ):
-                group.pop(record.session_id, None)  # it's open again
+                running.add(record.session_id)
+            else:
+                gone.append((path, record, same_boot))
+        for session_id in running:
+            group.pop(session_id, None)  # it's open again
+        for path, record, same_boot in gone:
+            if record.session_id in running:
+                decided.append(path)
                 continue
             closed = self._closed_by(record, same_boot, now)
             if closed is _UNDECIDED:
@@ -289,6 +311,18 @@ class RestartState:
             ):
                 group[record.session_id] = closed
             decided.append(path)
+
+    @staticmethod
+    def _remove_stale_tmp(path: Path, now: float) -> None:
+        """A record being written, left behind by a hook killed before its
+        rename once it's old."""
+        if path.suffix != ".tmp" or not _RECORD_NAME.fullmatch(path.stem):
+            return
+        try:
+            if now - path.stat().st_mtime > _TMP_STALE:
+                _remove(path)
+        except OSError:
+            pass
 
     def _boot_start(self, now: float) -> float:
         """When this boot began, read once per sort: it's worked out from the

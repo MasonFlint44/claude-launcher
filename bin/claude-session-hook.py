@@ -72,16 +72,24 @@ def run(event, payload, env, boot_id=windows_boot_id, now=time.time):
         with contextlib.suppress(OSError):
             _retry(os.remove, record)
         return
+    try:
+        with open(record, encoding="utf-8") as f:
+            old = json.load(f)
+    except (OSError, ValueError):
+        old = None
+    old_session = str(old.get("session_id", "")) if isinstance(old, dict) else ""
     if event == "start":
+        # Another session's record under this pid: a Claude killed with no end
+        # (a logoff or Fast Startup, say) whose pid came back before the
+        # launcher sorted it. Keep it aside, under its session's ID, for the
+        # launcher to find. Windows reuses pids quickly.
+        if UUID.fullmatch(old_session) and old_session != session_id:
+            with contextlib.suppress(OSError):
+                _retry(os.replace, record, f"{record}_{old_session}")
         new = fresh
     else:
-        try:
-            with open(record, encoding="utf-8") as f:
-                old = json.load(f)
-        except (OSError, ValueError):
-            old = None
         # Another session's record (no start was seen for this one): start afresh.
-        new = old if isinstance(old, dict) and old.get("session_id") == session_id else fresh
+        new = old if old_session == session_id else fresh
         new = {**new, "end_reason": re.sub(r"[^a-z_]", "", reason) or "other", "ended_at": now()}
     os.makedirs(folder, exist_ok=True)
     with open(record + ".tmp", "w", encoding="utf-8", newline="") as f:  # atomically, as the bash hook does

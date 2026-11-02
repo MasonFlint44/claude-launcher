@@ -87,7 +87,8 @@ class LinuxHost:
             # then its wall clock jumps ahead).
             return ticks is None or ticks == start_ticks
         # An older hook's record: a Claude that started well after the
-        # record did got the pid since.
+        # record did got the pid since. A clock stepped forward after the
+        # record was written makes its own Claude look like such a one.
         if started is None or ticks is None:
             return True
         try:
