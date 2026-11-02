@@ -120,8 +120,12 @@ def write(
     path = directory / f"{APP}.json"
     data = fragment(commandline, starting_directory, windows_path(shown_icon), theme, profile)
     tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(data, indent=4) + "\n", encoding="utf-8", newline="")
-    files.replace(tmp, path)
+    try:
+        tmp.write_text(json.dumps(data, indent=4) + "\n", encoding="utf-8", newline="")
+        files.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
     return path
 
 
