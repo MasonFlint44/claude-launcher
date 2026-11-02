@@ -14,11 +14,13 @@ from pathlib import Path
 import pytest
 
 from claude_launcher import install
+from claude_launcher.platforms import Event
 from claude_launcher.platforms.windows import terminal
 from claude_launcher.platforms.windows.setup import DEFAULT_ICON
 from claude_launcher.platforms.wsl.events import WslEvents
 from claude_launcher.platforms.wsl.interop import Interop
 from claude_launcher.platforms.wsl.setup import WslSetup
+from claude_launcher.restart import Record
 from conftest import FakeHost, FakePlatform
 
 LOCAL = "C:\\Users\\José\\AppData\\Local"
@@ -196,6 +198,33 @@ def test_events_without_interop_are_unknown(windows, failure):
     events = WslEvents(FakeHost(), interop=interop)
     assert events.windows.log.since(0) is None
     assert events.windows._sid() is None
+
+
+@pytest.mark.parametrize(
+    ("failure", "interop_there"),
+    [
+        (FileNotFoundError(2, "No such file"), False),
+        (OSError(8, "Exec format error"), False),  # interop turned off
+        (subprocess.CalledProcessError(1, "x"), True),
+        (subprocess.TimeoutExpired("x", 20), True),  # slow after a restart
+    ],
+)
+def test_a_failed_query_is_told_from_no_interop(windows, failure, interop_there):
+    windows.fail = {"wevtutil.exe": failure}
+    interop = Interop({"PATH": ""}, str(windows.mounts), windows.run)
+    record = Record("s", 1, "2" * 32, "", 100.0, ended=200.0)
+    events = WslEvents(FakeHost(started=lambda now: 1000.0), interop=interop, now=lambda: 2000.0)
+    if interop_there:  # it waits, as on native Windows
+        assert events.events(record, same_boot=False) is None
+    else:
+        assert events.events(record, same_boot=False) == [Event(1000.0, 1000.0, "wsl-stop")]
+    assert interop.reachable() is interop_there
+
+
+def test_no_system32_is_no_interop(tmp_path):
+    (tmp_path / "mounts").write_text("/dev/sdc / ext4 rw 0 0\n")
+    interop = Interop({"PATH": ""}, str(tmp_path / "mounts"), lambda *a, **k: b"")
+    assert interop.reachable() is False
 
 
 # --- The profile ------------------------------------------------------------

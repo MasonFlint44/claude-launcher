@@ -2,18 +2,20 @@
 the .cmd (which finds Python), its entry script, then the repo's script.
 From user directories with the characters cmd and code pages trip on."""
 
+import importlib.util
 import json
 import os
 import shutil
 import subprocess
 import sys
+import time
 import uuid
 
 import pytest
 
 from claude_launcher.platforms.windows import data_dir
 from claude_launcher.platforms.windows import setup as windows_setup
-from claude_launcher.platforms.windows.host import WindowsHost
+from claude_launcher.platforms.windows.host import WindowsHost, process_started
 from claude_launcher.platforms.windows.setup import WindowsSetup
 from claude_launcher.restart import Record
 
@@ -149,3 +151,14 @@ def test_the_hook_by_its_own_path_with_a_space(tmp_path):
     [path] = (config / "state" / "claude-launcher" / "open").iterdir()
     record = Record.load(path)
     assert record.pid == 4242 and record.session_id == SID
+
+
+def test_the_hook_knows_when_claude_began():
+    # Its own ctypes, for when another session's record is under the pid.
+    spec = importlib.util.spec_from_file_location("win_hook", windows_setup.HOOK)
+    hook = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(hook)
+    began = hook.process_created(os.getpid())
+    assert began is not None and began <= time.time()
+    assert abs(began - process_started(os.getpid())) < 0.001
+    assert hook.process_created(0x7FFFFFFC) is None  # no such process

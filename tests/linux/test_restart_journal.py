@@ -44,7 +44,8 @@ class FakeJournal:
     1), in the system journal and in your own (`user_boots`: the boots your
     journal has, both by default). `failing` makes per-boot queries of a
     listed boot fail too (a timeout, say), as (kind, boot) pairs, kind one of
-    "last_entry", "shutdown", "logouts", "desktop".
+    "last_entry", "shutdown", "logouts", "desktop". `user_listing` False
+    makes your own journal's --list-boots fail.
     """
 
     def __init__(
@@ -58,6 +59,7 @@ class FakeJournal:
         text_boots=False,
         failing=(),
         user_boots=(LAST_BOOT, THIS_BOOT),
+        user_listing=True,
     ):
         self.shutdown_message, self.last_entry, self.readable = shutdown_message, last_entry, readable
         self.sessions = list(sessions)
@@ -66,6 +68,7 @@ class FakeJournal:
         self.text_boots = text_boots  # True: systemd before 251, whose --list-boots ignores -o json
         self.failing = {(kind, boot_key(boot)) for kind, boot in failing}
         self.user_boots = {boot_key(b) for b in user_boots}
+        self.user_listing = user_listing
         self.calls = []
 
     def __call__(self, args):
@@ -73,6 +76,8 @@ class FakeJournal:
         if not self.readable:
             return None
         if args[:2] == ["--user", "--list-boots"]:
+            if not self.user_listing:
+                return None
             boots = [{"boot_id": b, "first_entry": 1, "last_entry": 2} for b in sorted(self.user_boots)]
             return json.dumps(boots)
         if args[0] == "--user":
@@ -439,6 +444,22 @@ def test_a_boot_your_journal_doesnt_have_has_no_desktop_ends(setup):
     journal = FakeJournal(user_boots=[THIS_BOOT])
     assert make(journal).sort().sessions == {sid: Closed(REBOOT, "restart")}
     assert ["--user", "--list-boots", "-o", "json"] in journal.calls
+
+
+def test_when_your_journal_cant_list_its_boots_desktop_ends_dont_wait(setup, claude_home):
+    # A desktop query failed, and so did asking whether your journal has
+    # that boot: it can't be told from one you weren't logged in for, so it
+    # reads as no desktop ending rather than waiting. Asked once per sort.
+    make, record, session, _ = setup
+    last, this = session(), session()
+    record(100, last, ended=REBOOT + 0.8)
+    record(101, this, boot=THIS_BOOT, ended=NOW - 120)
+    journal = FakeJournal(failing=[("desktop", LAST_BOOT), ("desktop", THIS_BOOT)], user_listing=False)
+    assert Journal(journal).desktop_ends(LAST_BOOT) == []
+    journal.calls.clear()
+    assert make(journal).sort().sessions == {last: Closed(REBOOT, "restart")}
+    assert records(claude_home) == []
+    assert journal.calls.count(["--user", "--list-boots", "-o", "json"]) == 1
 
 
 def test_a_boot_not_listed_reads_as_empty(setup):

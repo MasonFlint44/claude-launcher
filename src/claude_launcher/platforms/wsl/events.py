@@ -10,6 +10,12 @@ or WSL stopping when idle). All three close Claude:
   closed by the first event after it started. A tab closed before then has
   its end, long before this, and isn't counted.
 
+Without interop (System32 isn't found, or Windows' programs don't start),
+only WSL stopping is known, and nothing waits for Windows' log. With
+interop, a query that failed or took too long is as on native Windows:
+the record waits (None), except one with no end from an earlier boot,
+which WSL stopping closed either way.
+
 A record from two or more of the distro's boots back (the picker wasn't
 opened in between) gets this boot's start too, though its WSL stopped
 earlier: the stop itself leaves no trace (WSL kills everything, the hook
@@ -37,6 +43,9 @@ class WslEvents:
             interop = interop or Interop()
             windows = WindowsEvents(EventLog(run=interop.wevtutil), sid=interop.user_sid)
         self.windows = windows
+        # What tells "no interop" from "the query failed". Without one
+        # (tests' own Windows events), there's no interop.
+        self.interop = interop
         self.now = now
         self._stopped: float | None = None
 
@@ -46,13 +55,25 @@ class WslEvents:
         found = self.windows.events(record, same_boot=False)
         if same_boot:
             return found
+        # A tab closed by hand has an end; one WSL stopping killed has none,
+        # and WSL stopping closed it whatever Windows' log would say.
+        if found is None and self._interop_there() and record.ended is not None:
+            return None
         if self._stopped is None:  # once: every record from an earlier boot ended here
             self._stopped = self.host.boot_start(self.now())
         stopped = self._stopped
         return [*(found or []), Event(stopped, stopped, "wsl-stop")]
 
     def boot_lost(self, record) -> bool | None:
-        # A tab closed by hand has an end; one WSL stopping killed has none.
-        # So a lost log matters only for Windows' restarts and logoffs. As in
-        # events(), Windows out of reach (no interop) isn't a reason to wait.
-        return bool(self.windows.boot_lost(record))
+        # A lost log matters only for Windows' restarts and logoffs. Windows
+        # out of reach (no interop) isn't a reason to wait; a query that
+        # failed is.
+        lost = self.windows.boot_lost(record)
+        if lost is None and self._interop_there():
+            return None
+        return bool(lost)
+
+    def _interop_there(self) -> bool:
+        """Asked after a query failed, so a Windows program that couldn't
+        start has already said so."""
+        return self.interop is not None and self.interop.reachable()

@@ -9,7 +9,7 @@
 # (pids start over each boot, so the boot keeps a new Claude from taking over
 # the record of one a restart closed). Start writes the record, first moving
 # another session's record under that name to <boot id>_<pid>_<its session id>
-# (as an end without a start does).
+# (as an end without a start does), or deleting it if this same Claude wrote it.
 # An end you chose (/exit, /clear, switching with /resume, Claude's /logout)
 # deletes it. Any other end, like closing the tab or the desktop
 # closing every window for a restart or logout, keeps it with the time it
@@ -105,13 +105,22 @@ old=
 [[ -f $record ]] && read -r old < "$record"
 mine=
 [[ $old == '{'*'}' && $old == *"\"session_id\":\"$session_id\""* ]] && mine=1
+# Another session's record from this same Claude (the same start in clock
+# ticks): its session before this one, which it ended by choice (/clear,
+# /resume). Claude waits only a moment for the end hook before starting the
+# next session, and then kills it, so that end may not have got to delete it.
+earlier=
+[[ -z $mine && -n $start_ticks && $old == '{'*"\"start_ticks\":$start_ticks,"* ]] && earlier=1
 
-# Another session's record under this pid: a Claude killed with no end (a
-# logout, say) whose pid came back before the launcher sorted it, or this
-# Claude's session before, when no start was seen for this one. Keep it
-# aside, under its session's ID, for the launcher to find.
+# Another session's record under this pid: this Claude's earlier one goes.
+# Anything else is a Claude killed with no end (a logout, say) whose pid came
+# back before the launcher sorted it, or this Claude's earlier one when its
+# start couldn't be read. Keep it aside, under its session's ID, for the
+# launcher to find.
 move_aside() {
-  if [[ $old =~ \"session_id\":\"($uuid)\" && ${BASH_REMATCH[1]} != "$session_id" ]]; then
+  if [[ -n $earlier ]]; then
+    rm -f "$record"
+  elif [[ $old =~ \"session_id\":\"($uuid)\" && ${BASH_REMATCH[1]} != "$session_id" ]]; then
     mv -f "$record" "${record}_${BASH_REMATCH[1]}"
   fi
 }
@@ -122,8 +131,9 @@ case ${1:-} in
     write "{$fields,\"started_at\":$EPOCHREALTIME}" ;;
   end)
     case $reason in
-      # Only this session's record: another's is left for the launcher to sort.
-      prompt_input_exit|clear|resume|logout) [[ -n $mine ]] && rm -f "$record" ;;
+      # Only this session's record, or this Claude's earlier one: another's
+      # is left for the launcher to sort.
+      prompt_input_exit|clear|resume|logout) [[ -n $mine || -n $earlier ]] && rm -f "$record" ;;
       *)
         if [[ -z $mine ]]; then
           move_aside

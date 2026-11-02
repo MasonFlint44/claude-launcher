@@ -39,6 +39,7 @@ class Interop:
         self.mounts = mounts
         self._run = run
         self._system32: Path | None = None
+        self._cant_run = False  # a Windows program found couldn't be started
 
     def system32(self) -> Path | None:
         if self._system32 is None:
@@ -64,6 +65,12 @@ class Interop:
                 return system32
         return None
 
+    def reachable(self) -> bool:
+        """Whether Windows' programs can run from here, as far as is known:
+        System32 is found, and none failed to start. A program that ran and
+        failed, or took too long, doesn't count against it."""
+        return self.system32() is not None and not self._cant_run
+
     def run(self, program: str, args: Sequence[str]) -> bytes:
         """Run a program in System32, from there: cmd.exe complains when it
         starts in a WSL directory, which Windows sees as a network path."""
@@ -76,9 +83,11 @@ class Interop:
             said = (e.stderr or b"").decode(errors="replace").strip().splitlines()
             raise RuntimeError(f"{program} failed" + (f": {said[-1]}" if said else "")) from e
         except FileNotFoundError as e:
+            self._cant_run = True
             raise RuntimeError(f"can't find {system32 / program}") from e
         except OSError as e:
             # Exec format error: Windows programs don't run here.
+            self._cant_run = True
             raise RuntimeError(f"can't run Windows programs from WSL (is interop off?): {e.strerror}") from e
 
     def wevtutil(self, args: Sequence[str]) -> str | None:

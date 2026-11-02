@@ -74,9 +74,22 @@ class FakeWindowsEvents:
         return self.lost
 
 
-def source(found):
+class FakeInterop:
+    """Whether Windows' programs run from here (interop.Interop.reachable)."""
+
+    def __init__(self, reachable):
+        self._reachable = reachable
+
+    def reachable(self):
+        return self._reachable
+
+
+def source(found, interop=None, lost=False):
+    """`interop`: None for no interop, else whether it's there, so that
+    `found` None is a query that failed."""
     host = FakeHost(boot=THIS_BOOT, started=lambda now: WSL_STARTED)
-    return WslEvents(host, FakeWindowsEvents(found), now=lambda: NOW)
+    there = None if interop is None else FakeInterop(interop)
+    return WslEvents(host, FakeWindowsEvents(found, lost), now=lambda: NOW, interop=there)
 
 
 WINDOWS_RESTART = Event(NOW - 900, NOW - 895, "restart")
@@ -107,6 +120,41 @@ def test_whether_windows_log_is_lost_is_windows_to_say():
 def test_without_interop_wsl_stopping_still_counts():
     assert source(None).events(None, same_boot=False) == [Event(WSL_STARTED, WSL_STARTED, "wsl-stop")]
     assert source(None).events(None, same_boot=True) is None
+
+
+ENDED = Record("s", 1, LAST_BOOT, "", NOW - 3600, ended=NOW - 3000)
+NO_END = Record("s", 1, LAST_BOOT, "", NOW - 3600, ended=None)
+
+
+class TestQueryFailed:
+    """Interop is there, but wevtutil failed or took too long (slow after a
+    distro restart): as on native Windows, what Windows' log would decide
+    waits."""
+
+    def test_a_record_with_an_end_waits(self):
+        assert source(None, interop=True).events(ENDED, same_boot=False) is None
+
+    def test_one_without_was_closed_by_wsl_stopping_anyway(self):
+        found = source(None, interop=True).events(NO_END, same_boot=False)
+        assert found == [Event(WSL_STARTED, WSL_STARTED, "wsl-stop")]
+
+    def test_this_boots_waits(self):
+        assert source(None, interop=True).events(ENDED, same_boot=True) is None
+
+    def test_whether_the_log_is_lost_waits(self):
+        assert source([], interop=True, lost=None).boot_lost(ENDED) is None
+
+    def test_the_record_is_kept_for_the_next_sort(self, claude_home):
+        sid = claude_home.log("/tmp", conversation("s", "/tmp"))
+        path = write_record(claude_home.paths, sid, LAST_BOOT, 100, NOW - 3600, NOW - 3000)
+        s = source(None, interop=True)
+        assert len(RestartState(claude_home.paths, s, s.host, now=lambda: NOW).sort()) == 0
+        assert path.exists()
+
+    def test_without_interop_nothing_waits(self):
+        s = source(None, interop=False, lost=None)
+        assert s.events(ENDED, same_boot=False) == [Event(WSL_STARTED, WSL_STARTED, "wsl-stop")]
+        assert s.boot_lost(ENDED) is False
 
 
 @pytest.fixture

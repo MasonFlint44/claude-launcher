@@ -30,8 +30,8 @@ def setup(claude_home):
             now=lambda: clock[0],
         )
 
-    def record(session_id, boot=LAST_BOOT, pid=100, started=NOW - 3600, ended=None, name=None):
-        write_record(claude_home.paths, session_id, boot, pid, started, ended, name=name)
+    def record(session_id, boot=LAST_BOOT, pid=100, started=NOW - 3600, ended=None, name=None, **extra):
+        write_record(claude_home.paths, session_id, boot, pid, started, ended, name=name, **extra)
 
     def session():
         return claude_home.log("/tmp", conversation("x", "/tmp"))
@@ -655,3 +655,38 @@ class TestMovedAsideByItsOwnClaude:
         state = RestartState(claude_home.paths, FakeEvents([LOGOUT]), host, now=lambda: NOW)
         assert state.sort().sessions == {old: Closed(LOGOUT.start, "logout")}
         assert records(claude_home) == [f"{THIS_BOOT}_100"]
+
+    def test_once_that_claude_has_gone_too(self, setup, claude_home):
+        # /clear, the end hook killed before it deleted the record (an older
+        # hook, which moved it aside), then the next session ran for hours
+        # and a logout closed it. Both records are that one Claude's (the
+        # same start_ticks): only the later session was open at the logout.
+        old, new = setup.session(), setup.session()
+        setup.record(old, boot=THIS_BOOT, started=LOGOUT.start - 7200, name=f"{THIS_BOOT}_100_{old}", start_ticks=5)
+        setup.record(new, boot=THIS_BOOT, started=LOGOUT.start - 3600, start_ticks=5)
+        assert setup.make(LOGOUT).sort().sessions == {new: Closed(LOGOUT.start, "logout")}
+        assert records(claude_home) == []
+
+    def test_another_claude_with_the_pid_isnt_it(self, setup):
+        # Different start_ticks: a Claude the logout killed, then a new one
+        # that got its pid. Both were open at the logout.
+        old, new = setup.session(), setup.session()
+        setup.record(old, boot=THIS_BOOT, started=LOGOUT.start - 7200, name=f"{THIS_BOOT}_100_{old}", start_ticks=5)
+        setup.record(new, boot=THIS_BOOT, started=LOGOUT.start - 3600, start_ticks=6)
+        assert setup.make(LOGOUT).sort().sessions.keys() == {old, new}
+
+    def test_without_start_ticks_it_cant_be_told(self, setup):
+        # Windows' records, and an older hook's: as before.
+        old, new = setup.session(), setup.session()
+        setup.record(old, boot=THIS_BOOT, started=LOGOUT.start - 7200, name=f"{THIS_BOOT}_100_{old}")
+        setup.record(new, boot=THIS_BOOT, started=LOGOUT.start - 3600)
+        assert setup.make(LOGOUT).sort().sessions.keys() == {old, new}
+
+    def test_the_latest_of_its_sessions_is_still_sorted(self, setup):
+        # That Claude's two sessions moved aside (the later one by a new
+        # Claude with the pid): the later one was open at the logout.
+        a, b, c = setup.session(), setup.session(), setup.session()
+        setup.record(a, boot=THIS_BOOT, started=LOGOUT.start - 7200, name=f"{THIS_BOOT}_100_{a}", start_ticks=5)
+        setup.record(b, boot=THIS_BOOT, started=LOGOUT.start - 3600, name=f"{THIS_BOOT}_100_{b}", start_ticks=5)
+        setup.record(c, boot=THIS_BOOT, started=LOGOUT.end + 100, start_ticks=9)
+        assert setup.make(LOGOUT).sort().sessions == {b: Closed(LOGOUT.start, "logout")}
