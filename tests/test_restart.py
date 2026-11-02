@@ -107,6 +107,19 @@ def test_still_running_stays_and_leaves_the_group(setup, claude_home):
     assert records(claude_home) == [f"{THIS_BOOT}_200"]
 
 
+@pytest.mark.parametrize(("this_boot", "last_boot"), [("0" * 32, "f" * 32), ("f" * 32, "0" * 32)])
+def test_running_again_stays_out_whichever_record_is_read_last(setup, claude_home, this_boot, last_boot):
+    # Records are read in name order, and names start with the boot ID: the
+    # last boot's record of a session running again can come after its own.
+    setup.host.boot = this_boot
+    sid = setup.session()
+    setup.record(sid, boot=last_boot, ended=RESTART.start + 1)
+    setup.record(sid, boot=this_boot, pid=200, started=NOW - 60)
+    setup.host.running.add(200)
+    assert len(setup.make(RESTART).sort()) == 0
+    assert records(claude_home) == [f"{this_boot}_200"]
+
+
 def test_the_newer_closing_wins_whichever_record_is_read_last(setup):
     # One session resumed in another boot and closed again: two records.
     # Records are read in name order, and the boot read last holds the older one.

@@ -261,6 +261,10 @@ class RestartState:
         now = self._now()
         self._boot_started = None
         this_boot = normalize_boot_id(self.host.boot_id())
+        # The running sessions first: a session open again mustn't rejoin the
+        # group from an older record of it read later.
+        running: set[str] = set()
+        gone: list[tuple[Path, Record, bool]] = []
         for path in sorted(self.paths.open_records.iterdir()):
             if not _RECORD_NAME.fullmatch(path.name):
                 continue  # a record being written
@@ -274,7 +278,14 @@ class RestartState:
                 and record.ended is None
                 and self.host.claude_running(record.pid, record.started, record.start_ticks)
             ):
-                group.pop(record.session_id, None)  # it's open again
+                running.add(record.session_id)
+            else:
+                gone.append((path, record, same_boot))
+        for session_id in running:
+            group.pop(session_id, None)  # it's open again
+        for path, record, same_boot in gone:
+            if record.session_id in running:
+                decided.append(path)
                 continue
             closed = self._closed_by(record, same_boot, now)
             if closed is _UNDECIDED:
