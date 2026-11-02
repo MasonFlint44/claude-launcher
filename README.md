@@ -33,7 +33,9 @@ On Linux (with systemd, Python 3.10+ and [Claude Code](https://docs.claude.com/e
 
 ```bash
 git clone https://github.com/MasonFlint44/claude-launcher.git ~/git/claude-launcher
-~/git/claude-launcher/install.sh
+cd ~/git/claude-launcher
+git checkout -q "$(git describe --tags --abbrev=0 origin/main)"  # the latest release
+./install.sh
 ```
 
 [docs/linux.md](docs/linux.md) has what the installer sets up, its options, the **Claude Code** app for each terminal, updating and uninstalling.
@@ -42,10 +44,14 @@ On Windows (with [Claude Code](https://docs.claude.com/en/docs/claude-code) and 
 
 ```powershell
 git clone https://github.com/MasonFlint44/claude-launcher.git $HOME\git\claude-launcher
-powershell -ExecutionPolicy Bypass -File $HOME\git\claude-launcher\install.ps1
+cd $HOME\git\claude-launcher
+git checkout -q (git describe --tags --abbrev=0 origin/main)  # the latest release
+powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
 Then restart Windows Terminal and open a **Claude Code** tab. [docs/windows.md](docs/windows.md) has the details. In WSL, clone and run `install.sh` inside your distro, as on Linux: [docs/wsl.md](docs/wsl.md).
+
+Each checks out the latest release, the newest version tag on `main`; [CHANGELOG.md](CHANGELOG.md) says what changed in each, and Updating in each OS's page how to move to a newer one. For the newest code instead, check out `main` and `git pull` from then on.
 
 ## Colors
 

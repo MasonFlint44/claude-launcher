@@ -8,7 +8,9 @@ Inside your distro (WSL 2, tested with Ubuntu 26.04; WSL 1 isn't supported), wit
 
 ```bash
 git clone https://github.com/MasonFlint44/claude-launcher.git ~/git/claude-launcher
-~/git/claude-launcher/install.sh
+cd ~/git/claude-launcher
+git checkout -q "$(git describe --tags --abbrev=0 origin/main)"  # the latest release
+./install.sh
 ```
 
 The installer does what it does on Linux (fzf, the session hook in `~/.claude/settings.json`, `~/.local/bin` links), and in place of a desktop launcher adds a **Claude Code (*distro*)** profile to Windows Terminal, which opens the launcher in this distro as you, in your home directory. Quitting the picker closes the tab; if the launcher can't start, the tab drops to a shell instead, so you can see why. It sits beside the Windows profile if you have both, and beside the profiles of other distros you install it in. Restart Windows Terminal to see it.
@@ -23,10 +25,12 @@ It uses WSL's interop (on by default) to reach Windows Terminal's settings and W
 ## Updating
 
 ```bash
-git -C ~/git/claude-launcher pull
+cd ~/git/claude-launcher
+git fetch -q --tags
+git checkout -q "$(git describe --tags --abbrev=0 origin/main)"
 ```
 
-Changes apply right away. If the profile changed (`src/claude_launcher/platforms/wsl/`, or `platforms/windows/terminal.py`, which builds it), re-run `install.sh` and restart Windows Terminal.
+That moves to the latest release ([CHANGELOG.md](../CHANGELOG.md) says what changed). Changes apply right away. If the profile changed (`src/claude_launcher/platforms/wsl/`, or `platforms/windows/terminal.py`, which builds it), re-run `install.sh` and restart Windows Terminal.
 
 ## How it knows what closed a session
 
