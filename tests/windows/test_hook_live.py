@@ -112,11 +112,12 @@ def test_the_hook_in_a_claude_without_localappdata(tmp_path):
     env = user(tmp_path, "A&B")
     setup = WindowsSetup(data_dir(env), env=env)
     list(setup.install(None, None))
+    line = libuv_join([*setup.hook_command(), "start"])  # as installed, with LOCALAPPDATA
+    assert "!LOCALAPPDATA!" in line
     config = tmp_path / "A&B" / ".claude"
     del env["LOCALAPPDATA"]
     env |= {"CLAUDE_CODE_ENTRYPOINT": "cli", "CLAUDE_CONFIG_DIR": str(config), "CLAUDE_PID": "4242"}
     payload = json.dumps({"session_id": SID, "hook_event_name": "SessionStart"})
-    line = libuv_join([*setup.hook_command(), "start"])
     done = subprocess.run(line, input=payload.encode(), env=env, capture_output=True, timeout=20)
     assert done.returncode != 0 and done.stderr, (done.stdout, done.stderr)
     assert not (config / "state").exists()
