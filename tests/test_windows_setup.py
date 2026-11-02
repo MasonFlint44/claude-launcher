@@ -288,6 +288,26 @@ def test_a_file_in_use_for_a_moment_is_still_written(setup, env, monkeypatch):
     assert not list(setup.data_dir.glob("*.tmp"))
 
 
+@pytest.mark.parametrize("key", ["UserProfile", "userprofile", "USERPROFILE"])
+def test_the_shim_goes_in_userprofile_whatever_the_case(tmp_path, key):
+    me = tmp_path / "me"
+    env = {key: str(me), "LOCALAPPDATA": str(tmp_path / "local")}
+    list(WindowsSetup(tmp_path / "data", env=env).install(None, None))
+    assert (me / ".local" / "bin" / "claude-launcher.cmd").is_file()
+
+
+@pytest.mark.parametrize("local, profile", [("LocalAppData", "UserProfile"), ("localappdata", "userprofile")])
+def test_localappdata_whatever_the_case(tmp_path, local, profile):
+    env = {local: str(tmp_path / "local")}
+    assert data_dir(env) == tmp_path / "local" / "claude-launcher"
+    assert (
+        terminal.fragments_dir(env)
+        == tmp_path / "local" / "Microsoft" / "Windows Terminal" / "Fragments" / "claude-launcher"
+    )
+    # Without it, under USERPROFILE.
+    assert data_dir({profile: str(tmp_path / "me")}) == tmp_path / "me" / "AppData" / "Local" / "claude-launcher"
+
+
 def run_entry(tmp_path, target: Path, *args, env=None):
     entry = tmp_path / "entry.py"
     entry.write_text(windows_setup.entry_script(target), encoding="ascii")

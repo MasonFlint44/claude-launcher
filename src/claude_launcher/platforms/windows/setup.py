@@ -26,6 +26,7 @@ from pathlib import Path
 from ... import files
 from ...paths import REPO_DIR, THEME_FILE
 from ...theme import Theme
+from . import getenv as _getenv
 from . import terminal
 
 LAUNCHER = REPO_DIR / "bin" / "claude-launcher"
@@ -199,15 +200,6 @@ def shim_cmd() -> str:
     return _SHIM.format(mark=_SHIM_MARK, cmd="claude-launcher\\claude-launcher.cmd").replace("\n", "\r\n")
 
 
-def _getenv(env: Mapping[str, str], name: str) -> str | None:
-    """Windows' environment ignores case (SystemRoot, SYSTEMROOT); a plain
-    mapping, as in tests, doesn't."""
-    if name in env:
-        return env[name]
-    folded = name.upper()
-    return next((v for k, v in env.items() if k.upper() == folded), None)
-
-
 def env_form(path: Path, env: Mapping[str, str]) -> tuple[str, str] | None:
     """`path` as (an environment variable, the rest), when it's under
     %LOCALAPPDATA% (or %USERPROFILE%, which it defaults to being under) and
@@ -228,7 +220,7 @@ def env_form(path: Path, env: Mapping[str, str]) -> tuple[str, str] | None:
 
 def _bin_dir(env: Mapping[str, str] = os.environ) -> Path:
     """Where Claude Code's own installer puts claude.exe, and adds to PATH."""
-    return Path(env.get("USERPROFILE") or str(Path.home())) / ".local" / "bin"
+    return Path(_getenv(env, "USERPROFILE") or str(Path.home())) / ".local" / "bin"
 
 
 def _same_dir(a: str, b: str) -> bool:
