@@ -374,6 +374,25 @@ def test_record_loads_start_ticks_if_there(tmp_path, extra, ticks):
     assert record is not None and record.start_ticks == ticks and record.started == NOW
 
 
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"started_at": "nan"},
+        {"started_at": "inf"},
+        {"ended_at": "nan"},
+        {"ended_at": "-inf"},
+        {"started_at": float("nan")},
+    ],
+)
+def test_record_times_that_arent_times_are_bad(tmp_path, bad):
+    from claude_launcher.restart import Record
+
+    path = tmp_path / "record"
+    data = {"session_id": "s", "pid": 7, "boot_id": THIS_BOOT, "login_session": "", "started_at": NOW, **bad}
+    path.write_text(json.dumps(data))
+    assert Record.load(path) is None
+
+
 def test_the_host_gets_the_records_start_ticks(setup, claude_home):
     asked = []
 

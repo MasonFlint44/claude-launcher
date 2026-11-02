@@ -38,6 +38,7 @@ formats are what each platform's hook and event source agree on.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import time
@@ -175,15 +176,18 @@ class Record:
     def load(cls, path: Path) -> Record | None:
         data = _load(path) or {}
         try:
-            ended = data.get("ended_at")
+            started = float(data["started_at"])
+            ended = None if data.get("ended_at") is None else float(data["ended_at"])
+            if not math.isfinite(started) or not math.isfinite(ended or 0.0):  # "nan" and "inf" are floats too
+                return None
             ticks = data.get("start_ticks")
             return cls(
                 session_id=str(data["session_id"]),
                 pid=data.get("pid"),
                 boot_id=normalize_boot_id(str(data.get("boot_id", ""))),
                 login_session=str(data.get("login_session", "")),
-                started=float(data["started_at"]),
-                ended=None if ended is None else float(ended),
+                started=started,
+                ended=ended,
                 start_ticks=ticks if isinstance(ticks, int) and not isinstance(ticks, bool) else None,
             )
         except (KeyError, TypeError, ValueError):
