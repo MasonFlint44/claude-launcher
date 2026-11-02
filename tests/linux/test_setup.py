@@ -1,5 +1,6 @@
 """platforms/linux/setup.py's links in ~/.local/bin, and taking them out."""
 
+import json
 import os
 import subprocess
 
@@ -188,6 +189,37 @@ def test_check_turns_down_a_terminal(home, monkeypatch, names, error):
     monkeypatch.setattr(terminals.Terminal, "installed", lambda self: self.name != "kitty")
     with pytest.raises(ValueError, match=error):
         LinuxSetup().check(names, None)
+
+
+def save_terminals(tmp_path, names):
+    state = tmp_path / "data" / "claude-launcher" / "terminals.json"
+    state.parent.mkdir(parents=True)
+    state.write_text(json.dumps(names))
+
+
+@pytest.mark.parametrize(
+    ("saved", "error"),
+    [
+        (["ghostty"], "Ghostty, which the launcher was set up with, isn't installed any more"),
+        (["ghostty", "kitty"], "Ghostty and kitty, which the launcher was set up with, aren't installed any more"),
+    ],
+)
+def test_check_turns_down_last_times_terminal(home, tmp_path, monkeypatch, saved, error):
+    monkeypatch.setattr(terminals.Terminal, "installed", lambda self: self.name not in ("ghostty", "kitty"))
+    save_terminals(tmp_path, saved)
+    with pytest.raises(ValueError, match=error) as e:
+        LinuxSetup().check(None, None)
+    assert str(e.value).endswith("; run install.sh --terminal auto (or --terminal NAME)")
+
+
+def test_check_lets_a_new_terminal_replace_last_times(home, tmp_path, monkeypatch):
+    monkeypatch.setattr(terminals.Terminal, "installed", lambda self: self.name != "ghostty")
+    save_terminals(tmp_path, ["ghostty"])
+    setup = LinuxSetup()
+    setup.check("auto", None)
+    setup.check("kitty", None)
+    monkeypatch.setattr(terminals.Terminal, "installed", lambda self: True)
+    setup.check(None, None)
 
 
 @pytest.mark.parametrize(

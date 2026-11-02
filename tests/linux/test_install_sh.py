@@ -116,6 +116,27 @@ def test_an_unknown_terminal_stops_before_anything(tmp_path, run):
     nothing_written(home)
 
 
+def test_last_times_terminal_gone_stops_before_anything(tmp_path, run):
+    # One that isn't on the PATH install.sh runs with.
+    gone = next(
+        (t for t in TERMINALS.values() if t.program and not shutil.which(t.program, path="/usr/bin:/bin")), None
+    )
+    if gone is None:
+        pytest.skip("every terminal is installed here")
+    home = tmp_path / "home"
+    state = home / ".local" / "share" / "claude-launcher" / "terminals.json"
+    state.parent.mkdir(parents=True)
+    state.write_text(json.dumps([gone.name]))
+    done = run(home)
+    assert done.returncode != 0
+    assert done.stderr.endswith(
+        f"{gone.label}, which the launcher was set up with, isn't installed any more;"
+        " run install.sh --terminal auto (or --terminal NAME)\n"
+    )
+    assert [p for p in home.rglob("*") if p.is_file()] == [state]
+    assert not (home / ".claude").exists() and not (home / ".config").exists()
+
+
 @pytest.mark.parametrize(("name", "error"), [("x.jpg", "svg or .png"), ("wide.png", "square")])
 def test_a_bad_icon_stops_before_anything(tmp_path, name, error, run):
     home = tmp_path / "home"

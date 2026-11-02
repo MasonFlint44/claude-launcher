@@ -77,6 +77,18 @@ def check_terminals(names: list[str] | None) -> list[Terminal]:
     return chosen
 
 
+def check_saved_terminals(ctx: Context) -> None:
+    """Raises if a terminal chosen last time, which a run without --terminal
+    sets up again, isn't installed any more."""
+    missing = [TERMINALS[n].label for n in saved_terminals(ctx) or [] if not TERMINALS[n].installed()]
+    if missing:
+        verb = "isn't" if len(missing) == 1 else "aren't"
+        raise ValueError(
+            f"{' and '.join(missing)}, which the launcher was set up with, {verb} installed any more;"
+            " run install.sh --terminal auto (or --terminal NAME)"
+        )
+
+
 def install_terminals(ctx: Context, names: list[str] | None) -> list[str]:
     """Set up the desktop entries (and any profiles) for `names`, or the ones
     chosen last time, or the first installed terminal. Returns what it did.
