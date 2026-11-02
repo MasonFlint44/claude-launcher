@@ -56,3 +56,13 @@ def test_on_a_real_old_python(script):
     done = subprocess.run([OLD[0], str(script)], capture_output=True, text=True)
     assert done.returncode == 1
     assert done.stderr.startswith("claude-launcher needs Python 3.10 or newer (this is ")
+
+
+def test_help_and_version():
+    from claude_launcher import __version__, launcher
+
+    script = str(SCRIPTS[0])
+    done = subprocess.run([sys.executable, script, "--help"], capture_output=True, text=True)
+    assert (done.returncode, done.stdout) == (0, launcher.USAGE + "\n")
+    done = subprocess.run([sys.executable, script, "--version"], capture_output=True, text=True)
+    assert done.returncode == 0 and done.stdout.startswith(f"claude-launcher {__version__}")
