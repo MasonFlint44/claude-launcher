@@ -6,7 +6,6 @@ from __future__ import annotations
 import json
 import os
 import shlex
-import shutil
 from pathlib import Path
 
 import pytest
@@ -52,8 +51,8 @@ class FakeSetup:
 
 @pytest.fixture
 def env(claude_home, tmp_path, monkeypatch):
-    which = shutil.which
-    monkeypatch.setattr(shutil, "which", lambda name, **kw: "claude" if name == "claude" else which(name, **kw))
+    which = install.which
+    monkeypatch.setattr(install, "which", lambda name, **kw: "claude" if name == "claude" else which(name, **kw))
     monkeypatch.setattr(install.fzf, "find", lambda own: ("fzf", (0, 70, 0)))
     claude_home.settings = claude_home.paths.config / "settings.json"
     claude_home.hook = claude_home.home / ".local" / "bin" / "claude-session-hook"
@@ -95,8 +94,8 @@ def test_a_program_and_its_arguments(env):
 
 
 def test_no_claude_is_a_warning(env, monkeypatch):
-    which = shutil.which
-    monkeypatch.setattr(shutil, "which", lambda name, **kw: None if name == "claude" else which(name, **kw))
+    which = install.which
+    monkeypatch.setattr(install, "which", lambda name, **kw: None if name == "claude" else which(name, **kw))
     lines = run(env, FakeSetup(hook=env.hook))
     assert lines[0].startswith("warning: claude is not on your PATH")
     assert lines[-1] == "Done. Open it."

@@ -20,7 +20,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 from . import fzf, settings
-from .paths import Paths
+from .paths import Paths, which
 
 # What a step that fails raises; the installer shows the message. The
 # platforms' setups catch the same.
@@ -87,7 +87,7 @@ def install(platform, terminal_names: str | None = None, icon: str | None = None
     except FAILURES as e:
         yield f"error: {e}"
         return
-    if not shutil.which("claude"):
+    if not which("claude"):
         yield "warning: claude is not on your PATH; install Claude Code before using the launcher"
     for line in _fzf(platform):
         yield line
