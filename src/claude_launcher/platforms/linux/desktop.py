@@ -8,7 +8,6 @@ import json
 import os
 import shutil
 import struct
-import subprocess
 from pathlib import Path
 
 from ...paths import REPO_DIR
@@ -142,14 +141,17 @@ def _remove_entries(ctx: Context, keep: set[Path] = frozenset()) -> list[str]:
 def _remove_profiles(names: list[str], ctx: Context, keep: set[str] = frozenset()) -> None:
     for name in names:
         if name not in keep:
-            with contextlib.suppress(OSError, RuntimeError, subprocess.SubprocessError):
+            # One that fails doesn't stop the rest.
+            with contextlib.suppress(Exception):
                 TERMINALS[name].uninstall(ctx)
 
 
 def remove_terminals(ctx: Context) -> list[str]:
-    """Take out the desktop entries and the profiles."""
+    """Take out the desktop entries and the profiles: every terminal's, not
+    only the ones terminals.json names, since it may be gone. Each uninstall()
+    is a no-op where there's nothing of ours."""
     removed = _remove_entries(ctx)
-    _remove_profiles(saved_terminals(ctx) or [], ctx)
+    _remove_profiles(list(TERMINALS), ctx)
     _state_file(ctx).unlink(missing_ok=True)
     _refresh_desktop(ctx)
     return removed

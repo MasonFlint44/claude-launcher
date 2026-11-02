@@ -89,7 +89,8 @@ class Terminal:
         """Make any changes the terminal needs (a profile, say)."""
 
     def uninstall(self, ctx: Context) -> None:
-        """Undo install()."""
+        """Undo install(). Uninstall runs it for every terminal, so it has to
+        be safe after an install that stopped partway, or none at all."""
 
 
 # --- Options ---------------------------------------------------------------
@@ -188,10 +189,14 @@ class _GSettingsProfile(Terminal):
             _gsettings_set(ctx, self.list_schema, self.list_key, [*ids, self.profile_id])
 
     def uninstall(self, ctx: Context) -> None:
-        ids = _gsettings_list(ctx, self.list_schema, self.list_key)
-        if ids and self.profile_id in ids:
-            _gsettings_set(ctx, self.list_schema, self.list_key, [i for i in ids if i != self.profile_id])
-        ctx.run(["gsettings", "reset-recursively", self._profile()])
+        # Safe without the terminal or our profile: gsettings says "No such
+        # schema" (exit 1, at once), and a missing gsettings raises OSError.
+        try:
+            ids = _gsettings_list(ctx, self.list_schema, self.list_key)
+            if ids and self.profile_id in ids:
+                _gsettings_set(ctx, self.list_schema, self.list_key, [i for i in ids if i != self.profile_id])
+        finally:
+            ctx.run(["gsettings", "reset-recursively", self._profile()])
 
 
 def ptyxis_palette(theme: Theme) -> str:
