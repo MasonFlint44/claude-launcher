@@ -13,7 +13,7 @@ git clone https://github.com/MasonFlint44/claude-launcher.git ~/git/claude-launc
 
 The installer does what it does on Linux (fzf, the session hook in `~/.claude/settings.json`, `~/.local/bin` links), and in place of a desktop launcher adds a **Claude Code (*distro*)** profile to Windows Terminal, which opens the launcher in this distro as you, in your home directory. Quitting the picker closes the tab; if the launcher can't start, the tab drops to a shell instead, so you can see why. It sits beside the Windows profile if you have both, and beside the profiles of other distros you install it in. Restart Windows Terminal to see it.
 
-It uses WSL's interop (on by default) to reach Windows Terminal's settings and Windows' event log; it finds Windows' programs even if `appendWindowsPath` is off. With interop off, it skips the profile and says so, and `claude-launcher` still works in any terminal. Run it as yourself, not with `sudo`: the profile opens as the user who installed it, so under `sudo` the installer stops before changing anything.
+It uses WSL's interop (on by default) to reach Windows Terminal's settings and Windows' event log; it finds Windows' programs even if `appendWindowsPath` is off. With interop off, it skips the profile and says so, and `claude-launcher` still works in any terminal. Run it as yourself, not with `sudo` (or `doas`): the profile opens as the user who installed it, so under either the installer stops before changing anything.
 
 | Option | Does |
 |---|---|

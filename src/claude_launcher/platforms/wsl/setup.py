@@ -75,11 +75,12 @@ class WslSetup:
     def check(self, terminal_names: str | None, icon: str | None) -> None:
         """Before the installer does anything: the profile opens as the user
         who installed it, and is per distro."""
-        # Under sudo the profile would run wsl.exe -u root, and the links go
-        # in /root. Root on its own (the distro's default user) is fine.
-        if os.geteuid() == 0 and self.env.get("SUDO_USER", "root") != "root":
+        # Under sudo (or doas, which sets DOAS_USER) the profile would run
+        # wsl.exe -u root, and the links go in /root. Root on its own (the
+        # distro's default user) is fine.
+        if os.geteuid() == 0 and any(self.env.get(v, "root") != "root" for v in ("SUDO_USER", "DOAS_USER")):
             raise RuntimeError(
-                "run install.sh as yourself, without sudo: the profile opens as the user who installs it"
+                "run install.sh as yourself, without sudo or doas: the profile opens as the user who installs it"
             )
         if not self.distro:
             raise RuntimeError("can't tell which WSL distro this is; run install.sh in a WSL terminal, without sudo")
@@ -97,7 +98,8 @@ class WslSetup:
         # name like José comes through whatever the console's code page is.
         out = self.windows.run("cmd.exe", ["/d", "/u", "/c", "set", "LOCALAPPDATA"])
         text = out.decode("utf-16-le", errors="replace") if b"\0" in out else out.decode("utf-8", errors="replace")
-        for line in text.splitlines():
+        # A byte-order mark would make the first line's name not match.
+        for line in text.removeprefix("\ufeff").splitlines():
             # Every variable whose name starts with LOCALAPPDATA: only that one.
             name, eq, value = line.partition("=")
             if eq and name.upper() == "LOCALAPPDATA" and value.strip():
