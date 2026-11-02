@@ -155,3 +155,9 @@ def test_unknown_ui_action(monkeypatch, capsys, tmp_path):
     monkeypatch.setattr(cli, "Picker", Recorder)
     assert cli.main(["--run", str(tmp_path), "ui", "nope"]) == 2
     assert "unknown ui action: nope" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("argv", [["--run", "/r"], ["--run", "/r", "ui"], ["--run"]])
+def test_no_ui_action_shows_the_usage(capsys, argv):
+    assert cli.main(argv) == 2
+    assert capsys.readouterr().err.strip() == cli.USAGE.strip()
