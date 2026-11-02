@@ -58,6 +58,8 @@ def loop(monkeypatch, tmp_path):
     monkeypatch.setattr(launcher, "Picker", FakePicker)
     monkeypatch.setattr(launcher, "_set_title", lambda: None)
     monkeypatch.setattr(launcher.time, "sleep", lambda s: None)
+    # On Windows claude is run only by a full path on PATH, and CI has none.
+    monkeypatch.setattr(launcher, "_which", lambda program, **kw: str(tmp_path / f"{program}.exe"))
 
     def run(*codes):
         signals = FakeSignals(*codes)
