@@ -408,3 +408,40 @@ def test_the_host_gets_the_records_start_ticks(setup, claude_home):
     setup.make().sort()
     assert asked == [(100, NOW - 60, 4321)]
     assert path.exists()  # still running: kept
+
+
+def test_a_record_a_new_claude_wrote_during_the_sort_is_kept(setup, claude_home):
+    # The sort asks for events (seconds, on Linux) after reading the records.
+    # Meanwhile a new Claude gets the gone one's pid: its hook moves the old
+    # record aside and writes its own under the name the sort decided on.
+    old, new = setup.session(), setup.session()
+    setup.record(old, boot=THIS_BOOT, started=NOW - 600)
+    path = claude_home.paths.open_records / f"{THIS_BOOT}_100"
+
+    class PidReused:
+        def events(self, record, same_boot):
+            os.replace(path, f"{path}_{old}")
+            write_record(claude_home.paths, new, THIS_BOOT, 100, NOW - 1)
+            return [Event(NOW - 300, NOW - 299, "logout")]
+
+    state = RestartState(claude_home.paths, PidReused(), setup.host, now=lambda: NOW)
+    assert state.sort().sessions == {old: Closed(NOW - 300, "logout")}
+    assert records(claude_home) == sorted([f"{THIS_BOOT}_100", f"{THIS_BOOT}_100_{old}"])
+    assert json.loads(path.read_text())["session_id"] == new
+
+
+def test_a_record_the_same_session_wrote_again_during_the_sort_is_kept(setup, claude_home):
+    # The session resumed under the same pid while the sort ran: its new record
+    # has the same name and session ID, but it's another record.
+    sid = setup.session()
+    setup.record(sid, boot=THIS_BOOT, started=NOW - 600, ended=NOW - 299.5)
+    path = claude_home.paths.open_records / f"{THIS_BOOT}_100"
+
+    class Resumed:
+        def events(self, record, same_boot):
+            write_record(claude_home.paths, sid, THIS_BOOT, 100, NOW - 1)
+            return [Event(NOW - 300, NOW - 299, "logout")]
+
+    state = RestartState(claude_home.paths, Resumed(), setup.host, now=lambda: NOW)
+    assert state.sort().sessions == {sid: Closed(NOW - 300, "logout")}
+    assert json.loads(path.read_text())["started_at"] == NOW - 1

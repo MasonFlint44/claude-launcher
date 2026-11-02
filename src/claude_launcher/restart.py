@@ -31,7 +31,8 @@ after it started.
 Those join the group in restored.json, {session id: {"at": time, "why":
 reason key}}, for KEEP seconds, or until resumed or dismissed. Any other
 record is deleted once its Claude has gone, and only once the group is
-saved, so a sort cut short loses nothing.
+saved, so a sort cut short loses nothing; and only if it's unchanged, since
+a new Claude can take the pid and its name while the sort runs.
 
 This module is the same on every platform; the record and restored.json
 formats are what each platform's hook and event source agree on.
@@ -239,7 +240,7 @@ class RestartState:
         return {r.key: r.rank for r in self._reasons}
 
     @contextmanager
-    def _locked(self, decided: Iterable[Path] = ()) -> Iterator[dict[str, Closed]]:
+    def _locked(self, decided: Iterable[tuple[Path, Record | None]] = ()) -> Iterator[dict[str, Closed]]:
         """The group, loaded under a lock and saved afterwards if it changed;
         then the `decided` records are deleted. Restored tabs can all open
         the picker at once."""
@@ -255,19 +256,22 @@ class RestartState:
                 tmp = self.paths.restored.with_suffix(".tmp")
                 tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="")
                 os.replace(tmp, self.paths.restored)
-            for path in decided:
-                _remove(path)
+            for path, record in decided:
+                # Only if it's still the record that was decided on: a new
+                # Claude with its pid may have written its own there since.
+                if Record.load(path) == record:
+                    _remove(path)
 
     def load(self) -> Group:
         return Group(_parse_group(_load(self.paths.restored) or {}))
 
     def sort(self) -> Group:
-        decided: list[Path] = []  # deleted once the group is saved
+        decided: list[tuple[Path, Record | None]] = []  # deleted once the group is saved
         with self._locked(decided) as group:
             self._sort_records(group, decided)
         return self.load()
 
-    def _sort_records(self, group: dict[str, Closed], decided: list[Path]) -> None:
+    def _sort_records(self, group: dict[str, Closed], decided: list[tuple[Path, Record | None]]) -> None:
         now = self._now()
         self._boot_started = None
         this_boot = normalize_boot_id(self.host.boot_id())
@@ -281,7 +285,7 @@ class RestartState:
                 continue
             record = Record.load(path)
             if record is None:
-                decided.append(path)
+                decided.append((path, None))
                 continue
             same_boot = record.boot_id == this_boot
             if (
@@ -296,12 +300,12 @@ class RestartState:
             group.pop(session_id, None)  # it's open again
         for path, record, same_boot in gone:
             if record.session_id in running:
-                decided.append(path)
+                decided.append((path, record))
                 continue
             closed = self._closed_by(record, same_boot, now)
             if closed is _UNDECIDED:
                 if now - record.started > KEEP:
-                    decided.append(path)
+                    decided.append((path, record))
                 continue  # decide once the system can be asked
             if (
                 isinstance(closed, Closed)
@@ -310,7 +314,7 @@ class RestartState:
                 and (record.session_id not in group or group[record.session_id].at < closed.at)
             ):
                 group[record.session_id] = closed
-            decided.append(path)
+            decided.append((path, record))
 
     @staticmethod
     def _remove_stale_tmp(path: Path, now: float) -> None:
