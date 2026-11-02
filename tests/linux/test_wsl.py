@@ -145,6 +145,12 @@ def test_a_logoff_is_said_over_wsl_stopping(claude_home):
     assert state._closed_by(record, False, NOW) == Closed(logoff.start, "logout")
 
 
+def test_wsl_stopping_is_at_this_boots_start_beside_a_tab_closed_before(sort):
+    # A record with an end in that boot doesn't move WSL's stop to it.
+    (killed, closed), group = sort(None, NOW - 3000)
+    assert group.sessions == {killed: Closed(WSL_STARTED, "wsl-stop")}
+
+
 def test_a_tab_closed_before_isnt_brought_back(sort):
     (closed,), group = sort(NOW - 3000)
     assert closed not in group.sessions

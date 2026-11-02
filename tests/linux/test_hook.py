@@ -119,11 +119,14 @@ def test_chosen_exit_deletes_the_record(run_hook, reason):
     assert run_hook(("start", {"session_id": SID}), ("end", {"session_id": SID, "reason": reason})) == {}
 
 
-def test_end_of_another_session_doesnt_reuse_its_record(run_hook):
-    # The hook was added while this Claude ran another session, which left no end.
+def test_end_of_another_session_keeps_its_record_aside(run_hook):
+    # No start was seen for this session: the record under the pid is
+    # another's, which left no end. It's moved aside, as a start does.
     other = "9b2f1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b"
-    [record] = run_hook(("start", {"session_id": other}), ("end", {"session_id": SID, "reason": "other"})).values()
-    assert record["session_id"] == SID and "ended_at" in record
+    found = run_hook(("start", {"session_id": other}), ("end", {"session_id": SID, "reason": "other"}))
+    [(name, record)] = [(n, r) for n, r in found.items() if r["session_id"] == SID]
+    assert "ended_at" in record and record["started_at"] <= record["ended_at"]
+    assert found[f"{name}_{other}"]["session_id"] == other and "ended_at" not in found[f"{name}_{other}"]
 
 
 OTHER = "9b2f1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b"

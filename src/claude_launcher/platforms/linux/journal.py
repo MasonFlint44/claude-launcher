@@ -66,40 +66,56 @@ def _seconds(usec: object) -> float | None:
     return None
 
 
+def _list_boots(out: str | None) -> dict[str, float | None] | None:
+    """`journalctl --list-boots` as {boot id: time of its last entry}, or
+    None if it failed or listed none. A time is None when it isn't given."""
+    if out is None:
+        return None
+    try:
+        boots = json.loads(out)
+    except ValueError:
+        boots = None
+    if isinstance(boots, list):
+        # A last entry that isn't a number is looked up when needed.
+        return {
+            normalize_boot_id(b["boot_id"]): _seconds(b.get("last_entry"))
+            for b in boots
+            if isinstance(b, dict) and isinstance(b.get("boot_id"), str)
+        }
+    # Before systemd 251, --list-boots ignores -o and prints "IDX BOOT_ID
+    # FIRST—LAST" in local time. Take the IDs; the times come from each
+    # boot's last entry when needed.
+    ids = _BOOT_ROW.findall(out)
+    return dict.fromkeys(ids) if ids else None
+
+
 class Journal:
     def __init__(self, run: Runner = run_journalctl):
         self._run = run
         self._last_entries: dict[str, float] | None | bool = False  # False: not asked yet
-        self._failed: set[str] = set()  # boots whose last entry couldn't be looked up
+        self._failed: set[str] = set()  # listed boots a query failed for: not asked again this sort
         self._restarts: dict[str, float | None] = {}
         self._logouts: dict[tuple[str, str], list[Logout]] = {}
         self._desktop_ends: dict[str, list[float]] = {}
+        self._user_boots: dict[str, float | None] | None | bool = False  # as _last_entries, for your own journal
 
     def _boots(self) -> dict[str, float | None] | None:
         """{boot id: time of its last journal entry}, or None if the journal
         can't be read. A time is None until last_entry() looks it up."""
         if self._last_entries is False:
-            self._last_entries = None
-            out = self._run(["--list-boots", "-o", "json"])
-            if out is not None:
-                try:
-                    boots = json.loads(out)
-                except ValueError:
-                    boots = None
-                if isinstance(boots, list):
-                    # A last entry that isn't a number is looked up when needed.
-                    self._last_entries = {
-                        normalize_boot_id(b["boot_id"]): _seconds(b.get("last_entry"))
-                        for b in boots
-                        if isinstance(b, dict) and isinstance(b.get("boot_id"), str)
-                    }
-                else:
-                    # Before systemd 251, --list-boots ignores -o and prints
-                    # "IDX BOOT_ID FIRST—LAST" in local time. Take the IDs; the
-                    # times come from each boot's last entry when needed.
-                    ids = _BOOT_ROW.findall(out)
-                    self._last_entries = dict.fromkeys(ids) if ids else None
+            self._last_entries = _list_boots(self._run(["--list-boots", "-o", "json"]))
         return self._last_entries  # type: ignore[return-value]
+
+    def _user_lists(self, boot_id: str) -> bool:
+        """Whether your own journal has boot `boot_id`. Asked only when a
+        query of it failed, once per sort."""
+        if self._user_boots is False:
+            self._user_boots = _list_boots(self._run(["--user", "--list-boots", "-o", "json"]))
+        return bool(self._user_boots) and boot_id in self._user_boots  # type: ignore[operator]
+
+    def _failed_lookup(self, boot_id: str) -> LookupFailed:
+        self._failed.add(boot_id)  # once per sort: a timeout takes seconds
+        return LookupFailed(boot_id)
 
     @property
     def available(self) -> bool:
@@ -125,8 +141,7 @@ class Journal:
             try:
                 boots[boot_id] = int(json.loads(out or "")["__REALTIME_TIMESTAMP"]) / 1e6
             except (ValueError, KeyError, TypeError):
-                self._failed.add(boot_id)  # once per sort: a timeout takes seconds
-                raise LookupFailed(boot_id) from None
+                raise self._failed_lookup(boot_id) from None
         return boots[boot_id]
 
     def restart_time(self, boot_id: str) -> float | None:
@@ -145,10 +160,13 @@ class Journal:
         return result
 
     def desktop_ends(self, boot_id: str) -> list[float]:
-        """When your desktop sessions ended during boot `boot_id`, oldest first."""
+        """When your desktop sessions ended during boot `boot_id`, oldest
+        first. LookupFailed if your journal lists that boot but can't say."""
         boot_id = normalize_boot_id(boot_id)
         if boot_id in self._desktop_ends:
             return self._desktop_ends[boot_id]
+        if boot_id in self._failed:
+            raise LookupFailed(boot_id)
         out = self._run(
             [
                 "--user",
@@ -161,6 +179,12 @@ class Journal:
                 f"MESSAGE_ID={UNIT_STOPPED_MESSAGE_ID}",
             ]
         )
+        # `--user -b` fails for a boot your own journal doesn't have, which is
+        # ordinary: one the system journal lists but you weren't logged in
+        # for, or whose user journal was rotated away first. Only a boot your
+        # journal lists is worth waiting for.
+        if out is None and self._user_lists(boot_id):
+            raise self._failed_lookup(boot_id)
         ends = []
         for line in (out or "").splitlines():
             try:
@@ -174,13 +198,16 @@ class Journal:
 
     def logouts(self, boot_id: str, user: str) -> list[Logout] | None:
         """`user`'s login sessions that ended during boot `boot_id`, oldest
-        first, or None if the journal can't be read."""
+        first, or None if the journal can't be read. LookupFailed if it lists
+        that boot but can't say."""
         boot_id = normalize_boot_id(boot_id)
         key = (boot_id, user)
         if key in self._logouts:
             return self._logouts[key]
         if not self.available:
             return None
+        if boot_id in self._failed:
+            raise LookupFailed(boot_id)
         out = self._run(
             [
                 "-b",
@@ -196,6 +223,10 @@ class Journal:
                 f"USER_ID={user}",
             ]
         )
+        # `-b` fails for a boot the journal doesn't list (it has none of its
+        # sessions); for one it lists, a failure (a timeout, say) says nothing.
+        if out is None and self.lists(boot_id):
+            raise self._failed_lookup(boot_id)
         types: dict[str, str] = {}
         logged_out: dict[str, float] = {}
         removed: dict[str, float] = {}
@@ -223,7 +254,9 @@ class Journal:
         out = self._run(
             ["-b", boot_id, f"MESSAGE_ID={SHUTDOWN_MESSAGE_ID}", "-o", "json", "--output-fields=__REALTIME_TIMESTAMP"]
         )
-        if not out:
+        if out is None:
+            if self.lists(boot_id):
+                raise self._failed_lookup(boot_id)
             return None
         times = []
         for line in out.splitlines():
@@ -256,7 +289,9 @@ class JournalEvents:
       a logout followed later by a restart may be counted as the restart.
     - A record from a boot the journal no longer lists (a journal kept only
       in memory, vacuumed, or cleared): boot_lost() says so, and restart.py
-      works out when that boot ended from its records.
+      works out when that boot ended from its records. One it lists but
+      can't be asked about just now (a query timed out, say) isn't lost:
+      its records wait for the next sort.
     """
 
     def __init__(self, journal: Journal, user: Callable[[], str]):

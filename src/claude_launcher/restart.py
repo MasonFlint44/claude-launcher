@@ -3,8 +3,12 @@
 claude-session-hook leaves a record in state/open/<boot id>_<pid> for each
 interactive Claude. An exit you chose (/exit, /clear, switching with /resume) deletes it;
 any other end (closing the tab, or the desktop closing every window) keeps it,
-with the time it ended. A new Claude that gets the pid of one whose record
-is still there moves that record to <boot id>_<pid>_<its session id>.
+with the time it ended. A start or an unchosen end that finds another
+session's record under its name moves it to <boot id>_<pid>_<its session
+id>: a new Claude got the pid of one whose record is still there, or the
+same Claude started its next session (/clear, /resume) before ending this
+one. So a record moved aside whose own Claude still runs was an end it
+chose, and is deleted.
 
 A record is one line of JSON (`Record.load` reads it and ignores keys it
 doesn't know): "session_id", "pid", "boot_id", "login_session" (the login
@@ -26,13 +30,17 @@ seconds after it ended was closed by it; when several did, the reason with
 the lowest rank wins: a restart over the logout it causes, and a platform's
 own reasons (WSL stopping) after both. One that never recorded an end (the
 power was cut, or the hook never got to run) was closed by the first event
-after it started.
+after it started, or, with none from an earlier boot, when that boot ended:
+the latest end among its records, as below, else this boot's start.
 
 When the system has lost an earlier boot's end (the event source's
 boot_lost: a journal kept only in memory, or a full or cleared event log),
 the latest end among that boot's records stands in for its restart, under
 the same margins. A restart closes every open Claude at once, so those ends
 bunch together; a tab closed by hand well before them wasn't closed by it.
+A record of this boot that nothing closed, from before what the system
+still has (Windows' Fast Startup shuts down without a new boot), waits for
+the boot to end.
 
 Those join the group in restored.json, {session id: {"at": time, "why":
 reason key}}, for KEEP seconds, or until resumed or dismissed. Any other
@@ -63,7 +71,7 @@ if TYPE_CHECKING:
     from .platforms import Event, EventSource, Host
 
 # <boot id>_<pid>, or with _<session id> after it: a record the hook moved
-# aside when a new Claude got its pid. "<record>.tmp" is one being written.
+# aside when another session took its name. "<record>.tmp" is one being written.
 _RECORD_NAME = re.compile(r"[0-9a-f-]{32,36}_[0-9]+(?:_[0-9a-f-]{36})?")
 _TMP_STALE = 60  # a hook writes and renames in milliseconds
 KEEP = 7 * 86400  # how long closed sessions stay in the group
@@ -299,6 +307,13 @@ class RestartState:
                 and record.ended is None
                 and self.host.claude_running(record.pid, record.started, record.start_ticks)
             ):
+                if path.name.count("_") == 2:
+                    # Moved aside, yet its own Claude still runs: that Claude
+                    # started another session before ending this one (/clear
+                    # or /resume, with the start hook run first), so the end
+                    # hook didn't find it. An end it chose.
+                    decided.append((path, record))
+                    continue
                 running.add(record.session_id)
             else:
                 gone.append((path, record, same_boot))
@@ -352,6 +367,15 @@ class RestartState:
             self._boot_started = self.host.boot_start(now)
         return self._boot_started
 
+    def _open_at_boot_end(self, record: Record, now: float, boot_end: float | None) -> Closed:
+        """An earlier boot's record with no end, that no event closed: it was
+        open when that boot ended. The latest end among the boot's records
+        stands in for when, as for a lost boot, so one restart is one time;
+        without one after it started, this boot's start."""
+        if boot_end is not None and boot_end >= record.started:
+            return Closed(boot_end, "restart")
+        return Closed(self._boot_start(now), "restart")
+
     def _closed_by(
         self, record: Record, same_boot: bool, now: float, boot_end: float | None = None
     ) -> Closed | None | object:
@@ -361,7 +385,7 @@ class RestartState:
         events = self.events.events(record, same_boot)
         if events is None:  # the system can't be asked
             if record.ended is None and not same_boot:
-                return Closed(self._boot_start(now), "restart")  # it was open when that boot ended
+                return self._open_at_boot_end(record, now, boot_end)
             return _UNDECIDED
         if record.ended is None:
             after = [e for e in events if e.start >= record.started]
@@ -369,7 +393,7 @@ class RestartState:
             if first:
                 return Closed(first.start, first.why)
             if not same_boot:  # it was open when that boot ended, though the system no longer says when
-                return Closed(self._boot_start(now), "restart")
+                return self._open_at_boot_end(record, now, boot_end)
             return None  # it crashed, or was killed
         if not same_boot:
             lost = self.events.boot_lost(record)
@@ -385,6 +409,12 @@ class RestartState:
                 events = [*events, Event(boot_end, boot_end, "restart")]
         matches = [e for e in events if closes(e, record.ended)]
         if not matches:
+            # In this boot, the system can still have lost what closed it:
+            # Windows' Fast Startup keeps the boot across shutdowns, and the
+            # log may have dropped one. Then it waits, for the next full
+            # restart and the stand-in above, or until KEEP after its end.
+            if same_boot and self.events.boot_lost(record) is not False:
+                return _UNDECIDED
             return None
         ranks = self.ranks
         best = min(matches, key=lambda e: (ranks.get(e.why, unknown(e.why).rank), e.start))
