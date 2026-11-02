@@ -8,7 +8,7 @@ The test suite runs on this machine's Ubuntu, Python, fzf and terminal. These ru
 ./run.sh systemd [IMAGE...]     # logout, restart and power-off detection under real systemd, and a lost journal
 ```
 
-Logs go to `.work/` (gitignored). CI (`.github/workflows/test.yml`) runs all three.
+Logs go to `.work/` (gitignored). CI (`.github/workflows/test.yml`) runs all three; its distro list has to be `DISTROS` in `run.sh`, and the lint job checks it is.
 
 **Distros.** One image per distro: Ubuntu 22.04, 24.04 and 26.04, Debian 12 and 13, Fedora 42 and 43, and Arch. They span Python 3.10 to 3.14, bash 5.1 to 5.3, and fzf 0.29 to the newest. Ubuntu 26.04 ships 0.67.0, the oldest the launcher takes. Each runs `install.sh` as a new user with the distro's own Python, bash and fzf, and checks:
 
@@ -18,7 +18,7 @@ Logs go to `.work/` (gitignored). CI (`.github/workflows/test.yml`) runs all thr
 - the whole test suite on the distro's Python, with PyGObject, the hicolor icon theme and a comma-decimal locale, so the only skips are the Ghostty theme check, the old-Python check (`test_on_a_real_old_python`, where there's no Python older than 3.10) and the live WSL tests (`tests/wsl/test_interop_live.py`); any other skip fails the run;
 - `--uninstall`, and that everything it set up is gone.
 
-pytest and pyte are in a venv built on the system Python; the launcher never uses it. About 35 s a distro once the images are built.
+pytest and pyte are in a venv built on the system Python, at `uv.lock`'s versions (the image is built from the repo's root for it; `distro/Dockerfile.dockerignore` keeps the rest out); the launcher never uses the venv. About 35 s a distro once the images are built.
 
 **Terminals.** This one image, on Arch at 3.6 GB, runs every terminal claude-launcher sets up, plus xterm, live on a virtual X display: Ghostty, kitty, WezTerm, Ptyxis, GNOME Terminal, Konsole and Guake. A run takes about a minute. For each terminal it:
 
