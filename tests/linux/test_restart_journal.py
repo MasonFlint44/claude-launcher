@@ -266,6 +266,28 @@ class TestSystemdBefore251:
         assert Journal(FakeJournal(text_boots=True)).last_entry("33333333-3333-3333-3333-333333333333") is None
 
 
+def test_a_boot_listed_without_its_last_entry_is_looked_up(setup):
+    # --list-boots' JSON with a null last_entry: that boot's last entry is
+    # asked for, as for systemd before 251, and the other boots are unaffected.
+    make, record, session, _ = setup
+    journal = FakeJournal(shutdown_message=None)
+    real = journal.__call__
+
+    def listing(args):
+        out = real(args)
+        if args[0] == "--list-boots":
+            boots = json.loads(out)
+            boots[0]["last_entry"] = None
+            out = json.dumps(boots)
+        return out
+
+    assert Journal(listing).last_entry(THIS_BOOT) == NOW
+    sid = session()
+    record(100, sid, ended=REBOOT + 4.5)
+    assert make(listing).sort().sessions == {sid: Closed(REBOOT + 5, "restart")}
+    assert ["-b", boot_key(LAST_BOOT), "-n", "1"] in [c[:4] for c in journal.calls]
+
+
 class TestLogout:
     LOGOUT = NOW - 120  # the desktop session logged out two minutes ago
 
