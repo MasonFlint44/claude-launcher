@@ -284,6 +284,14 @@ class TestClaudeCommand:
         assert launcher._claude(FakeSignals(0), str(tmp_path), []) is None
         assert capsys.readouterr().err == "claude isn't on your PATH\n"
 
+    @pytest.mark.parametrize("key", ["SystemRoot", "SYSTEMROOT", "systemroot"])
+    def test_windows_npm_cmd_through_system32s_cmd_whatever_the_case(self, monkeypatch, key):
+        for k in [k for k in os.environ if k.upper() == "SYSTEMROOT"]:
+            monkeypatch.delenv(k)
+        monkeypatch.setenv(key, "E:\\Windows")
+        line = launcher._claude_command([], which=lambda name: "C:\\npm\\claude.cmd", windows=True)
+        assert line.startswith('"E:\\Windows\\System32\\cmd.exe" ')  # not ComSpec, and no C: assumed
+
     def test_windows_npm_cmd_through_cmd(self):
         found = "C:\\Users\\me\\AppData\\Roaming\\npm\\claude.CMD"
         line = launcher._claude_command(
