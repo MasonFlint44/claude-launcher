@@ -99,10 +99,12 @@ def install_terminals(ctx: Context, names: list[str] | None) -> list[str]:
     profiled = []
     try:
         for term in chosen:
-            term.install(ctx)
+            # Noted before it starts: an install that fails partway can leave
+            # part of a profile, and uninstall() takes that out too.
             profiled.append(term.name)
+            term.install(ctx)
     except BaseException:
-        # Note what has a profile now, so uninstall takes it out.
+        # Note what may have a profile now, so a later switch takes it out.
         _save_terminals(ctx, list(dict.fromkeys([*(saved or []), *profiled])))
         raise
     done, written = [], set()

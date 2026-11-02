@@ -389,7 +389,34 @@ class TestInstallTerminals:
             desktop.install_terminals(ctx, ["ptyxis"])
         assert self.entries(ctx) == [f"{APP_ID}.desktop"]
         assert (ctx.data_home / "applications" / f"{APP_ID}.desktop").read_text() == before
-        assert desktop.saved_terminals(ctx) == ["ghostty"]
+        # Noted, since it may have left part of a profile.
+        assert desktop.saved_terminals(ctx) == ["ghostty", "ptyxis"]
+
+    @pytest.mark.parametrize("then", ["switch", "uninstall"])
+    def test_a_profile_that_fails_partway_comes_out(self, ctx, then):
+        desktop.install_terminals(ctx, ["ghostty"])
+        gsettings = ctx.run
+
+        def palette_fails(argv):
+            if argv[:2] == ["gsettings", "set"] and argv[3] == "palette":
+                return subprocess.CompletedProcess(argv, 1, "", "dconf is read-only")
+            return gsettings(argv)
+
+        ctx.run = palette_fails
+        with pytest.raises(RuntimeError, match="palette failed"):
+            desktop.install_terminals(ctx, ["ptyxis"])
+        ptyxis = TERMINALS["ptyxis"]
+        profile_keys = lambda: [k for k in gsettings.values if k[0] == ptyxis._profile()]  # noqa: E731
+        assert profile_keys() and ptyxis.palette_file(ctx).exists()  # it got partway
+
+        ctx.run = gsettings
+        if then == "switch":
+            desktop.install_terminals(ctx, ["ghostty"])
+        else:
+            desktop.remove_terminals(ctx)
+        assert profile_keys() == []
+        assert not ptyxis.palette_file(ctx).exists()
+        assert ptyxis.profile_id not in gsettings.values[("org.gnome.Ptyxis", "profile-uuids")]
 
     def test_ptyxis_palette_goes_without_gsettings(self, ctx):
         desktop.install_terminals(ctx, ["ptyxis"])
