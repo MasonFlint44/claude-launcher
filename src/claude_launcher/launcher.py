@@ -1,9 +1,6 @@
 """The launcher: pick a project directory or a recent session, start Claude
 Code there, and come back to the picker when Claude exits.
-bin/claude-launcher runs main().
-
-    claude-launcher [claude options]   pick, then run claude with those options
-    claude-launcher --resume <id>      skip the picker: resume that session in its directory
+bin/claude-launcher runs main(); USAGE is what --help shows.
 
 The terminal is left as it was found: its colors and title go back on exit,
 unless the terminal itself has gone (a hang-up). Ctrl-C belongs to fzf and to
@@ -14,6 +11,8 @@ exit, as a shell would, so Claude is never left running without the launcher.
 
 from __future__ import annotations
 
+import contextlib
+import errno
 import os
 import secrets
 import shutil
@@ -22,12 +21,27 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from . import fzf, logs, text, theme, title
 from .paths import Paths
-from .picker import FzfTooOld, Pick, Picker, resume_dir
+from .paths import which as _which
+from .picker import FzfTooOld, Pick, Picker, group_of, resume_dir, ungroup_keys
+from .restart import RestartState
+
+USAGE = """\
+Pick a project directory or a recent session, then start Claude Code there.
+When Claude exits, the picker comes back.
+
+  claude-launcher [claude options]   pick, then run claude with those options
+  claude-launcher --resume <id>      skip the picker: resume that session in its directory
+  claude-launcher -r <id>            the same
+  claude-launcher --help, -h         show this
+  claude-launcher --version          show the launcher's version
+
+--help, -h and --version count only as the first argument; after another one
+they go to claude. See README.md for the keys."""
 
 HUNG_UP = 129
 TERMINATED = 143
@@ -59,13 +73,22 @@ class _Signals:
 
         return handler
 
-    def run(self, argv: Sequence[str], **kwargs) -> subprocess.CompletedProcess:
-        """Run a child in the foreground. A handler, not SIG_IGN, for Ctrl-C:
-        an ignored signal stays ignored in the child, a handler doesn't."""
+    def run(
+        self, argv: Sequence[str] | str, started: Callable[[], None] | None = None, **kwargs
+    ) -> subprocess.CompletedProcess:
+        """Run a child in the foreground, calling `started` once it has. A
+        handler, not SIG_IGN, for Ctrl-C: an ignored signal stays ignored in
+        the child, a handler doesn't. A str is a Windows command line, passed
+        on as it is (npm's claude.cmd through cmd)."""
+        argv = argv if isinstance(argv, str) else list(argv)
         old = signal.signal(signal.SIGINT, lambda *_: None)
         self.in_child = True
         try:
-            return subprocess.run(list(argv), **kwargs)
+            if started is None:
+                return subprocess.run(argv, **kwargs)
+            with subprocess.Popen(argv, **kwargs) as child:
+                started()
+                return subprocess.CompletedProcess(child.args, child.wait())
         finally:
             self.in_child = False
             signal.signal(signal.SIGINT, old)
@@ -73,18 +96,35 @@ class _Signals:
                 raise _Exit(self.pending)
 
 
-def _resume_dir(args: Sequence[str]) -> str | int | None:
-    """`--resume <id>` / `-r <id>`: the directory to resume that session in.
-    None if the arguments don't ask to resume one; 1 if there's no such session."""
-    for flag, value in zip(args, args[1:], strict=False):
-        if flag in ("--resume", "-r") and logs.is_session_id(value):
-            paths = Paths.from_env()
-            directory = logs.session_dir(paths, value)
-            if directory is None:
-                print(f"No session with ID {value}", file=sys.stderr)
-                return 1
-            return resume_dir(directory, paths)
-    return None
+def _resume(args: Sequence[str]) -> tuple[str, list[str]] | int | None:
+    """`--resume <id>` / `-r <id>`: the directory to resume that session in,
+    and what to take out of the restart group once Claude has started, as
+    Enter in the picker does. None if the arguments don't ask to resume one;
+    1 if there's no such session."""
+    pairs = zip(args, args[1:], strict=False)
+    session_id = next((v for f, v in pairs if f in ("--resume", "-r") and logs.is_session_id(v)), None)
+    if session_id is None:
+        return None
+    paths = Paths.from_env()
+    directory = logs.session_dir(paths, session_id)
+    if directory is None:
+        print(f"No session with ID {session_id}", file=sys.stderr)
+        return 1
+    # Sorted first, as opening the picker does: a session a restart closed
+    # joins the group now, and so leaves it, instead of coming back as a ↻
+    # row at the next picker although it was resumed.
+    state = RestartState(paths)
+    try:
+        group = state.sort()
+    except OSError:  # can't write the group: resume anyway, from what's there
+        group = state.load()
+
+    def continued_from() -> dict[str, str]:
+        log = paths.log_for(session_id)  # continuations never leave their log directory
+        return logs.scan_sessions([log.parent] if log else [])[1]
+
+    key = group_of(session_id, group, continued_from)
+    return resume_dir(directory, paths), ungroup_keys(session_id, key)
 
 
 def _tty() -> int | None:
@@ -160,16 +200,22 @@ def _batch_arg(arg: str) -> str:
 
 
 def _claude_command(
-    args: Sequence[str], which=shutil.which, windows: bool = os.name == "nt", comspec: str | None = None
+    args: Sequence[str],
+    which: Callable[[str], str | None] | None = None,
+    windows: bool = os.name == "nt",
+    comspec: str | None = None,
 ) -> list[str] | str:
     """How to run claude with `args`. On Windows, npm installs it as
     claude.cmd, which CreateProcess can't start by name (it doesn't try
-    PATHEXT), so it's found on PATH and run through cmd."""
+    PATHEXT), so it's found on PATH and run through cmd. Never by its bare
+    name there: CreateProcess would look in the current directory first."""
     if not windows:
         return ["claude", *args]
-    found = which("claude")
-    if not found or not found.lower().endswith((".cmd", ".bat")):
-        return [found or "claude", *args]
+    found = which("claude") if which else _which("claude", windows=True)
+    if not found:
+        raise FileNotFoundError(errno.ENOENT, "claude isn't on your PATH", "claude")
+    if not found.lower().endswith((".cmd", ".bat")):
+        return [found, *args]
     if any(c in a for a in args for c in "\r\n\0"):
         raise ValueError("Can't pass a line break to claude.cmd")
     line = " ".join([f'"{found}"', *(_batch_arg(a) for a in args)])
@@ -177,13 +223,18 @@ def _claude_command(
     # System32's cmd.exe, not %ComSpec%, which can be another shell (TCC)
     # that reads these switches its own way.
     if comspec is None:
-        root = os.environ.get("SYSTEMROOT")  # os.environ ignores case on Windows
-        comspec = os.path.join(root, "System32", "cmd.exe") if root else "cmd.exe"
+        from .platforms.windows import system32
+
+        comspec = system32(os.environ, "cmd.exe")
     return f'"{comspec}" /d /e:on /v:off /s /c "{line}"'
 
 
-def _claude(signals: _Signals, directory: str, args: Sequence[str]) -> int | None:
-    """Run claude in `directory`. Its exit code, or None if it couldn't start."""
+def _claude(
+    signals: _Signals, directory: str, args: Sequence[str], started: Callable[[], None] | None = None
+) -> int | None:
+    """Run claude in `directory`, calling `started` once it has. Its exit
+    code as a shell gives it (128 + the signal, if one killed it), or None if
+    it couldn't start."""
     if not os.path.isdir(directory):  # Windows says "directory name is invalid", not "not found"
         print(f"No such directory: {directory}", file=sys.stderr)
         return None
@@ -191,7 +242,8 @@ def _claude(signals: _Signals, directory: str, args: Sequence[str]) -> int | Non
     if os.name != "nt":  # as a shell's cd would: cwd alone leaves PWD naming where the launcher started
         env = {**os.environ, "PWD": directory}
     try:
-        return signals.run(_claude_command(args), cwd=directory, env=env).returncode
+        code = signals.run(_claude_command(args), started=started, cwd=directory, env=env).returncode
+        return 128 - code if code < 0 else code
     except ValueError as e:
         print(e, file=sys.stderr)
     except FileNotFoundError as e:
@@ -200,6 +252,18 @@ def _claude(signals: _Signals, directory: str, args: Sequence[str]) -> int | Non
     except (NotADirectoryError, PermissionError) as e:
         print(f"Can't open {directory}: {e.strerror}", file=sys.stderr)
     return None
+
+
+def _ungroup(keys: list[str]) -> Callable[[], None] | None:
+    """What takes a resumed session out of the restart group, once Claude is running."""
+    if not keys:
+        return None
+
+    def ungroup() -> None:
+        with contextlib.suppress(OSError):  # Claude is running; the row staying is all that's lost
+            RestartState(Paths.from_env()).drop(keys)
+
+    return ungroup
 
 
 def _loop(signals: _Signals, run: Path, args: list[str]) -> int:
@@ -235,12 +299,45 @@ def _loop(signals: _Signals, run: Path, args: list[str]) -> int:
             continue
         again = False
         resume = ["--resume", result.session_id] if result.session_id else []
-        if _claude(signals, result.dir, [*resume, *args]) is None:
+        if _claude(signals, result.dir, [*resume, *args], _ungroup(result.ungroup)) is None:
             time.sleep(1)
+
+
+def version(windows: bool = os.name == "nt") -> str:
+    """The version, with the commit when the launcher runs from a git clone
+    (how it's installed). Leaves the commit out if git can't say."""
+    from . import __version__
+    from .paths import REPO_DIR
+
+    if not (REPO_DIR / ".git").exists():  # git would look in the directories above
+        return __version__
+    git = _which("git", windows=windows)
+    if not git:
+        return __version__
+    try:
+        done = subprocess.run(
+            [git, "-C", str(REPO_DIR), "describe", "--tags", "--always", "--dirty"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return __version__
+    commit = done.stdout.strip()
+    if done.returncode != 0 or not commit or commit == f"v{__version__}":  # exactly the release
+        return __version__
+    return f"{__version__} ({commit})"
 
 
 def main(args: list[str]) -> int:
     text.utf8_out()
+    # Only first: later, "--help" may be a claude option's value.
+    if args[:1] in (["--help"], ["-h"]):
+        print(USAGE)
+        return 0
+    if args[:1] == ["--version"]:
+        print(f"claude-launcher {version()}")
+        return 0
     from .platforms import Unsupported, current
 
     try:
@@ -249,7 +346,10 @@ def main(args: list[str]) -> int:
         print(e, file=sys.stderr)
         return 1
     # `--resume <id>`: straight to that session, in the directory it was started in.
-    resume = _resume_dir(args)
+    try:
+        resume = _resume(args)
+    except KeyboardInterrupt:  # Ctrl-C in the pause before resuming from ~
+        return QUIT
     if isinstance(resume, int):  # an error, already shown
         return resume
     signals = _Signals()
@@ -259,7 +359,7 @@ def main(args: list[str]) -> int:
         # Claude Dark for this tab while the launcher runs, Claude included.
         _theme(run, "apply")
         if resume is not None:
-            code = _claude(signals, resume, args)
+            code = _claude(signals, resume[0], args, _ungroup(resume[1]))
             return 1 if code is None else code
         return _loop(signals, run, args)
     except _Exit as e:

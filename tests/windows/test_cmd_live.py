@@ -6,6 +6,8 @@ import os
 import shutil
 import subprocess
 import sys
+import time
+import warnings
 
 import pytest
 
@@ -62,10 +64,10 @@ def probe(tmp_path):
     return cmd
 
 
-def run_probe(cmd, *path, **more):
+def run_probe(cmd, *path, cwd=None, **more):
     env = {"SystemRoot": os.environ["SYSTEMROOT"], "PATH": os.pathsep.join(str(p) for p in path), **more}
     return subprocess.run(
-        f'"{CMD}" /d /c "{cmd}"', env=env, capture_output=True, text=True, encoding="utf-8", timeout=30
+        f'"{CMD}" /d /c "{cmd}"', env=env, cwd=cwd, capture_output=True, text=True, encoding="utf-8", timeout=30
     )
 
 
@@ -148,6 +150,71 @@ def test_the_cmds_own_variables_stay_out_of_pythons_environment(tmp_path, python
         assert done.stdout.strip() in ("[]", "['CLAUDE_LAUNCHER_FALLBACK']")
 
 
+def test_a_python_in_the_current_directory_isnt_taken(probe, pythons, tmp_path):
+    # %~$PATH: may look in the current directory first; install.ps1's
+    # Get-Command doesn't, so neither does the .cmd (it searches from its own).
+    here = venv(tmp_path / "here")
+    assert ran(run_probe(probe, pythons["real"], cwd=here), pythons["real"])
+    done = run_probe(probe, tmp_path, cwd=here)  # and none on PATH: none at all
+    assert done.returncode == 9009 and "needs Python 3.10 or newer" in done.stderr, (done.stdout, done.stderr)
+
+
+def test_the_cmd_leaves_the_current_directory_as_it_was(tmp_path, pythons):
+    # The hook and the launcher run in Claude's directory, not the .cmd's.
+    (tmp_path / "cwd.py").write_text("import os\nprint(os.getcwd())\n", encoding="utf-8")
+    cmd = tmp_path / "cwd.cmd"
+    cmd.write_text(windows_setup.run_cmd("cwd.py"), encoding="ascii", newline="")
+    here = tmp_path / "here (a&b)"
+    here.mkdir()
+    done = run_probe(cmd, pythons["real"], cwd=here)
+    assert done.returncode == 0, done.stderr
+    assert os.path.normcase(done.stdout.strip()) == os.path.normcase(str(here))
+
+
+@pytest.fixture
+def shim(tmp_path):
+    """claude-launcher.cmd as on PATH, and where it hands over to: a .cmd
+    that shows its arguments, under %USERPROFILE%\\AppData\\Local."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "claude-launcher.cmd").write_text(windows_setup.shim_cmd(), encoding="ascii", newline="")
+    profile = tmp_path / "A&B 100%"
+    target = profile / "AppData" / "Local" / "claude-launcher" / "claude-launcher.cmd"
+    target.parent.mkdir(parents=True)
+    target.write_text("@echo off\r\necho ran %*\r\nexit /b 7\r\n", encoding="ascii", newline="")
+    return bin_dir / "claude-launcher.cmd", profile
+
+
+def run_shim(cmd, **env):
+    env = {"SystemRoot": os.environ["SYSTEMROOT"], **env}
+    return subprocess.run(
+        f'"{CMD}" /d /c ""{cmd}" --resume x"', env=env, capture_output=True, text=True, encoding="utf-8", timeout=30
+    )
+
+
+def test_the_shim_without_localappdata_takes_the_profiles(shim):
+    cmd, profile = shim
+    done = run_shim(cmd, USERPROFILE=str(profile))
+    assert done.returncode == 7 and done.stdout.strip() == "ran --resume x", (done.stdout, done.stderr)
+
+
+def test_the_shim_with_localappdata(shim):
+    cmd, profile = shim
+    done = run_shim(cmd, LOCALAPPDATA=str(profile / "AppData" / "Local"), USERPROFILE="C:\\nowhere")
+    assert done.returncode == 7 and done.stdout.strip() == "ran --resume x", (done.stdout, done.stderr)
+
+
+@pytest.mark.parametrize("where", ["localappdata", "profile"])
+def test_the_shim_with_nothing_to_hand_over_to(shim, tmp_path, where):
+    cmd, _ = shim
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    env = {"LOCALAPPDATA": str(empty)} if where == "localappdata" else {"USERPROFILE": str(empty)}
+    done = run_shim(cmd, **env)
+    assert done.returncode == 9009 and "isn't set up for this user; run install.ps1 again" in done.stderr
+    assert "ran" not in done.stdout
+
+
 def test_no_python_at_all(probe, tmp_path):
     empty = tmp_path / "empty"
     empty.mkdir()
@@ -165,6 +232,88 @@ def test_too_old_and_nothing_else(tmp_path, pythons, monkeypatch):
     cmd.write_text(windows_setup.run_cmd("entry.py"), encoding="ascii", newline="")
     done = run_probe(cmd, pythons["real"])
     assert done.returncode == windows_setup.TOO_OLD and "needs Python 99.0 or newer (found" in done.stderr
+
+
+def test_a_python_in_a_directory_cmd_would_trip_on(probe, tmp_path_factory):
+    # The search's lines expand the path when cmd reads them: the
+    # %a:\WindowsApps\=% test and the parenthesised set lines must keep
+    # & ( ) % ! in it as they are.
+    root = tmp_path_factory.mktemp("hostile") / "A&B (x) 100% !y!"
+    real, store = venv(root / "real"), venv(root / "WindowsApps")
+    assert ran(run_probe(probe, real), real)
+    # A WindowsApps one first and no py: set aside, then run after all.
+    assert ran(run_probe(probe, store, real), store)
+
+
+def drives():
+    import ctypes
+
+    return ctypes.windll.kernel32.GetLogicalDrives()
+
+
+def test_the_cmd_from_a_share(probe, pythons, tmp_path):
+    # A data directory on a share (a redirected AppData): pushd maps it to a
+    # drive letter for the search, and popd takes the mapping away again.
+    drive, rest = os.path.splitdrive(str(probe))
+    shared = f"\\\\127.0.0.1\\{drive[:1]}${rest}"
+    if len(drive) != 2 or not os.path.isfile(shared):
+        pytest.skip(f"{probe} can't be reached through an administrative share")
+    before = drives()
+    done = run_probe(shared, pythons["real"], cwd=tmp_path)
+    assert ran(done, pythons["real"]), (done.stdout, done.stderr)
+    assert drives() == before, "pushd left a drive mapped"
+
+
+def test_a_failed_pushd_searches_from_system32(pythons, tmp_path):
+    # pushd fails on a share when there's no drive letter free. Then the
+    # search is from System32, not the caller's directory.
+    find = windows_setup._FIND.format(**windows_setup._VARS)
+    assert '"%~dp0."' in find
+    find = find.replace('"%~dp0."', '"%~dp0missing"')
+    cmd = tmp_path / "find.cmd"
+    text = "@echo off\nsetlocal DisableDelayedExpansion\n" + find + "echo %CLAUDE_LAUNCHER_PYTHON%\ncd\n"
+    cmd.write_text(text.replace("\n", "\r\n"), encoding="ascii", newline="")
+    here = venv(tmp_path / "here")
+    done = run_probe(cmd, pythons["real"], cwd=here)
+    assert done.returncode == 0 and not done.stderr, (done.stdout, done.stderr)
+    found, cwd = done.stdout.splitlines()
+    assert os.path.normcase(found) == os.path.normcase(str(pythons["real"] / "python.exe"))
+    assert os.path.normcase(cwd) == os.path.normcase(str(here))  # popd: back where it was
+
+
+def test_a_running_cmd_replaced_with_other_text(tmp_path):
+    # Why the installer leaves a .cmd that's unchanged alone: cmd reads a
+    # running batch file a line at a time, from a byte offset, so an open
+    # launcher tab could run part of a new one. Here the .cmd is replaced
+    # while a command in it runs, and the new text has, at the old offset of
+    # the next line, a line of its own. Which ran says what cmd did.
+    sleep = f'"{sys.executable}" -c "import time; time.sleep(3)"'
+    old = f"@echo off\r\n{sleep}\r\necho AFTER-OLD\r\n"
+    new = f"@echo off\r\n{sleep}XXecho MIDLINE\r\necho AFTER-NEW\r\n"
+    assert new.index("echo MIDLINE") == old.index("echo AFTER-OLD")
+    cmd = tmp_path / "running.cmd"
+    cmd.write_text(old, encoding="ascii", newline="")
+    running = subprocess.Popen(
+        f'"{CMD}" /d /c "{cmd}"', stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8"
+    )
+    time.sleep(1)
+    tmp = tmp_path / "running.cmd.tmp"
+    tmp.write_text(new, encoding="ascii", newline="")
+    try:
+        os.replace(tmp, cmd)
+        replaced = "replaced"
+    except PermissionError:
+        replaced = "refused (cmd holds it open)"
+    out, err = running.communicate(timeout=30)
+    ran_after = out.split()
+    known = {
+        ("MIDLINE", "AFTER-NEW"): "carried on at its byte offset in the new file",
+        ("AFTER-OLD",): "carried on in the old file",
+        ("AFTER-NEW",): "carried on at the next line of the new file",
+    }
+    outcome = known.get(tuple(ran_after), f"ran {ran_after!r}, said {err.strip()!r}")
+    warnings.warn(f"a running .cmd: {replaced}; cmd {outcome}", stacklevel=1)
+    assert replaced == "replaced" or ran_after == ["AFTER-OLD"]
 
 
 def test_fzf_find_takes_a_fetched_fzf_exe(tmp_path):
@@ -188,21 +337,24 @@ def test_fzf_find_takes_the_installed_one():
     assert path == str(own / "fzf.exe") and version >= fzf.MIN_VERSION
 
 
-def test_npms_claude_cmd_gets_its_arguments_as_they_were(tmp_path):
-    # npm installs claude as claude.cmd; the launcher runs it through cmd.
-    import json
-    import subprocess
-    import sys
-
+def test_npms_claude_cmd_gets_its_arguments_as_they_were(tmp_path, monkeypatch):
+    # npm installs claude as claude.cmd; the launcher finds it on PATH and
+    # runs it through cmd, as _claude does when the picker starts it.
     from claude_launcher import launcher
 
     d = tmp_path / "npm claude (x)"
     d.mkdir()
+    out = tmp_path / "args.json"
     show = d / "show.py"
-    show.write_text("import json, sys; print(json.dumps(sys.argv[1:]))")
+    show.write_text(f"import json, sys; open({str(out)!r}, 'w').write(json.dumps(sys.argv[1:]))")
     cmd = d / "claude.cmd"
     cmd.write_text(f'@echo off\r\n"{sys.executable}" "{show}" %*\r\n', newline="")
+    monkeypatch.setenv("PATH", str(d))
     args = ["--resume", "a b", "x&y", "100%", '"q"', "^caret", "!x!", "%PATH%", "C:\\x\\", "end\\\\"]
-    line = launcher._claude_command(args, which=lambda name: str(cmd), windows=True)
-    out = subprocess.run(line, capture_output=True, text=True, check=True).stdout
-    assert json.loads(out) == args
+    assert isinstance(launcher._claude_command(args), str)  # through cmd, not by name
+    signals = launcher._Signals.__new__(launcher._Signals)  # without its TERM handler
+    signals.pending, signals.in_child = None, False
+    started = []
+    assert launcher._claude(signals, str(tmp_path), args, lambda: started.append(1)) == 0
+    assert started == [1]
+    assert json.loads(out.read_text()) == args

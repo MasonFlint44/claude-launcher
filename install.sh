@@ -61,7 +61,13 @@ while (( $# )); do
     --terminal) terminal=${2:?--terminal needs a name}; shift ;;
     --terminal=*) terminal=${1#*=} ;;
     --icon) icon=${2:?--icon needs a file}; shift ;;
-    --icon=*) icon=${1#*=} ;;
+    --icon=*)
+      icon=${1#*=}
+      # The shell expands ~ only in the space form.
+      case $icon in
+        \~) icon=$HOME ;;
+        \~/*) icon=$HOME/${icon#\~/} ;;
+      esac ;;
     -h|--help) usage; exit 0 ;;
     *) usage >&2; exit 2 ;;
   esac

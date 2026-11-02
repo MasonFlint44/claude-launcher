@@ -1,5 +1,6 @@
 """What every platform's EventSource has to do, on the platform these tests
-run on: answer for a record without failing, with well-formed events."""
+run on: answer for a record without failing, with well-formed events, and
+say whether a boot is lost."""
 
 from __future__ import annotations
 
@@ -31,3 +32,13 @@ def test_this_boot():
 
 def test_a_boot_the_system_never_saw():
     check(PLATFORM.events().events(record("f" * 32), same_boot=False))
+
+
+def test_whether_a_boot_is_lost():
+    assert PLATFORM.events().boot_lost(record("f" * 32)) in (True, False, None)
+
+
+def test_a_record_of_this_boot_that_just_ended_isnt_lost():
+    # restart.py asks this when nothing closed such a record; a working
+    # system still has the last half minute.
+    assert PLATFORM.events().boot_lost(record(PLATFORM.host.boot_id())) in (False, None)

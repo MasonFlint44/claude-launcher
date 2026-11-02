@@ -89,7 +89,8 @@ class Terminal:
         """Make any changes the terminal needs (a profile, say)."""
 
     def uninstall(self, ctx: Context) -> None:
-        """Undo install()."""
+        """Undo install(). Uninstall runs it for every terminal, so it has to
+        be safe after an install that stopped partway, or none at all."""
 
 
 # --- Options ---------------------------------------------------------------
@@ -139,9 +140,11 @@ def _gsettings_list(ctx: Context, schema: str, key: str) -> list[str] | None:
     if text.startswith("@as"):
         text = text[3:].strip()
     try:
-        return json.loads(text.replace("'", '"'))
+        ids = json.loads(text.replace("'", '"'))
     except ValueError:
         return None
+    # Anything but a list of strings would be split up or lost when set back.
+    return ids if isinstance(ids, list) and all(isinstance(i, str) for i in ids) else None
 
 
 def _gsettings_set(ctx: Context, schema: str, key: str, value: object) -> None:
@@ -186,10 +189,14 @@ class _GSettingsProfile(Terminal):
             _gsettings_set(ctx, self.list_schema, self.list_key, [*ids, self.profile_id])
 
     def uninstall(self, ctx: Context) -> None:
-        ids = _gsettings_list(ctx, self.list_schema, self.list_key)
-        if ids and self.profile_id in ids:
-            _gsettings_set(ctx, self.list_schema, self.list_key, [i for i in ids if i != self.profile_id])
-        ctx.run(["gsettings", "reset-recursively", self._profile()])
+        # Safe without the terminal or our profile: gsettings says "No such
+        # schema" (exit 1, at once), and a missing gsettings raises OSError.
+        try:
+            ids = _gsettings_list(ctx, self.list_schema, self.list_key)
+            if ids and self.profile_id in ids:
+                _gsettings_set(ctx, self.list_schema, self.list_key, [i for i in ids if i != self.profile_id])
+        finally:
+            ctx.run(["gsettings", "reset-recursively", self._profile()])
 
 
 def ptyxis_palette(theme: Theme) -> str:
@@ -231,8 +238,9 @@ class Ptyxis(_GSettingsProfile):
         }
 
     def uninstall(self, ctx: Context) -> None:
-        super().uninstall(ctx)
+        # First: the palette is ours to take out even when gsettings can't run.
         self.palette_file(ctx).unlink(missing_ok=True)
+        super().uninstall(ctx)
 
     def install(self, ctx: Context) -> None:
         # Ptyxis uses the first profile when default-profile-uuid doesn't name

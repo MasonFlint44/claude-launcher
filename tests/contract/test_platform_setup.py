@@ -7,7 +7,10 @@ import os
 import platform as machine
 from pathlib import Path
 
+import pytest
+
 from claude_launcher import fzf
+from claude_launcher.install import FAILURES
 from claude_launcher.platforms import current
 from claude_launcher.restart import SHARED
 
@@ -25,6 +28,13 @@ def test_setup_says_what_it_sets_up():
         assert any("claude-session-hook" in part for part in hook)
     assert all(callable(command) for command in setup.commands.values())
     assert callable(setup.check) and callable(setup.install) and callable(setup.uninstall)
+
+
+def test_check_turns_down_an_icon_that_isnt_there(tmp_path):
+    setup = PLATFORM.setup()
+    setup.check(None, None)
+    with pytest.raises(FAILURES):
+        setup.check(None, str(tmp_path / "missing.png"))
 
 
 def test_there_is_an_fzf_to_fetch_here():

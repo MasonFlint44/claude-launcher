@@ -4,11 +4,20 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 from pathlib import Path
 
+from . import files
+
 HOOK_NAME = "claude-session-hook"
+# The names the hook is run by: the script (Linux, WSL), Windows' entry
+# script, and the .cmd that runs it.
+HOOK_FILES = (HOOK_NAME, HOOK_NAME + ".py", HOOK_NAME + ".cmd")
 HOOK_EVENTS = (("SessionStart", "start"), ("SessionEnd", "end"))
+# Windows can refuse to replace settings.json for a moment while another
+# process has it open (files.replace tries again); elsewhere it's os.replace.
+_WINDOWS = os.name == "nt"
 
 
 def _read_settings(path: Path) -> tuple[str, dict]:
@@ -58,18 +67,36 @@ def _write_settings(path: Path, settings: dict, old_text: str) -> bool:
     tmp.write_text(new, encoding="utf-8", newline="")
     if target.exists():
         os.chmod(tmp, target.stat().st_mode & 0o7777)
-    os.replace(tmp, target)
+    (files.replace if _WINDOWS else os.replace)(tmp, target)
     return True
 
 
+def _names_ours(path: object) -> bool:
+    """Whether `path`'s last part is one of the hook's names: a wrapper
+    called my-claude-session-hook isn't ours."""
+    return isinstance(path, str) and re.split(r"[/\\]", path)[-1] in HOOK_FILES
+
+
 def _is_ours(hook: object) -> bool:
-    """Our hook, in either form: a shell command line, or a program and its
-    "args" (how Windows runs it, with no shell)."""
+    """Our hook, in either form: a shell command line whose program is the
+    hook, or a program and its "args" (how Windows runs it, with no shell:
+    cmd /c the .cmd, or before that python the script) where either is."""
     if not isinstance(hook, dict):
         return False
-    args = hook.get("args")
-    parts = [hook.get("command", ""), *(args if isinstance(args, list) else [])]
-    return any(HOOK_NAME in str(p) for p in parts)
+    command, args = hook.get("command"), hook.get("args")
+    if isinstance(args, list):
+        return any(_names_ours(p) for p in [command, *args])
+    if not isinstance(command, str):
+        return False
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        words = []
+    if words and _names_ours(words[0]):
+        return True
+    # From before the quoting: a path with a space in it, unquoted.
+    program, _, arg = command.rpartition(" ")
+    return arg in {a for _, a in HOOK_EVENTS} and _names_ours(program)
 
 
 def hook_entry(argv: list[str], arg: str) -> dict:

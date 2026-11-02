@@ -56,7 +56,8 @@ class PathText:
         return self.with_sep(directory) + rest if rest else directory
 
     def without_sep(self, path: str) -> str:
-        """`path` without a trailing separator, except a root itself."""
+        """`path` without a trailing separator, except / and a drive's root
+        (C:\\). A share's root loses it too: \\\\srv\\share names it as well."""
         stripped = path.rstrip(self.seps)
         if not stripped:
             return self.sep
@@ -80,7 +81,7 @@ class PathText:
         leading \\\\ is a network share and stays, and a drive on its own
         ends in a separator (C: is C:\\, \\\\srv\\share is \\\\srv\\share\\), so a
         root compares the same either way."""
-        if self.windows and path[:2] and all(c in self.seps for c in path[:2]):
+        if self.windows and len(path) >= 2 and path[0] in self.seps and path[1] in self.seps:
             return self._normal_unc(path)
         path = self.path.normpath(path)
         if self.windows:

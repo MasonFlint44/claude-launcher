@@ -1,7 +1,11 @@
 name: test
 
+# Pushes to main and release tags, and every PR (from a branch here or a
+# fork). A branch without a PR runs only by hand (workflow_dispatch).
 on:
   push:
+    branches: [main]
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
@@ -27,6 +31,11 @@ jobs:
       - run: uvx $RUFF check $PY_FILES
       - run: uvx $RUFF format --check $PY_FILES
       - run: shellcheck bin/claude-session-hook install.sh scripts/render-icons.sh tests/docker/run.sh tests/docker/*/*.sh tests/docker/terminals/systemd-run
+      - name: the distro jobs are DISTROS in tests/docker/run.sh
+        run: |
+          want=$(sed -n 's/^DISTROS=(\(.*\))$/\1/p' tests/docker/run.sh)
+          have=$(sed -n 's/^ *image: \[\(.*\)\]$/\1/p' .github/workflows/test.yml | tr -d ,)
+          [[ -n $want && $have == "$want" ]] || { echo "distro matrix: $have; run.sh's DISTROS: $want" >&2; exit 1; }
 
   # The suite with fzf's floor (fzf.MIN_VERSION) first on PATH, and the entry
   # scripts on a real old Python. The distro jobs run the pinned fzf.

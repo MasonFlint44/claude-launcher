@@ -44,7 +44,12 @@ fi
 
 step "pytest"
 # The tests run whichever fzf comes first, so put the launcher's first.
-PATH=$(dirname "$fzf_path"):$PATH /opt/venv/bin/python -m pytest -q -rs -p no:cacheprovider "$repo"
+PATH=$(dirname "$fzf_path"):$PATH /opt/venv/bin/python -m pytest -q -rs -p no:cacheprovider "$repo" |
+  tee "$HOME/pytest.log"
+# Only these skip here; any other skip is a test that quietly stopped running.
+skipped=$(grep '^SKIPPED' "$HOME/pytest.log" |
+  grep -v -e ': ghostty not installed$' -e ': no Python older than 3.10 here$' -e ': WSL only$' || true)
+[[ -z $skipped ]] || fail "skipped here: $skipped"
 
 step "install.sh --uninstall"
 "$repo/install.sh" --uninstall

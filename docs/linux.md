@@ -19,12 +19,12 @@ The installer:
 4. Links the theme to `~/.config/ghostty/themes/claude-dark`.
 5. Adds the app icon and a **Claude Code** desktop launcher for your terminal (see below), with a Claude Code profile in terminals that use profiles.
 
-Re-running it is safe; it updates what's already there, and remembers the options you gave it last time. It never replaces a file that isn't one of its own links.
+It checks `--terminal` and `--icon` (or, without them, the terminal and icon it was set up with last time) first, and changes nothing if one is wrong or isn't installed any more; `--terminal auto` picks again. Re-running it is safe; it updates what's already there, and remembers the options you gave it last time. It never replaces a file that isn't one of its own links.
 
 | Option | Does |
 |---|---|
 | `--terminal NAME[,NAME...]` | The terminal(s) **Claude Code** opens: `ghostty`, `kitty`, `wezterm`, `ptyxis`, `gnome-terminal`, `konsole`, `guake` or `default`. The first gets the plain name, the others "Claude Code (Guake)" and so on. `auto` goes back to picking. |
-| `--icon FILE` | Your own app icon, an `.svg` or a square `.png`. A copy is kept, so the original can move. `--icon default` goes back to the one in `share/icons`. |
+| `--icon FILE` | Your own app icon, an `.svg` or a square `.png` (512 by 512 or bigger looks sharpest; any size works). A copy is kept, so the original can move. `--icon default` goes back to the one in `share/icons`. |
 | `--uninstall` | Takes everything out again. |
 
 ## The Claude Code app
@@ -57,11 +57,11 @@ Switching a tab to Claude Dark is tested in Ghostty, kitty, WezTerm, GNOME Termi
 - **Restart or shutdown:** from when it began (logind's "System is rebooting." or "System is powering down.", or after a crash or power cut, the last thing logged) to the end of that boot.
 - **Logout:** from when your desktop session ended (GNOME and KDE stop `graphical-session.target`, just before the windows close) to when the system was done with it. A Claude in an SSH session also counts when that SSH session ends. Other logins, like a script that connects over SSH on a schedule, don't count.
 
-A session that ended in that span, or up to 30 seconds before it began (desktops close windows before the system hears about the restart or logout) or 10 seconds after it ended, was closed by it. So was one that never recorded an end at all.
+A session that ended in that span, or up to 30 seconds before it began (desktops close windows before the system hears about the restart or logout) or 10 seconds after it ended, was closed by it. So was one that never recorded an end, if a restart or logout came after it started (one that crashed isn't).
 
 Anything else, like a tab you closed yourself, isn't listed. The group is kept in `~/.claude/state/claude-launcher/restored.json`.
 
-This works out of the box on Ubuntu, Debian and Fedora with GNOME or KDE. Desktop logouts come from your own user journal, which you can always read. Restarts are most precise with the system journal, and the end of an SSH login is only in it; reading it needs your user in the `adm`, `wheel` or `systemd-journal` group, as the first user on those distros is. Without it (on Arch, say, until you add yourself to one), the last thing in your own journal, usually your desktop session ending, stands in for the restart. It needs systemd, and a journal kept across reboots, as these distros do by default.
+This works out of the box on Ubuntu, Debian and Fedora with GNOME or KDE. Desktop logouts come from your own user journal, which you can always read. Restarts are most precise with the system journal, and the end of an SSH login is only in it; reading it needs your user in the `adm`, `wheel` or `systemd-journal` group, as the first user on those distros is. Without it (on Arch, say, until you add yourself to one), the last thing in your own journal, usually your desktop session ending, stands in for the restart. It needs systemd, and works best with a journal kept across reboots, as these distros do by default. When the journal no longer has the boot a session ran in (it's kept only in memory, or was cleared), it no longer says when that boot ended, so the last session to end in that boot stands in for its restart: that one and any that ended up to 30 seconds before it are listed. A restart closes every open session at once, so those are the ones it closed; if none was open then, the last tab you closed yourself is listed, and Ctrl-X dismisses it. A session a logout closed earlier in that boot isn't listed, unless the picker opened before the restart. A journal kept only in memory is one file that only those groups can read, so there it needs one of them too. Without systemd, nothing says what closed a session, so only one that never recorded an end is listed, once the computer has restarted.
 
 Only interactive Claude sessions in a terminal are recorded: not `claude -p`, SDK runs or an editor's Claude panel.
 
@@ -79,4 +79,4 @@ Changes to the launcher, hook and theme apply right away. If the desktop launche
 ~/git/claude-launcher/install.sh --uninstall
 ```
 
-This removes the links, the desktop launcher, the session hook and the launcher's own files in `~/.local/share/claude-launcher` (its fzf, your icon, the options you gave). It leaves the launcher's state in `~/.claude/state/claude-launcher` and says how to remove it.
+This removes the links, the desktop launcher, the Claude Code profile from any terminal that has one, the session hook and the launcher's own files in `~/.local/share/claude-launcher` (its fzf, your icon, the options you gave). It leaves the launcher's state in `~/.claude/state/claude-launcher` and says how to remove it.

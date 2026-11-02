@@ -68,6 +68,10 @@ def unlink_commands(env: Mapping[str, str] = os.environ) -> Iterator[str]:
         yield from unlink_ours(bin_dir(env) / name)
 
 
+def _names(terminal_names: str | None) -> list[str] | None:
+    return [n for n in terminal_names.split(",") if n] if terminal_names else None
+
+
 class LinuxSetup:
     what = "the desktop launcher"
     done = 'Open "Claude Code" from your apps, or run claude-launcher in any terminal.'
@@ -82,11 +86,21 @@ class LinuxSetup:
         yield from link(THEME_FILE, _ghostty_themes() / "claude-dark")
         ctx = _context(bin_dir() / "claude-launcher")
         yield desktop.install_icon(ctx, icon)
-        names = [n for n in terminal_names.split(",") if n] if terminal_names else None
-        yield from desktop.install_terminals(ctx, names)
+        yield from desktop.install_terminals(ctx, _names(terminal_names))
 
-    def check(self) -> None:
-        """Nothing to check before installing here."""
+    def check(self, terminal_names: str | None, icon: str | None) -> None:
+        """--terminal and --icon (or last time's, without them), before
+        anything is changed."""
+        names = _names(terminal_names)
+        ctx = _context(bin_dir() / "claude-launcher")
+        if names:
+            desktop.check_terminals(names)
+        else:
+            desktop.check_saved_terminals(ctx)
+        if not icon:
+            desktop.check_kept_icon(ctx)
+        elif icon != "default":
+            desktop.check_icon(icon)
 
     def uninstall(self) -> Iterator[str]:
         """Takes out what install() set up, going on past a part that fails,
@@ -115,9 +129,12 @@ def _terminal(args: list[str]) -> int:
     if args == ["list"]:
         print(" ".join(terminals.TERMINALS))
         return 0
-    term = terminals.TERMINALS.get(args[1]) if len(args) > 1 else None
-    if args[:1] != ["open"] or not isinstance(term, terminals.Guake):
-        print(f"can't open {' '.join(args[1:])}", file=sys.stderr)
+    if args[:1] != ["open"] or len(args) < 2:
+        print("usage: terminal list | terminal open NAME [LAUNCHER]", file=sys.stderr)
+        return 2
+    term = terminals.TERMINALS.get(args[1])
+    if not isinstance(term, terminals.Guake):
+        print(f"can't open {args[1]} this way; only Guake's desktop entry uses terminal open", file=sys.stderr)
         return 2
     term.open(_context(args[2] if len(args) > 2 else None))
     return 0

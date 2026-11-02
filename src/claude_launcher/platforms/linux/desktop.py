@@ -8,7 +8,6 @@ import json
 import os
 import shutil
 import struct
-import subprocess
 from pathlib import Path
 
 from ...paths import REPO_DIR
@@ -67,23 +66,44 @@ def saved_terminals(ctx: Context) -> list[str] | None:
     return [n for n in names if n in TERMINALS] if isinstance(names, list) else None
 
 
+def check_terminals(names: list[str] | None) -> list[Terminal]:
+    """The terminals `names` (or "auto") picks; raises if one is unknown or
+    isn't installed."""
+    chosen = pick(None) if names == ["auto"] else pick(names)
+    missing = [t.label for t in chosen if not t.installed()]
+    if missing:
+        raise ValueError(f"not installed: {', '.join(missing)}")
+    return chosen
+
+
+def check_saved_terminals(ctx: Context) -> None:
+    """Raises if a terminal chosen last time, which a run without --terminal
+    sets up again, isn't installed any more."""
+    missing = [TERMINALS[n].label for n in saved_terminals(ctx) or [] if not TERMINALS[n].installed()]
+    if missing:
+        verb = "isn't" if len(missing) == 1 else "aren't"
+        raise ValueError(
+            f"{' and '.join(missing)}, which the launcher was set up with, {verb} installed any more;"
+            " run install.sh --terminal auto (or --terminal NAME)"
+        )
+
+
 def install_terminals(ctx: Context, names: list[str] | None) -> list[str]:
     """Set up the desktop entries (and any profiles) for `names`, or the ones
     chosen last time, or the first installed terminal. Returns what it did.
     The old entries stay until the new ones are in, so a failed run leaves
     a working launcher."""
     saved = saved_terminals(ctx)
-    chosen = pick(None) if names == ["auto"] else pick(names or saved)
-    missing = [t.label for t in chosen if not t.installed()]
-    if missing:
-        raise ValueError(f"not installed: {', '.join(missing)}")
+    chosen = check_terminals(names or saved)
     profiled = []
     try:
         for term in chosen:
-            term.install(ctx)
+            # Noted before it starts: an install that fails partway can leave
+            # part of a profile, and uninstall() takes that out too.
             profiled.append(term.name)
+            term.install(ctx)
     except BaseException:
-        # Note what has a profile now, so uninstall takes it out.
+        # Note what may have a profile now, so a later switch takes it out.
         _save_terminals(ctx, list(dict.fromkeys([*(saved or []), *profiled])))
         raise
     done, written = [], set()
@@ -121,14 +141,17 @@ def _remove_entries(ctx: Context, keep: set[Path] = frozenset()) -> list[str]:
 def _remove_profiles(names: list[str], ctx: Context, keep: set[str] = frozenset()) -> None:
     for name in names:
         if name not in keep:
-            with contextlib.suppress(OSError, RuntimeError, subprocess.SubprocessError):
+            # One that fails doesn't stop the rest.
+            with contextlib.suppress(Exception):
                 TERMINALS[name].uninstall(ctx)
 
 
 def remove_terminals(ctx: Context) -> list[str]:
-    """Take out the desktop entries and the profiles."""
+    """Take out the desktop entries and the profiles: every terminal's, not
+    only the ones terminals.json names, since it may be gone. Each uninstall()
+    is a no-op where there's nothing of ours."""
     removed = _remove_entries(ctx)
-    _remove_profiles(saved_terminals(ctx) or [], ctx)
+    _remove_profiles(list(TERMINALS), ctx)
     _state_file(ctx).unlink(missing_ok=True)
     _refresh_desktop(ctx)
     return removed
@@ -143,16 +166,50 @@ ICON_SIZES = (48, 64, 128, 256, 512)
 
 
 def _icon_targets(ctx: Context) -> list[Path]:
-    """The app icon, at every size it's in (a PNG of yours goes in by its size)."""
+    """The app icon, at every size it's in, including any an older install
+    used (it put a PNG of yours in by its own size)."""
     return sorted((ctx.data_home / "icons" / "hicolor").glob(f"*/apps/{APP_ID}.*"))
 
 
 def _png_size(path: Path) -> int | None:
     head = path.read_bytes()[:24]
-    if head[:8] != b"\x89PNG\r\n\x1a\n":
+    if len(head) < 24 or head[:8] != b"\x89PNG\r\n\x1a\n":  # short: a cut-off download
         return None
     width, height = struct.unpack(">II", head[16:24])
     return width if width == height else None
+
+
+# The sizes hicolor's index.theme lists. GTK looks for an app icon only in
+# those, so a PNG of another size goes in the next one up, or 512 if it's bigger
+# (GTK scales it).
+THEME_SIZES = (16, 22, 24, 32, 36, 48, 64, 72, 96, 128, 192, 256, 512)
+
+
+def theme_size(size: int) -> int:
+    return next((s for s in THEME_SIZES if s >= size), THEME_SIZES[-1])
+
+
+def check_icon(icon: str) -> Path:
+    """The icon file --icon names, if it's one the desktop can show."""
+    src = Path(icon).expanduser()
+    if src.suffix.lower() not in (".svg", ".png") or not src.is_file():
+        raise ValueError(f"{icon}: the icon must be an .svg or .png file")
+    if src.suffix.lower() == ".png" and _png_size(src) is None:
+        raise ValueError(f"{icon}: a PNG icon must be square")
+    return src
+
+
+def _kept_icon(ctx: Context) -> Path | None:
+    """The copy of your icon an earlier --icon kept, if there is one."""
+    return next(iter(sorted((ctx.data_home / "claude-launcher").glob("icon.*"))), None)
+
+
+def check_kept_icon(ctx: Context) -> None:
+    """Raises if the icon kept from last time, which a run without --icon
+    puts in again, isn't one the desktop can show any more."""
+    own = _kept_icon(ctx)
+    if own is not None and own.suffix == ".png" and (not own.is_file() or _png_size(own) is None):
+        raise ValueError(f"{own} isn't a square PNG any more; run install.sh --icon FILE (or --icon default)")
 
 
 def install_icon(ctx: Context, icon: str | None) -> str:
@@ -163,23 +220,24 @@ def install_icon(ctx: Context, icon: str | None) -> str:
         for old in own_dir.glob("icon.*"):
             old.unlink()
     elif icon:
-        src = Path(icon).expanduser()
-        if src.suffix.lower() not in (".svg", ".png") or not src.is_file():
-            raise ValueError(f"{icon}: the icon must be an .svg or .png file")
-        if src.suffix.lower() == ".png" and _png_size(src) is None:
-            raise ValueError(f"{icon}: a PNG icon must be square")
+        src = check_icon(icon)
         own_dir.mkdir(parents=True, exist_ok=True)
+        # Copied in beside the old one first: --icon can name the kept copy.
+        kept = own_dir / f"icon{src.suffix.lower()}"
+        tmp = own_dir / ".icon.tmp"
+        shutil.copyfile(src, tmp)
+        os.replace(tmp, kept)
         for old in own_dir.glob("icon.*"):
-            old.unlink()
-        shutil.copyfile(src, own_dir / f"icon{src.suffix.lower()}")
-    remove_icon(ctx)
+            if old != kept:
+                old.unlink()
+    check_kept_icon(ctx)  # before the current icon comes out
     theme = ctx.data_home / "icons" / "hicolor"
-    own = next(iter(sorted(own_dir.glob("icon.*"))), None)
+    own = _kept_icon(ctx)
     if own is not None:
         if own.suffix == ".svg":
             pairs = [(own, theme / "scalable" / "apps" / f"{APP_ID}.svg")]
         else:
-            size = _png_size(own)
+            size = theme_size(_png_size(own) or 0)  # checked above
             pairs = [(own, theme / f"{size}x{size}" / "apps" / f"{APP_ID}.png")]
         what = f"Installed your icon ({own})"
     else:
@@ -188,6 +246,7 @@ def install_icon(ctx: Context, icon: str | None) -> str:
             (ICONS_DIR / f"claude-launcher-{s}.png", theme / f"{s}x{s}" / "apps" / f"{APP_ID}.png") for s in ICON_SIZES
         ]
         what = "Installed the default icon"
+    _unlink_icons(ctx)
     for src, dest in pairs:
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.symlink_to(src)
@@ -195,10 +254,14 @@ def install_icon(ctx: Context, icon: str | None) -> str:
     return what
 
 
-def remove_icon(ctx: Context) -> None:
+def _unlink_icons(ctx: Context) -> None:
     for path in _icon_targets(ctx):
         if path.is_symlink() or path.exists():
             path.unlink()
+
+
+def remove_icon(ctx: Context) -> None:
+    _unlink_icons(ctx)
     _refresh_icons(ctx)
 
 

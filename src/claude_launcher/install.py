@@ -20,7 +20,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 from . import fzf, settings
-from .paths import Paths
+from .paths import Paths, which
 
 # What a step that fails raises; the installer shows the message. The
 # platforms' setups catch the same.
@@ -46,7 +46,24 @@ def _fzf(platform) -> Iterator[str]:
         yield f"warning: {e}"
         yield "error: could not fetch fzf; install fzf 0.67 or newer, then re-run"
         return
-    yield f"Installed {fzf.show(fzf.version(str(path)))} to {path}"
+    version = fzf.version(str(path))
+    if not version or version < fzf.MIN_VERSION:
+        # A data directory mounted noexec, say: the launcher couldn't run it either.
+        why = _why_not(path)
+        yield f"error: the fzf fetched to {path} doesn't run there{why}; install fzf 0.67 or newer, then re-run"
+        return
+    yield f"Installed fzf {fzf.show(version)} to {path}"
+
+
+def _why_not(path: Path) -> str:
+    """Why a program won't start, as ": <reason>", or "" if it does start."""
+    try:
+        subprocess.run([str(path), "--version"], capture_output=True, timeout=5)
+    except OSError as e:
+        return f": {e.strerror or e}"
+    except subprocess.SubprocessError:
+        pass
+    return ""
 
 
 def _hook(setup, settings_path: Path) -> Iterator[str]:
@@ -63,14 +80,14 @@ def _hook(setup, settings_path: Path) -> Iterator[str]:
 
 def install(platform, terminal_names: str | None = None, icon: str | None = None) -> Iterator[str]:
     setup = platform.setup()
-    # A setup that can't go ahead here (WSL that can't tell its distro) says
-    # so before anything is changed.
+    # A setup that can't go ahead here (WSL that can't tell its distro, an
+    # unknown terminal, an icon it can't use) says so before anything is changed.
     try:
-        setup.check()
+        setup.check(terminal_names, icon)
     except FAILURES as e:
         yield f"error: {e}"
         return
-    if not shutil.which("claude"):
+    if not which("claude"):
         yield "warning: claude is not on your PATH; install Claude Code before using the launcher"
     for line in _fzf(platform):
         yield line

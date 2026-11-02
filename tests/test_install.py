@@ -4,8 +4,8 @@ setup: what the lines say, and what's left as it was when a step fails."""
 from __future__ import annotations
 
 import json
+import os
 import shlex
-import shutil
 from pathlib import Path
 
 import pytest
@@ -24,8 +24,10 @@ class FakeSetup:
         self.check_fails = check
         self.uninstall_fails = uninstall_fails
         self.installed = False
+        self.checked = None
 
-    def check(self):
+    def check(self, terminal_names, icon):
+        self.checked = (terminal_names, icon)
         if self.check_fails:
             raise self.check_fails
 
@@ -49,8 +51,8 @@ class FakeSetup:
 
 @pytest.fixture
 def env(claude_home, tmp_path, monkeypatch):
-    which = shutil.which
-    monkeypatch.setattr(shutil, "which", lambda name, **kw: "claude" if name == "claude" else which(name, **kw))
+    which = install.which
+    monkeypatch.setattr(install, "which", lambda name, **kw: "claude" if name == "claude" else which(name, **kw))
     monkeypatch.setattr(install.fzf, "find", lambda own: ("fzf", (0, 70, 0)))
     claude_home.settings = claude_home.paths.config / "settings.json"
     claude_home.hook = claude_home.home / ".local" / "bin" / "claude-session-hook"
@@ -92,8 +94,8 @@ def test_a_program_and_its_arguments(env):
 
 
 def test_no_claude_is_a_warning(env, monkeypatch):
-    which = shutil.which
-    monkeypatch.setattr(shutil, "which", lambda name, **kw: None if name == "claude" else which(name, **kw))
+    which = install.which
+    monkeypatch.setattr(install, "which", lambda name, **kw: None if name == "claude" else which(name, **kw))
     lines = run(env, FakeSetup(hook=env.hook))
     assert lines[0].startswith("warning: claude is not on your PATH")
     assert lines[-1] == "Done. Open it."
@@ -113,9 +115,61 @@ def test_fzf_that_cant_be_fetched_stops_before_anything_changes(env, monkeypatch
     assert not env.settings.exists() and not setup.installed
 
 
+@pytest.mark.parametrize("found", [None, (0, 44, 0)], ids=["none", "too-old"])
+def test_fzf_fetched_then_the_rest(env, monkeypatch, found):
+    monkeypatch.setattr(install.fzf, "find", lambda own: (None, found))
+    fetched = env.data / "bin" / "fzf"
+    asked = []
+    monkeypatch.setattr(install.fzf, "fetch", lambda own, system: asked.append((own, system)) or fetched)
+    monkeypatch.setattr(install.fzf, "version", lambda path: (0, 67, 0) if path == str(fetched) else None)
+    lines = run(env, FakeSetup(hook=env.hook))
+    assert asked == [(env.data / "bin", "linux")]
+    assert lines[1] == f"Installed fzf 0.67.0 to {fetched}"
+    assert lines[2].startswith("Added the session hook to ") and lines[-1] == "Done. Open it."
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX's execute permission")
+def test_a_fetched_fzf_that_cant_run_is_an_error(env, monkeypatch):
+    # As from a data directory mounted noexec: the launcher couldn't run it either.
+    monkeypatch.setattr(install.fzf, "find", lambda own: (None, None))
+    fetched = env.data / "bin" / "fzf"
+    fetched.parent.mkdir(parents=True)
+    fetched.write_text("#!/bin/sh\necho 0.74.5\n")
+    fetched.chmod(0o644)
+    monkeypatch.setattr(install.fzf, "fetch", lambda own, system: fetched)
+    setup = FakeSetup(hook=env.hook)
+    lines = run(env, setup)
+    assert lines[-1] == (
+        f"error: the fzf fetched to {fetched} doesn't run there: Permission denied; "
+        "install fzf 0.67 or newer, then re-run"
+    )
+    assert not env.settings.exists() and not setup.installed
+
+
+@pytest.mark.skipif(os.name == "nt", reason="a shell script as the fetched fzf")
+def test_a_fetched_fzf_that_says_no_version_is_an_error(env, monkeypatch):
+    # It starts, so there's no reason to give, but it isn't an fzf the launcher can use.
+    monkeypatch.setattr(install.fzf, "find", lambda own: (None, None))
+    fetched = env.data / "bin" / "fzf"
+    fetched.parent.mkdir(parents=True)
+    fetched.write_text("#!/bin/sh\necho nope\n")
+    fetched.chmod(0o755)
+    monkeypatch.setattr(install.fzf, "fetch", lambda own, system: fetched)
+    lines = run(env, FakeSetup(hook=env.hook))
+    assert lines[-1] == f"error: the fzf fetched to {fetched} doesn't run there; install fzf 0.67 or newer, then re-run"
+
+
 def test_a_setup_that_cant_go_ahead_stops_first(env):
     lines = run(env, FakeSetup(hook=env.hook, check=RuntimeError("not here")))
     assert lines == ["error: not here"]
+    assert not env.settings.exists()
+
+
+def test_the_check_sees_the_options(env):
+    setup = FakeSetup(hook=env.hook, check=ValueError("unknown terminal: nope"))
+    lines = list(install.install(FakePlatform(setup, env.data), "nope", "/x/icon.png"))
+    assert setup.checked == ("nope", "/x/icon.png")
+    assert lines == ["error: unknown terminal: nope"]
     assert not env.settings.exists()
 
 

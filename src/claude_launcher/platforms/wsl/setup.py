@@ -19,7 +19,7 @@ from ..linux import data_dir as linux_data_dir
 from ..linux.host import LinuxHost
 from ..linux.setup import bin_dir, link_commands, unlink_commands
 from ..windows import terminal
-from ..windows.setup import DEFAULT_ICON
+from ..windows.setup import DEFAULT_ICON, check_icon
 from . import interop
 
 
@@ -72,24 +72,39 @@ class WslSetup:
     def hook_command(self) -> Path:
         return bin_dir(self.env) / "claude-session-hook"
 
-    def check(self) -> None:
-        """Before the installer does anything: the profile is per distro."""
+    def check(self, terminal_names: str | None, icon: str | None) -> None:
+        """Before the installer does anything: the profile opens as the user
+        who installed it, and is per distro."""
+        # Under sudo (or doas, which sets DOAS_USER) the profile would run
+        # wsl.exe -u root, and the links go in /root. Root on its own (the
+        # distro's default user) is fine.
+        if os.geteuid() == 0 and any(self.env.get(v, "root") != "root" for v in ("SUDO_USER", "DOAS_USER")):
+            raise RuntimeError(
+                "run install.sh as yourself, without sudo or doas: the profile opens as the user who installs it"
+            )
         if not self.distro:
             raise RuntimeError("can't tell which WSL distro this is; run install.sh in a WSL terminal, without sudo")
+        if icon and icon != "default":
+            check_icon(icon)
 
     def _wslpath(self, flag: str, path: str) -> str:
         return self.run(["wslpath", flag, path]).decode("utf-8", errors="surrogateescape").strip()
 
     def _local_app_data(self) -> str:
-        # /d: no AutoRun commands (Clink, conda), whose output would come
-        # first. /u: echo writes UTF-16, so a name like José comes through
-        # whatever the console's code page is.
-        out = self.windows.run("cmd.exe", ["/d", "/u", "/c", "echo", "%LOCALAPPDATA%"])
+        # `set`, not `echo %LOCALAPPDATA%`: cmd parses the line after it
+        # expands %...%, so a user name with & ^ or % in it would break it.
+        # `set` prints the value as it is. /d: no AutoRun commands (Clink,
+        # conda), whose output would come first. /u: set writes UTF-16, so a
+        # name like José comes through whatever the console's code page is.
+        out = self.windows.run("cmd.exe", ["/d", "/u", "/c", "set", "LOCALAPPDATA"])
         text = out.decode("utf-16-le", errors="replace") if b"\0" in out else out.decode("utf-8", errors="replace")
-        lines = [line.strip() for line in text.splitlines() if line.strip()]
-        if not lines or "%" in lines[-1]:
-            raise RuntimeError("Windows didn't say where %LOCALAPPDATA% is")
-        return lines[-1]
+        # A byte-order mark would make the first line's name not match.
+        for line in text.removeprefix("\ufeff").splitlines():
+            # Every variable whose name starts with LOCALAPPDATA: only that one.
+            name, eq, value = line.partition("=")
+            if eq and name.upper() == "LOCALAPPDATA" and value.strip():
+                return value.rstrip("\r\n")
+        raise RuntimeError("Windows didn't say where %LOCALAPPDATA% is")
 
     def _fragments(self) -> Path:
         local = Path(self._wslpath("-u", self._local_app_data()))
@@ -110,16 +125,13 @@ class WslSetup:
         if icon == "default":
             kept.unlink(missing_ok=True)
         elif icon:
-            if not icon.lower().endswith(".png"):
-                raise ValueError("for Windows Terminal, --icon takes a .png")
-            if not os.path.isfile(icon):
-                raise ValueError(f"not a file: {icon}")
+            check_icon(icon)
             kept.parent.mkdir(parents=True, exist_ok=True)
             terminal.copy_icon(icon, kept)
         return kept if kept.is_file() else DEFAULT_ICON
 
     def install(self, terminal_names: str | None, icon: str | None) -> Iterator[str]:
-        self.check()
+        self.check(terminal_names, icon)
         if terminal_names:
             yield "warning: --terminal is for Linux desktops; in WSL the launcher opens in Windows Terminal"
         shown = self._icon(icon)

@@ -61,6 +61,8 @@ from .text import width as text_width
 from .theme import Theme
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from .platforms import Platform
 
 MAX_WIDTH = 120  # widest the picker gets, in columns
@@ -104,7 +106,7 @@ class State:
     has_group_rows: bool = False  # the Sessions view shows ↻ rows
     back: list | None = None  # [query, cursor] the directory list had when left
     pending_pos: int = 0  # the cursor to put back once the list's rows are in
-    fzf: str = "fzf"  # the fzf program the picker runs
+    fzf: str = ""  # the fzf program the picker runs, from start()
     # How key bindings run the core, from the platform when the picker starts.
     shell: str = ""  # fzf's --with-shell
     core: str = ""  # the core's command line, with --run DIR
@@ -134,6 +136,9 @@ class Pick:
 
     dir: str
     session_id: str = ""
+    # Keys to take out of the restart group once Claude has started, so a
+    # Claude that can't start leaves its ↻ row for another go.
+    ungroup: list[str] = field(default_factory=list, compare=False)
 
 
 class Picker:
@@ -161,6 +166,15 @@ class Picker:
         if not self.state.core:  # only before start(), which sets it
             self._from_platform()
         return self.state.core
+
+    @property
+    def fzf_path(self) -> str:
+        """The fzf start() found. Found again if the state was lost: the
+        fzf on PATH may be too old, or not there beside the launcher's own."""
+        if not self.state.fzf:
+            own = fzf.private_dir(_platform().data_dir(os.environ))
+            self.state.fzf = fzf.find(own)[0] or "fzf"
+        return self.state.fzf
 
     def _from_platform(self, platform: Platform | None = None) -> None:
         platform = platform or _platform()
@@ -332,6 +346,8 @@ class Picker:
         home_used = 0.0
         rows = []
         for used, directory in logs.recent_projects(self.paths):
+            if not text.is_utf8(directory):  # fzf couldn't hand it back
+                continue
             if directory == home:
                 home_used = used
             else:
@@ -409,7 +425,8 @@ class Picker:
         rows = [] if partial else [DirRow(parent, typed, self._note(parent_own, parent_inside), is_parent=True)]
         try:
             with os.scandir(parent) as entries:
-                # A name with control characters can't be typed or shown as it is.
+                # A name with control characters, or bytes that aren't UTF-8,
+                # can't be typed or shown as it is.
                 names = [e.name for e in entries if _is_dir(e) and text.printable(e.name) == e.name]
         except OSError:
             return rows
@@ -580,7 +597,7 @@ class Picker:
         t = self.theme
         c = self.core
         return [
-            self.state.fzf,
+            self.fzf_path,
             "--print-query",
             "--layout=reverse",
             *MATCHING,
@@ -632,10 +649,10 @@ class Picker:
         # matches, as Enter does.
         if typed_path_like(query):
             rows = self.directories(query)
-            key = _nth_match(self.state.fzf, [self._dir_row(d) for d in rows], query, _cursor())
+            key = _nth_match(self.fzf_path, [self._dir_row(d) for d in rows], query, _cursor())
             row = next((d for d in rows if d.path == key and not d.is_parent), None)
             return f"change-query:{with_sep(row.shown)}" if row else ""
-        key = _nth_match(self.state.fzf, self.projects_rows(query)[1:], query, _cursor())
+        key = _nth_match(self.fzf_path, self.projects_rows(query)[1:], query, _cursor())
         if not key or not os.path.isdir(key):
             return ""
         return f"change-query:{with_sep(self.paths.tilde(key))}"
@@ -667,7 +684,7 @@ class Picker:
         if self.state.view != "projects" or is_session_id(query):
             return "accept"
         # As in pick(): take the row at the cursor from what the query matches.
-        choice = _nth_match(self.state.fzf, self.projects_rows(query)[1:], query, pos)
+        choice = _nth_match(self.fzf_path, self.projects_rows(query)[1:], query, pos)
         if not choice or not os.path.isdir(choice) or not self._has_sessions(choice):
             return "accept"
         self.state.query = query
@@ -752,6 +769,15 @@ class Picker:
 
     # --- After fzf exits -------------------------------------------------------
 
+    def _group_of(self, session_id: str) -> str | None:
+        """The session's key in the restart group, if it's in it. From the
+        Sessions view's rows when they hold it (they know what was dismissed);
+        else, as for an ID pasted in the projects view, from the group itself."""
+        for r in self._sessions():
+            if r["id"] == session_id:
+                return r["group"]
+        return group_of(session_id, self.restart.load(), lambda: self._scan()[1])
+
     def pick(self, query: str) -> Pick | str:
         """What Enter chose, or a message saying why nothing was."""
         pos, row = 1, ""
@@ -776,7 +802,7 @@ class Picker:
         # newline), fzf can return a row from before it caught up. So take the
         # row at the cursor's position from what the final query matches.
         kind = "projects" if view == "projects" else "sessions"
-        choice = _nth_match(self.state.fzf, self.rows(kind, query)[1:], query, pos, NTH[kind])
+        choice = _nth_match(self.fzf_path, self.rows(kind, query)[1:], query, pos, NTH[kind])
 
         session_id = ""
         if is_session_id(query):
@@ -790,9 +816,8 @@ class Picker:
             directory = logs.session_dir(self.paths, session_id)
             if directory is None:
                 return f"No session with ID {session_id}"
-            group = next((r["group"] for r in self._sessions() if r["id"] == session_id and r["group"]), None)
-            self.restart.drop([session_id] + ([group] if group else []))
-            return Pick(resume_dir(directory, self.paths), session_id)
+            ungroup = ungroup_keys(session_id, self._group_of(session_id))
+            return Pick(resume_dir(directory, self.paths), session_id, ungroup)
         if choice:
             return Pick(choice) if os.path.isdir(choice) else f"Not a directory: {choice}"
         if view != "projects" and not query:
@@ -868,6 +893,23 @@ def resume_dir(directory: str, paths: Paths) -> str:
     print(f"{paths.tilde(directory)} not found, so resuming from ~", file=sys.stderr)
     time.sleep(1)  # Claude clears the screen when it starts
     return str(paths.home)
+
+
+def group_of(session_id: str, group: Group, continued_from: Callable[[], dict[str, str]]) -> str | None:
+    """The session's key in the restart group, if it's in it. `continued_from`
+    (which sessions continue which, from the logs) is read only when needed."""
+    if not group.sessions:
+        return None
+    if session_id in group.sessions:  # no need to read the logs
+        return session_id
+    return _group_key(session_id, group, continued_from())
+
+
+def ungroup_keys(session_id: str, key: str | None) -> list[str]:
+    """What resuming a session takes out of the restart group once Claude has
+    started: the session and the key it's listed under. Empty if it isn't in
+    the group, so an ordinary resume leaves the group's file alone."""
+    return list(dict.fromkeys([session_id, key])) if key else []
 
 
 def _group_key(session_id: str, group: Group, continued_from: dict[str, str]) -> str | None:

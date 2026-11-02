@@ -14,27 +14,45 @@ from conftest import LAST_BOOT, NOW, THIS_BOOT, FakeHost, conversation, write_re
 WSL_STARTED = NOW - 300  # this WSL boot
 
 
+WSL_KERNEL = "6.6.87.2-microsoft-standard-WSL2"
+MARKERS = ["run/WSL", "proc/sys/fs/binfmt_misc/WSLInterop", "proc/sys/fs/binfmt_misc/WSLInterop-late"]
+
+
+def mark(root, marker):
+    (root / marker).parent.mkdir(parents=True, exist_ok=True)
+    (root / marker).touch()
+
+
 @pytest.mark.parametrize(
     ("release", "wsl"),
-    [("6.6.87.2-microsoft-standard-WSL2", True), ("4.4.0-19041-Microsoft", True), ("6.8.0-31-generic", False)],
+    [(WSL_KERNEL, True), ("4.4.0-19041-Microsoft", True), ("6.8.0-31-generic", False)],
 )
-def test_is_wsl(release, wsl):
-    assert is_wsl(release, env={"WSL_DISTRO_NAME": "Ubuntu"}) is wsl
+def test_is_wsl(tmp_path, release, wsl):
+    assert is_wsl(release, root=str(tmp_path), env={"WSL_DISTRO_NAME": "Ubuntu"}) is wsl
 
 
-@pytest.mark.parametrize(
-    "marker", ["run/WSL", "proc/sys/fs/binfmt_misc/WSLInterop", "proc/sys/fs/binfmt_misc/WSLInterop-late"]
-)
+@pytest.mark.parametrize("marker", MARKERS)
 def test_wsl_without_its_distro_name(tmp_path, marker):
     # sudo resets the environment; WSL's own files are still there.
-    (tmp_path / marker).parent.mkdir(parents=True, exist_ok=True)
-    (tmp_path / marker).touch()
-    assert is_wsl("6.6.87.2-microsoft-standard-WSL2", root=str(tmp_path), env={})
+    mark(tmp_path, marker)
+    assert is_wsl(WSL_KERNEL, root=str(tmp_path), env={})
+
+
+@pytest.mark.parametrize("marker", MARKERS)
+def test_wsl_on_a_kernel_of_its_own(tmp_path, marker):
+    # A custom kernel from .wslconfig needn't say "microsoft".
+    mark(tmp_path, marker)
+    assert is_wsl("6.12.1-custom", root=str(tmp_path), env={})
 
 
 def test_a_container_on_wsls_kernel_isnt_wsl(tmp_path):
     # Docker Desktop's containers, and devcontainers, run WSL's kernel.
-    assert not is_wsl("6.6.87.2-microsoft-standard-WSL2", root=str(tmp_path), env={})
+    assert not is_wsl(WSL_KERNEL, root=str(tmp_path), env={})
+
+
+def test_wsl_distro_name_alone_needs_wsls_kernel(tmp_path):
+    # It can be passed into a container, or over SSH to another machine.
+    assert not is_wsl("6.8.0-31-generic", root=str(tmp_path), env={"WSL_DISTRO_NAME": "Ubuntu"})
 
 
 def test_wsl_is_picked_inside_wsl(monkeypatch):
@@ -45,17 +63,33 @@ def test_wsl_is_picked_inside_wsl(monkeypatch):
 
 
 class FakeWindowsEvents:
-    def __init__(self, found):
-        self.found, self.asked = found, []
+    def __init__(self, found, lost=False):
+        self.found, self.lost, self.asked = found, lost, []
 
     def events(self, record, same_boot):
         self.asked.append(same_boot)
         return None if self.found is None else list(self.found)
 
+    def boot_lost(self, record):
+        return self.lost
 
-def source(found):
+
+class FakeInterop:
+    """Whether Windows' programs run from here (interop.Interop.reachable)."""
+
+    def __init__(self, reachable):
+        self._reachable = reachable
+
+    def reachable(self):
+        return self._reachable
+
+
+def source(found, interop=None, lost=False):
+    """`interop`: None for no interop, else whether it's there, so that
+    `found` None is a query that failed."""
     host = FakeHost(boot=THIS_BOOT, started=lambda now: WSL_STARTED)
-    return WslEvents(host, FakeWindowsEvents(found), now=lambda: NOW)
+    there = None if interop is None else FakeInterop(interop)
+    return WslEvents(host, FakeWindowsEvents(found, lost), now=lambda: NOW, interop=there)
 
 
 WINDOWS_RESTART = Event(NOW - 900, NOW - 895, "restart")
@@ -75,9 +109,52 @@ def test_another_boot_adds_wsl_stopping():
     ]
 
 
+def test_whether_windows_log_is_lost_is_windows_to_say():
+    host = FakeHost(boot=THIS_BOOT, started=lambda now: WSL_STARTED)
+    assert WslEvents(host, FakeWindowsEvents([], lost=True), now=lambda: NOW).boot_lost(None) is True
+    assert WslEvents(host, FakeWindowsEvents([], lost=False), now=lambda: NOW).boot_lost(None) is False
+    # Without interop, as for its events: not a reason to wait.
+    assert WslEvents(host, FakeWindowsEvents(None, lost=None), now=lambda: NOW).boot_lost(None) is False
+
+
 def test_without_interop_wsl_stopping_still_counts():
     assert source(None).events(None, same_boot=False) == [Event(WSL_STARTED, WSL_STARTED, "wsl-stop")]
     assert source(None).events(None, same_boot=True) is None
+
+
+ENDED = Record("s", 1, LAST_BOOT, "", NOW - 3600, ended=NOW - 3000)
+NO_END = Record("s", 1, LAST_BOOT, "", NOW - 3600, ended=None)
+
+
+class TestQueryFailed:
+    """Interop is there, but wevtutil failed or took too long (slow after a
+    distro restart): as on native Windows, what Windows' log would decide
+    waits."""
+
+    def test_a_record_with_an_end_waits(self):
+        assert source(None, interop=True).events(ENDED, same_boot=False) is None
+
+    def test_one_without_was_closed_by_wsl_stopping_anyway(self):
+        found = source(None, interop=True).events(NO_END, same_boot=False)
+        assert found == [Event(WSL_STARTED, WSL_STARTED, "wsl-stop")]
+
+    def test_this_boots_waits(self):
+        assert source(None, interop=True).events(ENDED, same_boot=True) is None
+
+    def test_whether_the_log_is_lost_waits(self):
+        assert source([], interop=True, lost=None).boot_lost(ENDED) is None
+
+    def test_the_record_is_kept_for_the_next_sort(self, claude_home):
+        sid = claude_home.log("/tmp", conversation("s", "/tmp"))
+        path = write_record(claude_home.paths, sid, LAST_BOOT, 100, NOW - 3600, NOW - 3000)
+        s = source(None, interop=True)
+        assert len(RestartState(claude_home.paths, s, s.host, now=lambda: NOW).sort()) == 0
+        assert path.exists()
+
+    def test_without_interop_nothing_waits(self):
+        s = source(None, interop=False, lost=None)
+        assert s.events(ENDED, same_boot=False) == [Event(WSL_STARTED, WSL_STARTED, "wsl-stop")]
+        assert s.boot_lost(ENDED) is False
 
 
 @pytest.fixture
@@ -114,6 +191,12 @@ def test_a_logoff_is_said_over_wsl_stopping(claude_home):
     state = RestartState(claude_home.paths, WslEvents(host, FakeWindowsEvents([logoff]), now=lambda: NOW), host)
     record = Record("s", 1, LAST_BOOT, "", NOW - 3600, ended=NOW - 3001)
     assert state._closed_by(record, False, NOW) == Closed(logoff.start, "logout")
+
+
+def test_wsl_stopping_is_at_this_boots_start_beside_a_tab_closed_before(sort):
+    # A record with an end in that boot doesn't move WSL's stop to it.
+    (killed, closed), group = sort(None, NOW - 3000)
+    assert group.sessions == {killed: Closed(WSL_STARTED, "wsl-stop")}
 
 
 def test_a_tab_closed_before_isnt_brought_back(sort):

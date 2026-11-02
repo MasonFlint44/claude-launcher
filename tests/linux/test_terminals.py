@@ -229,6 +229,36 @@ class TestProfiles:
         with pytest.raises(RuntimeError, match="can't read Ptyxis"):
             TERMINALS["ptyxis"].install(ctx)
 
+    @pytest.mark.parametrize("name", ["ptyxis", "gnome-terminal"])
+    def test_profiles_unreadable_says_whose(self, ctx, name):
+        ctx.run = lambda argv: subprocess.CompletedProcess(argv, 1, "", "No such schema")
+        label = TERMINALS[name].label
+        with pytest.raises(RuntimeError, match=f"can't read {label}'s profiles \\(is {label} installed\\?\\)"):
+            TERMINALS[name].install(ctx)
+
+    @pytest.mark.parametrize("listed", ["not a list", "['aaaa'", "'aaaa'", "[1, 2]", "@as {}"])
+    def test_profiles_list_unparsable(self, ctx, listed):
+        ctx.run.values[("org.gnome.Ptyxis", "profile-uuids")] = listed
+        with pytest.raises(RuntimeError, match="can't read Ptyxis"):
+            TERMINALS["ptyxis"].install(ctx)
+        assert ctx.run.values == {("org.gnome.Ptyxis", "profile-uuids"): listed}  # nothing set
+
+    def test_gsettings_set_failing_says_so(self, ctx):
+        fake = ctx.run
+
+        def run(argv):
+            if argv[:2] == ["gsettings", "set"]:
+                fake.calls.append(list(argv))
+                return subprocess.CompletedProcess(argv, 1, "", "The schema is not installed\n")
+            return fake(argv)
+
+        ctx.run = run
+        profile = f"org.gnome.Terminal.Legacy.Profile:/org/gnome/terminal/legacy/profiles:/:{PROFILE_UUID}/"
+        with pytest.raises(RuntimeError) as e:
+            TERMINALS["gnome-terminal"].install(ctx)
+        key = fake.calls[-1][3]
+        assert str(e.value) == f"gsettings set {profile} {key} failed: The schema is not installed"
+
     def test_konsole(self, ctx):
         konsole = TERMINALS["konsole"]
         konsole.install(ctx)
@@ -267,6 +297,16 @@ class TestGuake:
         ctx.run, calls = self.fake(lambda: bool(started))
         TERMINALS["guake"].open(ctx, spawn=started.append)
         assert started == [["guake", "-e", shlex.join(ctx.argv), "--show"]]
+        assert not [c for c in calls if c[0] == "guake"]
+
+    def test_not_running_gives_up_after_5_seconds(self, ctx, monkeypatch):
+        slept = []
+        monkeypatch.setattr(terminals.time, "sleep", slept.append)
+        started = []
+        ctx.run, calls = self.fake(lambda: False)
+        TERMINALS["guake"].open(ctx, spawn=started.append)
+        assert started == [["guake", "-e", shlex.join(ctx.argv), "--show"]]  # started once, not again
+        assert sum(slept) == pytest.approx(5)
         assert not [c for c in calls if c[0] == "guake"]
 
     def test_exec_line(self, ctx):
@@ -349,7 +389,48 @@ class TestInstallTerminals:
             desktop.install_terminals(ctx, ["ptyxis"])
         assert self.entries(ctx) == [f"{APP_ID}.desktop"]
         assert (ctx.data_home / "applications" / f"{APP_ID}.desktop").read_text() == before
-        assert desktop.saved_terminals(ctx) == ["ghostty"]
+        # Noted, since it may have left part of a profile.
+        assert desktop.saved_terminals(ctx) == ["ghostty", "ptyxis"]
+
+    @pytest.mark.parametrize("then", ["switch", "uninstall"])
+    def test_a_profile_that_fails_partway_comes_out(self, ctx, then):
+        desktop.install_terminals(ctx, ["ghostty"])
+        gsettings = ctx.run
+
+        def palette_fails(argv):
+            if argv[:2] == ["gsettings", "set"] and argv[3] == "palette":
+                return subprocess.CompletedProcess(argv, 1, "", "dconf is read-only")
+            return gsettings(argv)
+
+        ctx.run = palette_fails
+        with pytest.raises(RuntimeError, match="palette failed"):
+            desktop.install_terminals(ctx, ["ptyxis"])
+        ptyxis = TERMINALS["ptyxis"]
+        profile_keys = lambda: [k for k in gsettings.values if k[0] == ptyxis._profile()]  # noqa: E731
+        assert profile_keys() and ptyxis.palette_file(ctx).exists()  # it got partway
+
+        ctx.run = gsettings
+        if then == "switch":
+            desktop.install_terminals(ctx, ["ghostty"])
+        else:
+            desktop.remove_terminals(ctx)
+        assert profile_keys() == []
+        assert not ptyxis.palette_file(ctx).exists()
+        assert ptyxis.profile_id not in gsettings.values[("org.gnome.Ptyxis", "profile-uuids")]
+
+    def test_ptyxis_palette_goes_without_gsettings(self, ctx):
+        desktop.install_terminals(ctx, ["ptyxis"])
+
+        run = ctx.run
+
+        def no_gsettings(argv):
+            if argv[0] == "gsettings":
+                raise FileNotFoundError(argv[0])
+            return run(argv)
+
+        ctx.run = no_gsettings
+        desktop.remove_terminals(ctx)
+        assert not TERMINALS["ptyxis"].palette_file(ctx).exists()
 
     def test_remove(self, ctx):
         desktop.install_terminals(ctx, ["konsole", "guake"])
@@ -357,6 +438,64 @@ class TestInstallTerminals:
         assert self.entries(ctx) == []
         assert not (ctx.data_home / "konsole" / "ClaudeLauncher.profile").exists()
         assert desktop.saved_terminals(ctx) is None
+
+    def test_remove_without_the_saved_choice(self, ctx):
+        # terminals.json gone (the data directory deleted by hand): every
+        # terminal's profile still comes out.
+        desktop.install_terminals(ctx, ["ptyxis", "gnome-terminal", "konsole"])
+        (ctx.data_home / "claude-launcher" / "terminals.json").unlink()
+        desktop.remove_terminals(ctx)
+        assert self.entries(ctx) == []
+        # Left: the lists, and the plain default profile a fresh Ptyxis got.
+        assert set(ctx.run.values) == {*FakeGSettings.LISTS, ("org.gnome.Ptyxis", "default-profile-uuid")}
+        for schema, key in FakeGSettings.LISTS:
+            assert not any(
+                t.profile_id in ctx.run.values[schema, key] for t in (TERMINALS["ptyxis"], TERMINALS["gnome-terminal"])
+            )
+        assert not TERMINALS["ptyxis"].palette_file(ctx).exists()
+        assert not (ctx.data_home / "konsole" / "ClaudeLauncher.profile").exists()
+
+    def test_remove_leaves_other_profiles(self, ctx):
+        ctx.run.values[("org.gnome.Terminal.ProfilesList", "list")] = "['mine']"
+        ctx.run.values[("org.gnome.Terminal.Legacy.Profile:/org/gnome/terminal/legacy/profiles:/:mine/", "x")] = "1"
+        desktop.remove_terminals(ctx)
+        assert ctx.run.values == {
+            ("org.gnome.Terminal.ProfilesList", "list"): "['mine']",
+            ("org.gnome.Terminal.Legacy.Profile:/org/gnome/terminal/legacy/profiles:/:mine/", "x"): "1",
+        }
+
+    @pytest.mark.parametrize("gsettings", ["missing", "no schemas", "fails"])
+    def test_remove_with_nothing_there(self, ctx, gsettings):
+        def run(argv):
+            if argv[0] != "gsettings":
+                return subprocess.CompletedProcess(argv, 0, "", "")
+            if gsettings == "missing":
+                raise FileNotFoundError(argv[0])
+            if gsettings == "fails":
+                raise subprocess.TimeoutExpired(argv, 30)
+            return subprocess.CompletedProcess(argv, 1, "", "No schemas installed")
+
+        ctx.run = run
+        assert desktop.remove_terminals(ctx) == []
+
+    def test_profile_settings_go_even_if_the_list_cant_be_set(self, ctx):
+        desktop.install_terminals(ctx, ["gnome-terminal"])
+        gsettings = ctx.run
+
+        def list_fails(argv):
+            if argv[:2] == ["gsettings", "set"]:
+                return subprocess.CompletedProcess(argv, 1, "", "dconf is read-only")
+            return gsettings(argv)
+
+        ctx.run = list_fails
+        desktop.remove_terminals(ctx)
+        assert not [k for k in gsettings.values if k[0] == TERMINALS["gnome-terminal"]._profile()]
+
+    def test_switching_keeps_what_is_still_chosen(self, ctx):
+        desktop.install_terminals(ctx, ["ptyxis", "konsole"])
+        desktop.install_terminals(ctx, ["konsole"])
+        assert (ctx.data_home / "konsole" / "ClaudeLauncher.profile").exists()
+        assert not TERMINALS["ptyxis"].palette_file(ctx).exists()
 
 
 class TestIcon:
@@ -385,19 +524,78 @@ class TestIcon:
         desktop.install_icon(ctx, None)
         assert (ctx.data_home / "icons/hicolor/scalable/apps" / f"{APP_ID}.svg").read_text() == "<svg/>"
 
+    def test_the_kept_copy_given_again(self, ctx, tmp_path):
+        mine = tmp_path / "clawd.svg"
+        mine.write_text("<svg/>")
+        desktop.install_icon(ctx, str(mine))
+        kept = ctx.data_home / "claude-launcher" / "icon.svg"
+        assert desktop.install_icon(ctx, str(kept)) == f"Installed your icon ({kept})"
+        assert kept.read_text() == "<svg/>"
+        assert self.installed(ctx) == ["scalable/apps/" + APP_ID + ".svg"]
+
+    def test_a_new_kind_of_icon_replaces_the_kept_one(self, ctx, tmp_path):
+        mine = tmp_path / "clawd.svg"
+        mine.write_text("<svg/>")
+        desktop.install_icon(ctx, str(mine))
+        desktop.install_icon(ctx, self.png(tmp_path / "clawd.png", 256))
+        assert sorted(p.name for p in (ctx.data_home / "claude-launcher").iterdir()) == ["icon.png"]
+        assert self.installed(ctx) == [f"256x256/apps/{APP_ID}.png"]
+
     def test_your_png_goes_by_its_size(self, ctx):
         desktop.install_icon(ctx, str(desktop.ICONS_DIR / "claude-launcher-256.png"))
         assert self.installed(ctx) == [f"256x256/apps/{APP_ID}.png"]
 
-    def test_odd_png_size_comes_out(self, ctx, tmp_path):
-        big = tmp_path / "big.png"
-        big.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\0\0\0\rIHDR" + (1024).to_bytes(4, "big") * 2)
-        desktop.install_icon(ctx, str(big))
-        assert self.installed(ctx) == [f"1024x1024/apps/{APP_ID}.png"]
-        desktop.install_icon(ctx, "default")
-        assert f"1024x1024/apps/{APP_ID}.png" not in self.installed(ctx)
+    @staticmethod
+    def png(path, size):
+        path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\0\0\0\rIHDR" + size.to_bytes(4, "big") * 2)
+        return str(path)
+
+    @pytest.mark.parametrize(("size", "theme"), [(1024, 512), (300, 512), (100, 128), (20, 22), (16, 16)])
+    def test_odd_png_size_goes_in_a_size_the_theme_lists(self, ctx, tmp_path, size, theme):
+        # GTK looks only in the sizes hicolor's index.theme lists, and scales.
+        desktop.install_icon(ctx, self.png(tmp_path / "odd.png", size))
+        assert self.installed(ctx) == [f"{theme}x{theme}/apps/{APP_ID}.png"]
         desktop.remove_icon(ctx)
         assert self.installed(ctx) == []
+
+    def test_an_older_installs_odd_size_comes_out(self, ctx, tmp_path):
+        old = ctx.data_home / "icons" / "hicolor" / "1024x1024" / "apps" / f"{APP_ID}.png"
+        old.parent.mkdir(parents=True)
+        old.symlink_to(self.png(tmp_path / "big.png", 1024))
+        desktop.install_icon(ctx, None)
+        assert f"1024x1024/apps/{APP_ID}.png" not in self.installed(ctx)
+        old.parent.mkdir(parents=True, exist_ok=True)
+        old.symlink_to(tmp_path / "big.png")
+        desktop.remove_icon(ctx)
+        assert self.installed(ctx) == []
+
+    def test_a_damaged_kept_icon_says_so_and_changes_nothing(self, ctx, tmp_path):
+        desktop.install_icon(ctx, self.png(tmp_path / "mine.png", 256))
+        kept = ctx.data_home / "claude-launcher" / "icon.png"
+        kept.write_bytes(b"not a png")
+        with pytest.raises(ValueError, match="isn't a square PNG any more"):
+            desktop.install_icon(ctx, None)
+        assert self.installed(ctx) == [f"256x256/apps/{APP_ID}.png"]
+
+    @pytest.mark.parametrize("icon", [None, "default", "mine"])
+    def test_the_icon_cache_is_updated_once(self, ctx, tmp_path, monkeypatch, icon):
+        monkeypatch.setattr(desktop.shutil, "which", lambda p: "/usr/bin/" + p)
+        theme = ctx.data_home / "icons" / "hicolor"
+        theme.mkdir(parents=True)
+        (theme / "index.theme").write_text("")
+        desktop.install_icon(ctx, self.png(tmp_path / "mine.png", 64) if icon == "mine" else icon)
+        assert [c[0] for c in ctx.run.calls] == ["gtk-update-icon-cache"]
+        desktop.remove_icon(ctx)
+        assert [c[0] for c in ctx.run.calls] == ["gtk-update-icon-cache"] * 2
+
+    def test_theme_sizes_are_hicolors(self):
+        index = Path("/usr/share/icons/hicolor/index.theme")
+        if not index.is_file():
+            pytest.skip("no hicolor index.theme here")
+        dirs = re.search(r"^Directories=(.*)$", index.read_text(), re.M).group(1).split(",")
+        listed = {int(m.group(1)) for d in dirs if (m := re.fullmatch(r"(\d+)x\1/apps", d))}
+        assert set(desktop.THEME_SIZES) <= listed
+        assert set(desktop.ICON_SIZES) <= set(desktop.THEME_SIZES)
 
     def test_back_to_default(self, ctx, tmp_path):
         mine = tmp_path / "x.svg"

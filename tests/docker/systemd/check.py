@@ -4,7 +4,10 @@ them out and checks the ↻ group; run.sh then reboots the container (a new
 boot ID each start, see boot.sh) and `check.py after` checks the restart.
 Then the same for powering off: `check.py poweroff-before` leaves a Claude
 open, run.sh powers the container off and starts it again, and `check.py
-poweroff-after` checks the shutdown counts as a restart too.
+poweroff-after` checks the shutdown counts as a restart too. Last, a journal
+kept only in memory (in /run, which each start of the container empties):
+`check.py volatile-before` leaves a Claude open and one closed by hand, and
+after the reboot `check.py volatile-after` checks only the open one is back.
 
 Each result is one line: RESULT <name> <PASS|FAIL|SKIP|INFO> <detail>.
 """
@@ -124,6 +127,7 @@ print(json.dumps({
     "logouts": None if logouts is None else [[e.session_id, e.graphical] for e in logouts],
     "restart": j.restart_time(boot),
     "shutdown_message": j._shutdown_message_time(boot),
+    "listed": j.lists(boot),
 }))
 """
 
@@ -380,7 +384,61 @@ def poweroff_after() -> None:
     after_shutdown("poweroff.json", "poweroff-", "powering down")
 
 
+# --- a journal kept only in memory ------------------------------------------
+
+
+def volatile_before() -> None:
+    # The earlier phases are done: their records and their boots' journal go.
+    for path in OPEN.iterdir():
+        path.unlink()
+    conf = Path("/etc/systemd/journald.conf.d")
+    conf.mkdir(parents=True, exist_ok=True)
+    (conf / "volatile.conf").write_text("[Journal]\nStorage=volatile\n")
+    shutil.rmtree("/var/log/journal", ignore_errors=True)
+    sh("systemctl", "restart", "systemd-journald")
+    check("volatile-journal", Path("/run/log/journal").is_dir() and not Path("/var/log/journal").exists())
+    boot = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+    by_hand = new_session_id()
+    fake_record(by_hand, time.time() - 600)  # closed long before the reboot
+    sid = start_session("volatile", "desktop")  # left open for the reboot
+    check("volatile-hook-start", sid in records(), records().get(sid, {}).get("_file", "no record"))
+    (SAVED / "volatile.json").write_text(json.dumps({"boot": boot, "restart": sid, "by_hand": by_hand}))
+
+
+def volatile_after() -> None:
+    saved = json.loads((SAVED / "volatile.json").read_text())
+    old_boot, sid, by_hand = saved["boot"], saved["restart"], saved["by_hand"]
+    rec = records().get(sid, {})
+    check("volatile-hook-end-at-shutdown", "ended_at" in rec, "the Claude left open recorded its end")
+    # In memory, journald keeps one file, which only the journal groups can
+    # read (it splits off each user's journal only on disk): without one,
+    # there's no journal to ask, and the records wait.
+    p = probe(old_boot, group=False)
+    result("volatile-journal-old-boot-nogroup", "INFO", json.dumps(p))
+    g = sort(group=False)
+    check("volatile-unreadable-nogroup", p.get("available") is False and g == {}, f"{p.get('available')}, got {g}")
+    p = probe(old_boot, group=True)
+    result("volatile-journal-old-boot-group", "INFO", json.dumps(p))
+    check("volatile-boot-not-listed-group", p.get("listed") is False, repr(p.get("listed")))
+    g = sort(group=True)
+    if g is None:
+        check("volatile-sort-group", False, "restart.sort failed")
+        return
+    got = g.get(sid)
+    check("volatile-restart-group", bool(got) and got[1] == "restart", f"got {got}")
+    if got and "ended_at" in rec:
+        check("volatile-restart-time-is-its-end-group", abs(got[0] - rec["ended_at"]) < 0.01)
+    check("volatile-closed-by-hand-group", by_hand not in g, f"got {g.get(by_hand)}")
+
+
 if __name__ == "__main__":
-    phases = {"before": before, "after": after, "poweroff-before": poweroff_before, "poweroff-after": poweroff_after}
+    phases = {
+        "before": before,
+        "after": after,
+        "poweroff-before": poweroff_before,
+        "poweroff-after": poweroff_after,
+        "volatile-before": volatile_before,
+        "volatile-after": volatile_after,
+    }
     phases[sys.argv[1]]()
     sys.exit(1 if failed else 0)

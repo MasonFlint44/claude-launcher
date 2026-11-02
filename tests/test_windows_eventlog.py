@@ -8,6 +8,8 @@ import pytest
 
 from claude_launcher.platforms.base import Event
 from claude_launcher.platforms.windows import eventlog as el
+from claude_launcher.restart import Closed, RestartState
+from conftest import FakeHost, conversation, write_record
 
 ME = "S-1-5-21-1-2-3-1000"
 OTHER = "S-1-5-21-1-2-3-1001"
@@ -53,9 +55,11 @@ _COMPARE = {
 
 
 def xpath_filter(query):
-    """A predicate on LogEvents for `*[System[...]]`, or an error for
-    anything else, so a query the real wevtutil would answer differently
-    fails here too."""
+    """A predicate on LogEvents for `*` (every event) or `*[System[...]]`,
+    or an error for anything else, so a query the real wevtutil would answer
+    differently fails here too."""
+    if query == "*":
+        return lambda e: True
     m = re.fullmatch(r"\*\[System\[(.*)\]\]", query)
     assert m, f"not a System query: {query}"
     text, tokens, pos = m.group(1), [], 0
@@ -334,3 +338,164 @@ def test_a_crash_after_fast_startup_starts_at_the_last_event():
     log = [RESTART(T + 100, "power off"), HIBERNATING(T + 101), other(T + 400), BOOTED(T + 900)]
     found = events(log)
     assert found == [Event(T + 100, T + 101, "restart"), Event(T + 400, T + 400, "restart")]
+
+
+# A log that no longer reaches back to a record's end (full, so it dropped
+# its oldest events, or cleared): boot_lost says so, and restart.py works out
+# when that boot ended from its records.
+
+
+def test_a_log_that_reaches_back_to_the_end_hasnt_lost_it():
+    source = el.WindowsEvents(FakeLog([other(T + 50), BOOTED(T + 2000)]), sid=lambda: ME)
+    assert source.boot_lost(Rec(ended=T + 50)) is False
+
+
+def test_a_log_whose_oldest_event_came_after_the_end_has_lost_it():
+    # The oldest event of any kind: the picker's own kinds can all be later
+    # on a machine left on for a week.
+    source = el.WindowsEvents(FakeLog([other(T + 100), BOOTED(T + 2000)]), sid=lambda: ME)
+    assert source.boot_lost(Rec(ended=T + 99)) is True
+
+
+def test_the_oldest_event_is_asked_for_once():
+    log = FakeLog([other(T + 100), BOOTED(T + 2000)])
+    source = el.WindowsEvents(log, sid=lambda: ME)
+    for ended in (T + 10, T + 20):
+        source.boot_lost(Rec(ended=ended))
+    assert [a for a in log.runs if "/q:*" in a] == [["qe", "System", "/q:*", "/f:xml", "/c:1"]]
+
+
+def test_a_log_that_cant_be_read_cant_say_whether_its_lost():
+    source = el.WindowsEvents(el.EventLog(lambda args: None), sid=lambda: ME)
+    assert source.boot_lost(Rec(ended=T)) is None
+
+
+def test_a_full_log_offers_back_the_sessions_open_at_the_restart(claude_home):
+    # Before this, the log's restart (at the next boot) was too late for
+    # every one of them, so none came back.
+    now = T + 6000
+    log = FakeLog([other(T + 5000), BOOTED(T + 5100)], now=now)
+    host = FakeHost(boot="1" * 32, started=lambda now: T + 5100)
+    by_hand, a, b = (claude_home.log("/tmp", conversation("x", "/tmp")) for _ in range(3))
+    for pid, (sid, ended) in enumerate([(by_hand, T + 100), (a, T + 1000), (b, T + 1003)]):
+        write_record(claude_home.paths, sid, "2" * 32, pid, T, ended)
+    state = RestartState(claude_home.paths, el.WindowsEvents(log, sid=lambda: ME), host, now=lambda: now)
+    assert state.sort().sessions == {a: Closed(T + 1003, "restart"), b: Closed(T + 1003, "restart")}
+
+
+def test_a_boot_partly_in_the_log_offers_back_only_what_its_restart_closed(claude_home):
+    # The later sessions ended after the log's oldest event and get the real
+    # restart; one closed by hand before it isn't offered back by the stand-in.
+    now = T + 6000
+    log = FakeLog([other(T + 500), RESTART(T + 1000), SHUTTING_DOWN(T + 1004), BOOTED(T + 1100)], now=now)
+    host = FakeHost(boot="1" * 32, started=lambda now: T + 1100)
+    by_hand, a = (claude_home.log("/tmp", conversation("x", "/tmp")) for _ in range(2))
+    write_record(claude_home.paths, by_hand, "2" * 32, 1, T, T + 100)
+    write_record(claude_home.paths, a, "2" * 32, 2, T, T + 1002)
+    state = RestartState(claude_home.paths, el.WindowsEvents(log, sid=lambda: ME), host, now=lambda: now)
+    assert state.sort().sessions == {a: Closed(T + 1000, "restart")}
+
+
+class Ran:
+    """Stands in for subprocess.run, keeping each argv."""
+
+    def __init__(self, stdout=b""):
+        self.argv: list[list[str]] = []
+        self.stdout = stdout
+
+    def __call__(self, argv, **kwargs):
+        self.argv.append(argv)
+        return el.subprocess.CompletedProcess(argv, 0, self.stdout, b"")
+
+
+@pytest.mark.parametrize(
+    ("env", "system32"),
+    [
+        ({"SystemRoot": "C:\\Windows"}, "C:\\Windows\\System32"),
+        ({"SYSTEMROOT": "D:\\Win"}, "D:\\Win\\System32"),
+        ({"systemroot": "\\\\server\\share\\Windows"}, "\\\\server\\share\\Windows\\System32"),
+    ],
+)
+def test_wevtutil_and_whoami_run_from_system32_by_full_path(monkeypatch, env, system32):
+    # By its bare name CreateProcess would look in the current directory
+    # (the user's project) first.
+    monkeypatch.setattr(el.os, "environ", env)
+    ran = Ran(b'"me\\mason","S-1-5-21-1-2-3-1000"\r\n')
+    monkeypatch.setattr(el.subprocess, "run", ran)
+    el._wevtutil(["qe", "System"])
+    assert el.user_sid() == "S-1-5-21-1-2-3-1000"
+    assert [argv[0] for argv in ran.argv] == [f"{system32}\\wevtutil.exe", f"{system32}\\whoami.exe"]
+    assert ran.argv[0][1:] == ["qe", "System"]
+
+
+def test_without_systemroot_the_bare_name_as_for_cmd(monkeypatch):
+    monkeypatch.setattr(el.os, "environ", {})
+    ran = Ran()
+    monkeypatch.setattr(el.subprocess, "run", ran)
+    el._wevtutil(["qe", "System"])
+    el.user_sid()
+    assert [argv[0] for argv in ran.argv] == ["wevtutil.exe", "whoami.exe"]
+
+
+def test_wsl_runs_them_through_interop_not_here(monkeypatch):
+    from claude_launcher.platforms.wsl.events import WslEvents
+
+    class Interop:
+        def __init__(self):
+            self.asked: list[str] = []
+
+        def wevtutil(self, args):
+            self.asked.append("wevtutil.exe")
+            return ""
+
+        def user_sid(self):
+            self.asked.append("whoami.exe")
+            return ME
+
+    monkeypatch.setattr(el.os, "environ", {"SystemRoot": "C:\\Windows"})
+    ran = Ran()
+    monkeypatch.setattr(el.subprocess, "run", ran)
+    interop = Interop()
+    events = WslEvents(FakeHost(), interop=interop)
+    assert events.windows.sid() == ME
+    assert events.windows.log.since(0) == []
+    assert sorted(interop.asked) == ["wevtutil.exe", "whoami.exe"]
+    assert ran.argv == []
+
+
+def test_a_record_with_no_end_isnt_lost():
+    log = FakeLog([other(T + 100), BOOTED(T + 2000)])
+    assert el.WindowsEvents(log, sid=lambda: ME).boot_lost(Rec(ended=None)) is False
+    assert log.runs == []
+
+
+class TestFastStartupLost:
+    """Fast Startup keeps the boot across nightly shutdowns. If the log has
+    dropped a shutdown's events before the picker opens, that boot's
+    records wait for a full restart instead of going."""
+
+    def state(self, claude_home, log, boot="1" * 32, now=T + 9000):
+        host = FakeHost(boot=boot, started=lambda now: T - 3600)
+        return RestartState(claude_home.paths, el.WindowsEvents(log, sid=lambda: ME), host, now=lambda: now)
+
+    def test_this_boots_records_wait(self, claude_home):
+        log = FakeLog([other(T + 5000)], now=T + 9000)
+        sids = [claude_home.log("/tmp", conversation("x", "/tmp")) for _ in range(3)]
+        for pid, sid in enumerate(sids):
+            write_record(claude_home.paths, sid, "1" * 32, pid, T, T + 1000 + pid)
+        assert self.state(claude_home, log).sort().sessions == {}
+        assert len(list(claude_home.paths.open_records.iterdir())) == 3
+        assert [a for a in log.runs if "/q:*" in a] == [["qe", "System", "/q:*", "/f:xml", "/c:1"]]
+
+    def test_the_full_restart_after_works_it_out(self, claude_home):
+        sid = claude_home.log("/tmp", conversation("x", "/tmp"))
+        write_record(claude_home.paths, sid, "1" * 32, 1, T, T + 1000)
+        assert self.state(claude_home, FakeLog([other(T + 5000)])).sort().sessions == {}
+        log = FakeLog([other(T + 5000), BOOTED(T + 8000)], now=T + 9000)
+        assert self.state(claude_home, log, boot="2" * 32).sort().sessions == {sid: Closed(T + 1000, "restart")}
+
+    def test_a_log_that_still_has_it_decides(self, claude_home):
+        sid = claude_home.log("/tmp", conversation("x", "/tmp"))
+        write_record(claude_home.paths, sid, "1" * 32, 1, T, T + 1000)
+        log = FakeLog([other(T + 10), RESTART(T + 999, "power off"), HIBERNATING(T + 1000.5)])
+        assert self.state(claude_home, log).sort().sessions == {sid: Closed(T + 999, "restart")}

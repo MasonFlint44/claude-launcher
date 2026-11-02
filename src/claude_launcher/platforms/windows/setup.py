@@ -17,15 +17,16 @@ Nothing on a command line cmd parses holds the user's own text either; see
 
 from __future__ import annotations
 
-import ntpath
 import os
 import re
 from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 
+from ... import files
 from ...paths import REPO_DIR, THEME_FILE
 from ...theme import Theme
-from . import terminal
+from . import getenv as _getenv
+from . import system32, terminal
 
 LAUNCHER = REPO_DIR / "bin" / "claude-launcher"
 HOOK = REPO_DIR / "bin" / "claude-session-hook.py"
@@ -60,12 +61,18 @@ _SHIM_MARK = "rem claude-launcher: "
 # the line that runs Python empties them first, but its %...% were expanded
 # when cmd read the line, before any of it ran. So they're found again
 # ({find}, a PATH search: no process) after a Python that was too old.
+# The search runs from the .cmd's own directory (pushd), which holds no
+# python.exe: %~$PATH: may look in the current directory first, and
+# install.ps1's Get-Command never does. A data directory on a share needs a
+# free drive letter for pushd; without one, System32, which holds none either.
 # DisableDelayedExpansion: it may be on by default (the registry), or from
 # the hook's cmd /v:on, and would eat a "!" in a path.
 _FIND = """set "{a}=-" & set "{b}=-" & set "{c}=-"
+pushd "%~dp0." 2>nul || pushd "%SystemRoot%\\System32"
 for %%P in (python.exe) do if not "%%~$PATH:P"=="" set "{a}=%%~$PATH:P"
 if /i not "%{a}:\\WindowsApps\\=%"=="%{a}%" (set "{c}=%{a}%" & set "{a}=-")
 for %%P in (py.exe) do if not "%%~$PATH:P"=="" set "{b}=%%~$PATH:P"
+popd
 """
 _CLEAR = 'set "{a}=" & set "{b}=" & set "{c}=" & set "{e}=" & '
 _RUN = """@echo off
@@ -150,6 +157,9 @@ exit /b 9009
 # What may follow an environment variable in a command line: nothing cmd or
 # Windows Terminal would treat specially, and no spaces.
 _PLAIN_TAIL = re.compile(r"(\\[A-Za-z0-9._-]+)+")
+# A path cmd /c runs as it is, quoted or not: no character it treats
+# specially, and none it splits a command at (, ; =).
+_PLAIN_PATH = re.compile(r"[\w .:\\/~-]+")
 
 
 def run_cmd(name: str, options: str = "") -> str:
@@ -189,15 +199,6 @@ def shim_cmd() -> str:
     return _SHIM.format(mark=_SHIM_MARK, cmd="claude-launcher\\claude-launcher.cmd").replace("\n", "\r\n")
 
 
-def _getenv(env: Mapping[str, str], name: str) -> str | None:
-    """Windows' environment ignores case (SystemRoot, SYSTEMROOT); a plain
-    mapping, as in tests, doesn't."""
-    if name in env:
-        return env[name]
-    folded = name.upper()
-    return next((v for k, v in env.items() if k.upper() == folded), None)
-
-
 def env_form(path: Path, env: Mapping[str, str]) -> tuple[str, str] | None:
     """`path` as (an environment variable, the rest), when it's under
     %LOCALAPPDATA% (or %USERPROFILE%, which it defaults to being under) and
@@ -218,11 +219,47 @@ def env_form(path: Path, env: Mapping[str, str]) -> tuple[str, str] | None:
 
 def _bin_dir(env: Mapping[str, str] = os.environ) -> Path:
     """Where Claude Code's own installer puts claude.exe, and adds to PATH."""
-    return Path(env.get("USERPROFILE") or str(Path.home())) / ".local" / "bin"
+    return Path(_getenv(env, "USERPROFILE") or str(Path.home())) / ".local" / "bin"
 
 
 def _same_dir(a: str, b: str) -> bool:
-    return a.replace("/", "\\").rstrip("\\").lower() == b.replace("/", "\\").rstrip("\\").lower()
+    """Whether two directories are one: case, slashes, a trailing separator
+    and quotes around a PATH entry ("C:\\x y\\bin") don't count."""
+
+    def key(d: str) -> str:
+        d = d.strip()
+        if len(d) >= 2 and d[0] == d[-1] == '"':
+            d = d[1:-1]
+        return d.replace("/", "\\").rstrip("\\").lower()
+
+    return key(a) == key(b)
+
+
+def _write(path: Path, text: str) -> None:
+    """Write a whole file or leave the old one: a .cmd cut short would run
+    half its lines. One that's already this text is left alone: cmd reads a
+    running batch file by its byte offset, line by line, so an open
+    launcher tab would carry on from that offset in the new file."""
+    try:
+        if path.read_bytes() == text.encode("ascii"):
+            return
+    except OSError:
+        pass
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        tmp.write_text(text, encoding="ascii", newline="")
+        files.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+def check_icon(icon: str) -> None:
+    """--icon's file, for Windows Terminal (WSL's profile too)."""
+    if not icon.lower().endswith(".png"):
+        raise ValueError("the icon for Windows Terminal must be a .png")
+    if not os.path.isfile(icon):
+        raise ValueError(f"not a file: {icon}")
 
 
 class WindowsSetup:
@@ -251,15 +288,19 @@ class WindowsSetup:
         after that, and the value isn't parsed again, so % and ! in it are
         kept too. System32's cmd.exe, not %ComSpec%, which can be another
         shell (TCC) that reads /d and /c its own way."""
-        root = _getenv(self.env, "SystemRoot")
-        cmd = ntpath.join(root, "System32", "cmd.exe") if root else "cmd.exe"
+        cmd = system32(self.env, "cmd.exe")
         form = env_form(self._hook_cmd, self.env)
         if form:
             name, rest = form
             return [cmd, "/d", "/v:on", "/c", f"!{name}!{rest}"]
-        # Somewhere else (only tests put it there): the path, which cmd /c
-        # takes as it is if Claude quotes it, and it's the only quoted part.
-        return [cmd, "/d", "/c", str(self._hook_cmd)]
+        # Somewhere else (tests, or neither variable set): the path itself,
+        # which cmd /c takes as it is only without its special characters.
+        # Quoted (Claude quotes it if it has a space), /c drops the quotes
+        # when there's a & ( ) ^ and the like between them.
+        path = str(self._hook_cmd)
+        if not _PLAIN_PATH.fullmatch(path):
+            raise ValueError(f"{path} can't go on cmd's command line as it is; set LOCALAPPDATA and run this again")
+        return [cmd, "/d", "/c", path]
 
     def _profile_command(self) -> str:
         """The profile's command line. Windows Terminal expands %VARIABLES%
@@ -271,20 +312,20 @@ class WindowsSetup:
         if terminal_names:
             yield "warning: --terminal is for Linux desktops; on Windows the launcher opens in Windows Terminal"
         self.data_dir.mkdir(parents=True, exist_ok=True)
-        files = {
+        written = {
             "claude-session-hook.py": entry_script(HOOK),
             "claude-launcher.py": entry_script(LAUNCHER),
             self._hook_cmd.name: run_cmd("claude-session-hook.py", "-I"),
             self._launcher_cmd.name: run_cmd("claude-launcher.py"),
         }
-        for name, text in files.items():
-            (self.data_dir / name).write_text(text, encoding="ascii", newline="")
+        for name, text in written.items():
+            _write(self.data_dir / name, text)
         shim = _bin_dir(self.env) / "claude-launcher.cmd"
         if shim.exists() and _SHIM_MARK not in shim.read_text(encoding="utf-8", errors="replace"):
             yield f"warning: {shim} isn't one of ours; leaving it alone"
         else:
             shim.parent.mkdir(parents=True, exist_ok=True)
-            shim.write_text(shim_cmd(), encoding="ascii", newline="")
+            _write(shim, shim_cmd())
             yield f"Wrote {shim}"
         path = (_getenv(self.env, "PATH") or "").split(";")
         if not any(_same_dir(str(shim.parent), p) for p in path):
@@ -305,14 +346,15 @@ class WindowsSetup:
         if icon and icon.lower() == "default":
             kept.unlink(missing_ok=True)
         elif icon:
-            if not icon.lower().endswith(".png"):
-                raise ValueError("the icon for Windows Terminal must be a .png")
+            check_icon(icon)
             kept.parent.mkdir(parents=True, exist_ok=True)
             terminal.copy_icon(icon, kept)
         return kept if kept.is_file() else DEFAULT_ICON
 
-    def check(self) -> None:
-        """Nothing to check before installing here."""
+    def check(self, terminal_names: str | None, icon: str | None) -> None:
+        """--icon, before anything is changed."""
+        if icon and icon.lower() != "default":
+            check_icon(icon)
 
     def uninstall(self) -> Iterator[str]:
         shim = _bin_dir(self.env) / "claude-launcher.cmd"

@@ -37,6 +37,23 @@ def test_wsl_boot_is_the_distros(tmp_path):
     assert host.boot_start(NOW) == pytest.approx(NOW - 5000 + 300)
 
 
+@pytest.mark.parametrize(
+    "marker", ["run/WSL", "proc/sys/fs/binfmt_misc/WSLInterop", "proc/sys/fs/binfmt_misc/WSLInterop-late"]
+)
+def test_wsl_on_a_kernel_of_its_own_is_the_distros_boot(tmp_path, marker):
+    # A custom kernel from .wslconfig needn't say "microsoft"; WSL's own
+    # files (/run beside /proc) still do.
+    host = fake_proc(tmp_path / "proc", release="6.12.1-custom", init_start=300 * HZ)
+    (tmp_path / marker).parent.mkdir(parents=True, exist_ok=True)
+    (tmp_path / marker).touch()
+    assert host.boot_id() == "5e1c2a7b0d4f4e8a9b3c" + f"{300 * HZ:012x}"
+
+
+def test_a_custom_kernel_without_wsls_files_is_plain_linux(tmp_path):
+    host = fake_proc(tmp_path / "proc", release="6.12.1-custom")
+    assert host.boot_id() == VM_BOOT
+
+
 def test_a_distro_started_again_is_another_boot(tmp_path):
     first = fake_proc(tmp_path / "a", init_start=100).boot_id()
     assert fake_proc(tmp_path / "b", init_start=200).boot_id() != first
@@ -86,3 +103,23 @@ def test_start_ticks_tell_a_claude_that_got_the_pid_since(tmp_path):
     a_claude(tmp_path, 700, start_ticks=100 * HZ)
     assert host.claude_running(700, started=NOW, start_ticks=100 * HZ)
     assert not host.claude_running(700, started=NOW, start_ticks=100 * HZ - 1)  # exact, no margin
+
+
+def test_a_claude_whose_start_cant_be_read_is_taken_as_the_records(tmp_path, monkeypatch):
+    # Taken as the record's, so the record waits instead of being sorted while its Claude may still run.
+    import time
+
+    host = fake_proc(tmp_path, release="6.8.0-31-generic")
+    monkeypatch.setattr(time, "time", lambda: NOW)
+    a_claude(tmp_path, 700, start_ticks=100 * HZ)
+    (tmp_path / "700" / "stat").unlink()
+    assert host.claude_running(700, started=NOW - 5000 + 50, start_ticks=100 * HZ)
+    assert host.claude_running(700, started=NOW - 5000 + 50)  # an older hook's record
+
+
+def test_without_the_uptime_an_older_records_claude_is_its_own(tmp_path):
+    host = fake_proc(tmp_path, release="6.8.0-31-generic")
+    a_claude(tmp_path, 700, start_ticks=100 * HZ)
+    (tmp_path / "uptime").unlink()
+    assert host.claude_running(700, started=NOW - 5000 + 50)
+    assert host.claude_running(700, started=None)

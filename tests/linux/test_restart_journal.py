@@ -15,7 +15,7 @@ from claude_launcher.platforms.linux.journal import (
     Journal,
     JournalEvents,
 )
-from claude_launcher.restart import KEEP, Closed, RestartState
+from claude_launcher.restart import KEEP, Closed, Record, RestartState
 from conftest import NOW, FakeHost, conversation, write_record
 
 THIS_BOOT = "11111111-1111-1111-1111-111111111111"
@@ -39,6 +39,13 @@ class FakeJournal:
     `sessions` lists USER's login sessions that ended, as (boot, session id,
     type, logged out at), optionally followed by how long removal took
     (default 0.5 s) and whether the "logged out" message is there (default yes).
+
+    As journalctl does, a query of a boot it doesn't list fails (`-b` exits
+    1), in the system journal and in your own (`user_boots`: the boots your
+    journal has, both by default). `failing` makes per-boot queries of a
+    listed boot fail too (a timeout, say), as (kind, boot) pairs, kind one of
+    "last_entry", "shutdown", "logouts", "desktop". `user_listing` False
+    makes your own journal's --list-boots fail.
     """
 
     def __init__(
@@ -50,20 +57,33 @@ class FakeJournal:
         desktop=(),
         system=True,
         text_boots=False,
+        failing=(),
+        user_boots=(LAST_BOOT, THIS_BOOT),
+        user_listing=True,
     ):
         self.shutdown_message, self.last_entry, self.readable = shutdown_message, last_entry, readable
         self.sessions = list(sessions)
         self.desktop = list(desktop)  # (boot, when graphical-session.target stopped)
         self.system = system  # False: only the user journal can be read
         self.text_boots = text_boots  # True: systemd before 251, whose --list-boots ignores -o json
+        self.failing = {(kind, boot_key(boot)) for kind, boot in failing}
+        self.user_boots = {boot_key(b) for b in user_boots}
+        self.user_listing = user_listing
         self.calls = []
 
     def __call__(self, args):
         self.calls.append(list(args))
         if not self.readable:
             return None
+        if args[:2] == ["--user", "--list-boots"]:
+            if not self.user_listing:
+                return None
+            boots = [{"boot_id": b, "first_entry": 1, "last_entry": 2} for b in sorted(self.user_boots)]
+            return json.dumps(boots)
         if args[0] == "--user":
             boot = args[2]
+            if boot not in self.user_boots or ("desktop", boot) in self.failing:
+                return None
             assert f"USER_UNIT={GRAPHICAL_SESSION_UNIT}" in args and f"MESSAGE_ID={UNIT_STOPPED_MESSAGE_ID}" in args
             lines = [
                 {"JOB_TYPE": "stop", "JOB_RESULT": "done", "__REALTIME_TIMESTAMP": stamp(t)}
@@ -85,6 +105,17 @@ class FakeJournal:
             ]
             return json.dumps(boots)
         boot = args[1]
+        if boot not in (boot_key(LAST_BOOT), boot_key(THIS_BOOT)):
+            return None  # "No journal boot entry found for the specified boot"
+        kind = (
+            "last_entry"
+            if args[2:4] == ["-n", "1"]
+            else "shutdown"
+            if f"MESSAGE_ID={SHUTDOWN_MESSAGE_ID}" in args
+            else "logouts"
+        )
+        if (kind, boot) in self.failing:
+            return None
         if args[2:4] == ["-n", "1"]:  # a boot's last entry
             last = {boot_key(LAST_BOOT): self.last_entry, boot_key(THIS_BOOT): NOW}.get(boot)
             return "" if last is None else json.dumps({"__REALTIME_TIMESTAMP": stamp(last)}) + "\n"
@@ -229,10 +260,24 @@ class TestRestart:
         assert make().sort().sessions == {sid: Closed(BOOT_STARTED, "restart")}
 
     def test_boot_not_in_the_journal(self, setup, claude_home):
+        # A journal kept only in memory, vacuumed or cleared: the sessions
+        # that ended at that boot's last moment are offered back, and a tab
+        # closed by hand well before them isn't.
         make, record, session, _ = setup
-        record(100, session(), boot="33333333-3333-3333-3333-333333333333", ended=NOW - 900)
-        assert len(make().sort()) == 0
+        lost = "33333333-3333-3333-3333-333333333333"
+        by_hand, a, b = session(), session(), session()
+        record(100, by_hand, boot=lost, ended=NOW - 5000)
+        record(101, a, boot=lost, ended=NOW - 903)
+        record(102, b, boot=lost, ended=NOW - 900)
+        assert make().sort().sessions == {a: Closed(NOW - 900, "restart"), b: Closed(NOW - 900, "restart")}
         assert records(claude_home) == []
+
+    def test_whether_a_boot_is_lost(self, setup):
+        events = JournalEvents(Journal(FakeJournal()), lambda: USER)
+        rec = lambda boot: Record("s", 1, boot_key(boot), "", NOW - 3600, NOW - 900)  # noqa: E731
+        assert events.boot_lost(rec(LAST_BOOT)) is False
+        assert events.boot_lost(rec("33333333-3333-3333-3333-333333333333")) is True
+        assert JournalEvents(Journal(FakeJournal(readable=False)), lambda: USER).boot_lost(rec(LAST_BOOT)) is None
 
 
 class TestSystemdBefore251:
@@ -260,7 +305,170 @@ class TestSystemdBefore251:
         assert make(journal).sort().sessions == {sid: Closed(logout, "logout")}
 
     def test_boot_not_in_the_journal(self, setup):
-        assert Journal(FakeJournal(text_boots=True)).last_entry("33333333-3333-3333-3333-333333333333") is None
+        journal = Journal(FakeJournal(text_boots=True))
+        assert journal.last_entry("33333333-3333-3333-3333-333333333333") is None
+        assert journal.lists("33333333-3333-3333-3333-333333333333") is False
+        assert journal.lists(LAST_BOOT) is True
+
+
+def test_a_boot_listed_without_its_last_entry_is_looked_up(setup):
+    # --list-boots' JSON with a null last_entry: that boot's last entry is
+    # asked for, as for systemd before 251, and the other boots are unaffected.
+    make, record, session, _ = setup
+    journal = FakeJournal(shutdown_message=None)
+    real = journal.__call__
+
+    def listing(args):
+        out = real(args)
+        if args[0] == "--list-boots":
+            boots = json.loads(out)
+            boots[0]["last_entry"] = None
+            out = json.dumps(boots)
+        return out
+
+    assert Journal(listing).last_entry(THIS_BOOT) == NOW
+    sid = session()
+    record(100, sid, ended=REBOOT + 4.5)
+    assert make(listing).sort().sessions == {sid: Closed(REBOOT + 5, "restart")}
+    assert ["-b", boot_key(LAST_BOOT), "-n", "1"] in [c[:4] for c in journal.calls]
+
+
+def lookup_fails(journal):
+    """`journal` with LAST_BOOT listed but its last entry not to be had: its
+    `-n 1` lookup fails (timed out, say), and JSON's listing leaves it out."""
+
+    def run(args):
+        if args[0] == "--list-boots" and not journal.text_boots:
+            boots = json.loads(journal(args))
+            boots[0]["last_entry"] = None
+            return json.dumps(boots)
+        if args[:2] == ["-b", boot_key(LAST_BOOT)] and args[2:4] == ["-n", "1"]:
+            journal.calls.append(list(args))
+            return None
+        return journal(args)
+
+    return run
+
+
+@pytest.mark.parametrize("text_boots", [False, True], ids=["json", "before-251"])
+class TestLastEntryLookupFails:
+    """A boot the journal lists but whose last entry can't be looked up isn't
+    a boot the journal lost: its records wait for the next sort."""
+
+    def test_ended_waits(self, setup, claude_home, text_boots):
+        make, record, session, _ = setup
+        sid = session()
+        record(100, sid, ended=NOW - 900)  # long before the reboot: not a ↻ row once the journal answers
+        assert len(make(lookup_fails(FakeJournal(text_boots=text_boots))).sort()) == 0
+        assert records(claude_home) == ["100"]
+        assert len(make(FakeJournal(text_boots=text_boots)).sort()) == 0
+        assert records(claude_home) == []
+
+    def test_closed_by_the_reboot_once_it_can_be_asked(self, setup, claude_home, text_boots):
+        make, record, session, _ = setup
+        sid = session()
+        record(100, sid, ended=REBOOT + 0.8)
+        assert len(make(lookup_fails(FakeJournal(text_boots=text_boots))).sort()) == 0
+        assert make(FakeJournal(text_boots=text_boots)).sort().sessions == {sid: Closed(REBOOT, "restart")}
+
+    def test_a_boot_not_listed_is_still_lost(self, setup, text_boots):
+        make, record, session, _ = setup
+        sid = session()
+        record(100, sid, boot="33333333-3333-3333-3333-333333333333", ended=NOW - 900)
+        assert make(lookup_fails(FakeJournal(text_boots=text_boots))).sort().sessions == {
+            sid: Closed(NOW - 900, "restart")
+        }
+
+    def test_asked_once_per_sort(self, setup, text_boots):
+        make, record, session, _ = setup
+        journal = FakeJournal(text_boots=text_boots)
+        for pid in (100, 101):
+            record(pid, session(), ended=NOW - 900)
+        make(lookup_fails(journal)).sort()
+        assert [c[:4] for c in journal.calls].count(["-b", boot_key(LAST_BOOT), "-n", "1"]) == 1
+
+
+def query_kind(args):
+    """Which of FakeJournal's per-boot queries `args` is, and of which boot."""
+    if args[0] == "--user":
+        return ("desktop", args[2]) if args[1] == "-b" else None
+    if args[0] != "-b":
+        return None
+    if args[2:4] == ["-n", "1"]:
+        return ("last_entry", args[1])
+    return ("shutdown" if f"MESSAGE_ID={SHUTDOWN_MESSAGE_ID}" in args else "logouts", args[1])
+
+
+class TestQueryFails:
+    """A query of a boot the journal lists that fails (timed out, say) says
+    nothing: the boot's records wait, rather than read as nothing closed them."""
+
+    @pytest.mark.parametrize("kind", ["shutdown", "logouts", "desktop"])
+    def test_an_earlier_boots_record_waits(self, setup, claude_home, kind):
+        make, record, session, _ = setup
+        sid = session()
+        record(100, sid, ended=REBOOT + 0.8)
+        assert len(make(FakeJournal(failing=[(kind, LAST_BOOT)])).sort()) == 0
+        assert records(claude_home) == ["100"]
+        assert make(FakeJournal()).sort().sessions == {sid: Closed(REBOOT, "restart")}
+        assert records(claude_home) == []
+
+    @pytest.mark.parametrize("kind", ["logouts", "desktop"])
+    def test_this_boots_record_waits(self, setup, claude_home, kind):
+        make, record, session, _ = setup
+        sid = session()
+        logout = NOW - 120
+        record(100, sid, boot=THIS_BOOT, ended=logout + 0.2)
+        journal = FakeJournal(desktop=[(THIS_BOOT, logout)], failing=[(kind, THIS_BOOT)])
+        assert len(make(journal).sort()) == 0
+        assert records(claude_home) == ["100"]
+        assert make(FakeJournal(desktop=[(THIS_BOOT, logout)])).sort().sessions == {sid: Closed(logout, "logout")}
+
+    @pytest.mark.parametrize("kind", ["shutdown", "logouts", "desktop"])
+    def test_asked_once_per_sort(self, setup, kind):
+        make, record, session, _ = setup
+        journal = FakeJournal(failing=[(kind, LAST_BOOT)])
+        for pid in (100, 101):
+            record(pid, session(), ended=REBOOT + 0.8)
+        make(journal).sort()
+        asked = [query_kind(c) for c in journal.calls]
+        assert asked.count((kind, boot_key(LAST_BOOT))) == 1
+
+
+def test_a_boot_your_journal_doesnt_have_has_no_desktop_ends(setup):
+    # --user -b fails for a boot the system journal lists but yours doesn't
+    # (you weren't logged in then): that's no desktop ending, not a failure.
+    make, record, session, _ = setup
+    sid = session()
+    record(100, sid, ended=REBOOT + 0.8)
+    journal = FakeJournal(user_boots=[THIS_BOOT])
+    assert make(journal).sort().sessions == {sid: Closed(REBOOT, "restart")}
+    assert ["--user", "--list-boots", "-o", "json"] in journal.calls
+
+
+def test_when_your_journal_cant_list_its_boots_desktop_ends_dont_wait(setup, claude_home):
+    # A desktop query failed, and so did asking whether your journal has
+    # that boot: it can't be told from one you weren't logged in for, so it
+    # reads as no desktop ending rather than waiting. Asked once per sort.
+    make, record, session, _ = setup
+    last, this = session(), session()
+    record(100, last, ended=REBOOT + 0.8)
+    record(101, this, boot=THIS_BOOT, ended=NOW - 120)
+    journal = FakeJournal(failing=[("desktop", LAST_BOOT), ("desktop", THIS_BOOT)], user_listing=False)
+    assert Journal(journal).desktop_ends(LAST_BOOT) == []
+    journal.calls.clear()
+    assert make(journal).sort().sessions == {last: Closed(REBOOT, "restart")}
+    assert records(claude_home) == []
+    assert journal.calls.count(["--user", "--list-boots", "-o", "json"]) == 1
+
+
+def test_a_boot_not_listed_reads_as_empty(setup):
+    # journalctl -b exits 1 for a boot it doesn't list; that's a lost boot, not a failure.
+    lost = "33333333-3333-3333-3333-333333333333"
+    journal = Journal(FakeJournal())
+    assert journal.logouts(lost, USER) == []
+    assert journal.desktop_ends(lost) == []
+    assert journal.restart_time(lost) is None
 
 
 class TestLogout:
@@ -413,9 +621,17 @@ class TestJournalUnreadable:
 
     def test_old_undecided_records_are_dropped(self, setup, claude_home):
         make, record, session, _ = setup
-        record(100, session(), started=NOW - KEEP - 10, ended=NOW - KEEP)
+        record(100, session(), started=NOW - KEEP - 10, ended=NOW - KEEP - 1)
         make(FakeJournal(readable=False)).sort()
         assert records(claude_home) == []
+
+    def test_a_long_running_claudes_record_waits_from_its_end(self, setup, claude_home):
+        # Started over KEEP ago, ended at the restart: it waits, so it still
+        # counts toward when its boot ended once the journal answers.
+        make, record, session, _ = setup
+        record(100, session(), started=NOW - KEEP - 10, ended=NOW - 900)
+        make(FakeJournal(readable=False)).sort()
+        assert records(claude_home) == ["100"]
 
 
 class TestGroup:

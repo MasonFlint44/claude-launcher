@@ -7,9 +7,11 @@
 # It keeps one small record per running Claude, in
 # ${CLAUDE_CONFIG_DIR:-~/.claude}/state/claude-launcher/open/<boot id>_<pid>
 # (pids start over each boot, so the boot keeps a new Claude from taking over
-# the record of one a restart closed). Start
-# writes the record. An end you chose (/exit, /clear, switching with /resume,
-# Claude's /logout) deletes it. Any other end, like closing the tab or the desktop
+# the record of one a restart closed). Start writes the record, first moving
+# another session's record under that name to <boot id>_<pid>_<its session id>
+# (as an end without a start does), or deleting it if this same Claude wrote it.
+# An end you chose (/exit, /clear, switching with /resume, Claude's /logout)
+# deletes it. Any other end, like closing the tab or the desktop
 # closing every window for a restart or logout, keeps it with the time it
 # ended: the launcher decides later, from the journal, which it was.
 #
@@ -64,20 +66,26 @@ reason=other
 # Another /proc for the boot's files, for tests only.
 proc=${CLAUDE_LAUNCHER_TEST_PROC:-/proc}
 read -r boot_id < "$proc/sys/kernel/random/boot_id"
-# Under WSL's kernel every distro shares one VM's boot ID, but a distro can
-# stop and start again while the VM runs on, so its boot is the VM's and its
-# pid 1's start (in clock ticks), as 32 hex digits. platforms/linux/host.py
-# does the same.
+# In WSL's VM every distro shares one boot ID, but a distro can stop and
+# start again while the VM runs on, so its boot is the VM's and its pid 1's
+# start (in clock ticks), as 32 hex digits. The VM is known by its kernel or,
+# for a custom kernel, WSL's own files (/run beside /proc), as in
+# platforms/linux/host.py (wsl_kernel).
 release=
 read -r release 2>/dev/null < "$proc/sys/kernel/osrelease"
-if [[ ${release,,} == *microsoft* ]] && read -r init 2>/dev/null < "$proc/1/stat"; then
+binfmt=$proc/sys/fs/binfmt_misc
+if [[ ${release,,} == *microsoft* || -e ${proc%/*}/run/WSL || -e $binfmt/WSLInterop || -e $binfmt/WSLInterop-late ]] &&
+  read -r init 2>/dev/null < "$proc/1/stat"; then
   read -ra init <<< "${init##*) }"
   if [[ ${init[19]:-} =~ ^[0-9]+$ ]]; then
     boot_id=${boot_id//-/}
     printf -v boot_id '%s%012x' "${boot_id:0:20}" "${init[19]}"
   fi
 fi
-# The login session Claude runs in: for an SSH session, its end closes Claude.
+# The login session Claude runs in (its audit session ID). For an SSH login
+# that's logind's session, whose end closes Claude. On a desktop with systemd
+# 256 or later it's the user manager's session instead, so desktop logouts are
+# found by graphical-session.target stopping (platforms/linux/journal.py).
 login_session=
 read -r login_session < "/proc/$pid/sessionid" 2>/dev/null
 [[ $login_session == 4294967295 ]] && login_session=  # none
@@ -93,17 +101,44 @@ write() {  # atomically, so the launcher never reads half a record
   printf '%s\n' "$1" > "$record.tmp" && mv -f "$record.tmp" "$record"
 }
 
+old=
+[[ -f $record ]] && read -r old < "$record"
+mine=
+[[ $old == '{'*'}' && $old == *"\"session_id\":\"$session_id\""* ]] && mine=1
+# Another session's record from this same Claude (the same start in clock
+# ticks): its session before this one, which it ended by choice (/clear,
+# /resume). Claude waits only a moment for the end hook before starting the
+# next session, and then kills it, so that end may not have got to delete it.
+earlier=
+[[ -z $mine && -n $start_ticks && $old == '{'*"\"start_ticks\":$start_ticks,"* ]] && earlier=1
+
+# Another session's record under this pid: this Claude's earlier one goes.
+# Anything else is a Claude killed with no end (a logout, say) whose pid came
+# back before the launcher sorted it, or this Claude's earlier one when its
+# start couldn't be read. Keep it aside, under its session's ID, for the
+# launcher to find.
+move_aside() {
+  if [[ -n $earlier ]]; then
+    rm -f "$record"
+  elif [[ $old =~ \"session_id\":\"($uuid)\" && ${BASH_REMATCH[1]} != "$session_id" ]]; then
+    mv -f "$record" "${record}_${BASH_REMATCH[1]}"
+  fi
+}
+
 case ${1:-} in
   start)
+    move_aside
     write "{$fields,\"started_at\":$EPOCHREALTIME}" ;;
   end)
     case $reason in
-      prompt_input_exit|clear|resume|logout) rm -f "$record" ;;
+      # Only this session's record, or this Claude's earlier one: another's
+      # is left for the launcher to sort.
+      prompt_input_exit|clear|resume|logout) [[ -n $mine || -n $earlier ]] && rm -f "$record" ;;
       *)
-        old=
-        [[ -f $record ]] && read -r old < "$record"
-        # Another session's record (no start was seen for this one): start afresh.
-        [[ $old == '{'*'}' && $old == *"\"session_id\":\"$session_id\""* ]] || old="{$fields,\"started_at\":$EPOCHREALTIME}"
+        if [[ -z $mine ]]; then
+          move_aside
+          old="{$fields,\"started_at\":$EPOCHREALTIME}"
+        fi
         write "${old%\}},\"end_reason\":\"$reason\",\"ended_at\":$EPOCHREALTIME}" ;;
     esac ;;
 esac

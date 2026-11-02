@@ -2,18 +2,20 @@
 the .cmd (which finds Python), its entry script, then the repo's script.
 From user directories with the characters cmd and code pages trip on."""
 
+import importlib.util
 import json
 import os
 import shutil
 import subprocess
 import sys
+import time
 import uuid
 
 import pytest
 
 from claude_launcher.platforms.windows import data_dir
 from claude_launcher.platforms.windows import setup as windows_setup
-from claude_launcher.platforms.windows.host import WindowsHost
+from claude_launcher.platforms.windows.host import WindowsHost, process_started
 from claude_launcher.platforms.windows.setup import WindowsSetup
 from claude_launcher.restart import Record
 
@@ -100,3 +102,63 @@ def test_the_launcher_from_any_users_directory(tmp_path, name):
         timeout=30,
     )
     assert done.returncode == 1 and f"No session with ID {missing}" in done.stderr, (done.stdout, done.stderr)
+
+
+def test_the_hook_in_a_claude_without_localappdata(tmp_path):
+    # settings.json names the .cmd by !LOCALAPPDATA!, so a Claude started
+    # without it (a scrubbed environment; Windows sets it for every logon)
+    # can't run the hook: cmd says it can't find it and there's no record.
+    # !USERPROFILE! is used only when the installer itself had no
+    # LOCALAPPDATA, so it doesn't cover this; a fallback in the command line
+    # isn't worth it for an environment that breaks much else too.
+    env = user(tmp_path, "A&B")
+    setup = WindowsSetup(data_dir(env), env=env)
+    list(setup.install(None, None))
+    line = libuv_join([*setup.hook_command(), "start"])  # as installed, with LOCALAPPDATA
+    assert "!LOCALAPPDATA!" in line
+    config = tmp_path / "A&B" / ".claude"
+    del env["LOCALAPPDATA"]
+    env |= {"CLAUDE_CODE_ENTRYPOINT": "cli", "CLAUDE_CONFIG_DIR": str(config), "CLAUDE_PID": "4242"}
+    payload = json.dumps({"session_id": SID, "hook_event_name": "SessionStart"})
+    done = subprocess.run(line, input=payload.encode(), env=env, capture_output=True, timeout=20)
+    assert done.returncode != 0 and done.stderr, (done.stdout, done.stderr)
+    assert not (config / "state").exists()
+
+
+def test_the_hook_by_its_own_path_with_a_space(tmp_path):
+    # An installer with neither LOCALAPPDATA nor USERPROFILE names the .cmd
+    # by its path. Claude quotes it for the space, and cmd /c keeps the
+    # quotes: two of them, around a file that exists, nothing special between.
+    home = tmp_path / "Jo Smith"
+    env = {
+        "SystemRoot": os.environ["SYSTEMROOT"],
+        "PATH": os.pathsep.join([os.path.dirname(sys.executable), os.environ["PATH"]]),
+    }
+    data = home / "claude-launcher"
+    if not windows_setup._PLAIN_PATH.fullmatch(str(data)):
+        pytest.skip(f"the temporary directory isn't a plain path: {data}")
+    # Installed with USERPROFILE, so the shim and profile stay in tmp_path.
+    list(WindowsSetup(data, env={**env, "USERPROFILE": str(home)}).install(None, None))
+    command = WindowsSetup(data, env=env).hook_command()
+    assert command[1:] == ["/d", "/c", str(data / "claude-session-hook.cmd")]
+    config = home / ".claude"
+    env |= {"CLAUDE_CODE_ENTRYPOINT": "cli", "CLAUDE_CONFIG_DIR": str(config), "CLAUDE_PID": "4242"}
+    payload = json.dumps({"session_id": SID, "hook_event_name": "SessionStart", "cwd": str(home)})
+    line = libuv_join([*command, "start"])
+    assert f'"{data}' in line
+    done = subprocess.run(line, input=payload.encode(), env=env, capture_output=True, timeout=20)
+    assert done.returncode == 0, (line, done.stdout, done.stderr)
+    [path] = (config / "state" / "claude-launcher" / "open").iterdir()
+    record = Record.load(path)
+    assert record.pid == 4242 and record.session_id == SID
+
+
+def test_the_hook_knows_when_claude_began():
+    # Its own ctypes, for when another session's record is under the pid.
+    spec = importlib.util.spec_from_file_location("win_hook", windows_setup.HOOK)
+    hook = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(hook)
+    began = hook.process_created(os.getpid())
+    assert began is not None and began <= time.time()
+    assert abs(began - process_started(os.getpid())) < 0.001
+    assert hook.process_created(0x7FFFFFFC) is None  # no such process

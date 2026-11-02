@@ -27,13 +27,17 @@ def run_hook(tmp_path):
     records = config / "state" / "claude-launcher" / "open"
 
     def run(
-        *events: tuple[str, dict], entrypoint: str = "cli", tty: bool = True, as_=None, proc: str = "/proc"
+        *events: tuple[str, dict] | str, entrypoint: str = "cli", tty: bool = True, as_=None, proc: str = "/proc"
     ) -> dict[str, dict]:
-        """`as_`: the command line that runs the script, instead of the native
-        `claude` binary. `proc`: where the hook reads the boot's files."""
+        """`events`: the hook's runs, (start or end, Claude's JSON), or a
+        line of shell between them (NEW_CLAUDE). `as_`: the command line that
+        runs the script, instead of the native `claude` binary. `proc`: where
+        the hook reads the boot's files."""
         script = "".join(
-            f"printf '%s' {shlex.quote(json.dumps(payload))} | {shlex.quote(str(HOOK))} {arg}\n"
-            for arg, payload in events
+            event + "\n"
+            if isinstance(event, str)
+            else f"printf '%s' {shlex.quote(json.dumps(event[1]))} | {shlex.quote(str(HOOK))} {event[0]}\n"
+            for event in events
         )
         script += "echo $$ > pid; cat /proc/$$/stat > stat; echo done\n"
         env = {
@@ -74,10 +78,21 @@ def run_hook(tmp_path):
         if as_ is not None and not as_[1].endswith(("claude", "cli.js")):
             # Walking up past a non-Claude process can reach a real Claude running these tests.
             return {k: v for k, v in found.items() if k == pid}
-        assert set(found) <= {pid}
+        assert all(name == pid or name.startswith(pid + "_") for name in found)  # moved aside: <record>_<session>
         return found
 
     return run
+
+
+# Between two runs: the record under the pid now looks like another Claude's
+# with that pid, which started at another time. Each test's runs all come
+# from one process, so without this they're one Claude's sessions.
+def edit_record(sed: str) -> str:
+    """A line of shell that edits the record under the pid (the script's own, $$)."""
+    return f'sed -i {shlex.quote(sed)} "$CLAUDE_CONFIG_DIR"/state/claude-launcher/open/*_$$'
+
+
+NEW_CLAUDE = edit_record('s/"start_ticks":[0-9]*/"start_ticks":1/')
 
 
 def boot_id(proc: str = "/proc") -> str:
@@ -119,11 +134,103 @@ def test_chosen_exit_deletes_the_record(run_hook, reason):
     assert run_hook(("start", {"session_id": SID}), ("end", {"session_id": SID, "reason": reason})) == {}
 
 
-def test_end_of_another_session_doesnt_reuse_its_record(run_hook):
-    # The hook was added while this Claude ran another session, which left no end.
+def test_end_of_another_session_keeps_its_record_aside(run_hook):
+    # No start was seen for this session: the record under the pid is
+    # another's, which left no end. It's moved aside, as a start does.
     other = "9b2f1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b"
-    [record] = run_hook(("start", {"session_id": other}), ("end", {"session_id": SID, "reason": "other"})).values()
-    assert record["session_id"] == SID and "ended_at" in record
+    found = run_hook(("start", {"session_id": other}), NEW_CLAUDE, ("end", {"session_id": SID, "reason": "other"}))
+    [(name, record)] = [(n, r) for n, r in found.items() if r["session_id"] == SID]
+    assert "ended_at" in record and record["started_at"] <= record["ended_at"]
+    assert found[f"{name}_{other}"]["session_id"] == other and "ended_at" not in found[f"{name}_{other}"]
+
+
+OTHER = "9b2f1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b"
+
+
+def test_a_new_claude_with_the_pid_keeps_the_old_record(run_hook):
+    # A Claude a logout killed (no end), then a new one that got its pid
+    # before the launcher sorted the old record.
+    found = run_hook(("start", {"session_id": OTHER}), NEW_CLAUDE, ("start", {"session_id": SID}))
+    [(name, record)] = [(n, r) for n, r in found.items() if r["session_id"] == SID]
+    [(kept_name, kept)] = [(n, r) for n, r in found.items() if r["session_id"] == OTHER]
+    assert kept_name == f"{name}_{OTHER}" and "ended_at" not in kept
+    from claude_launcher.restart import _RECORD_NAME
+
+    assert _RECORD_NAME.fullmatch(name) and _RECORD_NAME.fullmatch(kept_name)
+
+
+THIRD = "7b2f1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b"
+
+
+def test_each_claude_the_pid_comes_back_to_keeps_its_record(run_hook):
+    found = run_hook(
+        ("start", {"session_id": OTHER}),
+        NEW_CLAUDE,
+        ("start", {"session_id": SID}),
+        NEW_CLAUDE,
+        ("start", {"session_id": THIRD}),
+    )
+    [name] = [n for n, r in found.items() if r["session_id"] == THIRD]
+    assert set(found) == {name, f"{name}_{OTHER}", f"{name}_{SID}"}
+    assert found[f"{name}_{OTHER}"]["session_id"] == OTHER and found[f"{name}_{SID}"]["session_id"] == SID
+
+
+def test_a_record_moved_aside_again_replaces_the_older_one(run_hook):
+    # OTHER, then SID, then OTHER resumed, then THIRD: OTHER's record is moved
+    # aside twice, and the newer one wins.
+    found = run_hook(
+        ("start", {"session_id": OTHER}),
+        NEW_CLAUDE,
+        ("start", {"session_id": SID}),
+        NEW_CLAUDE,
+        ("start", {"session_id": OTHER}),
+        NEW_CLAUDE,
+        ("start", {"session_id": THIRD}),
+    )
+    [name] = [n for n, r in found.items() if r["session_id"] == THIRD]
+    assert set(found) == {name, f"{name}_{OTHER}", f"{name}_{SID}"}
+    assert found[f"{name}_{OTHER}"]["started_at"] > found[f"{name}_{SID}"]["started_at"]
+
+
+@pytest.mark.parametrize("reason", ["prompt_input_exit", "clear", "resume", "logout"])
+def test_a_chosen_end_leaves_another_sessions_record(run_hook, reason):
+    # No start was seen for this session: the record under its pid is another's.
+    [record] = run_hook(
+        ("start", {"session_id": OTHER}), NEW_CLAUDE, ("end", {"session_id": SID, "reason": reason})
+    ).values()
+    assert record["session_id"] == OTHER and "ended_at" not in record
+
+
+class TestThisClaudesEarlierSession:
+    """Another session's record that this same Claude wrote (the same
+    start_ticks): its session before, ended by choice (/clear, /resume),
+    with the end hook killed before it deleted the record. It goes, rather
+    than being kept aside for the launcher to take for a closed tab."""
+
+    def test_a_start_deletes_it(self, run_hook):
+        [(name, record)] = run_hook(("start", {"session_id": OTHER}), ("start", {"session_id": SID})).items()
+        assert record["session_id"] == SID and "_" not in name.partition("_")[2]
+
+    def test_an_end_without_a_start_deletes_it(self, run_hook):
+        [record] = run_hook(("start", {"session_id": OTHER}), ("end", {"session_id": SID, "reason": "other"})).values()
+        assert record["session_id"] == SID and "ended_at" in record
+
+    @pytest.mark.parametrize("reason", ["prompt_input_exit", "clear", "resume", "logout"])
+    def test_a_chosen_end_without_a_start_deletes_it(self, run_hook, reason):
+        assert run_hook(("start", {"session_id": OTHER}), ("end", {"session_id": SID, "reason": reason})) == {}
+
+    def test_without_start_ticks_it_is_kept_aside(self, run_hook):
+        # A record from an older hook, or one whose stat couldn't be read.
+        no_ticks = edit_record('s/,"start_ticks":[0-9]*//')
+        found = run_hook(("start", {"session_id": OTHER}), no_ticks, ("start", {"session_id": SID}))
+        [name] = [n for n, r in found.items() if r["session_id"] == SID]
+        assert set(found) == {name, f"{name}_{OTHER}"}
+
+
+def test_the_same_session_starting_again_keeps_one_record(run_hook):
+    # Claude starts a session again after /compact, with the same ID.
+    [record] = run_hook(("start", {"session_id": SID}), ("start", {"session_id": SID, "source": "compact"})).values()
+    assert record["session_id"] == SID
 
 
 def test_times_are_json_numbers_in_any_locale(run_hook, monkeypatch):
@@ -220,17 +327,44 @@ def test_in_wsl_the_boot_is_the_distros(run_hook, tmp_path, release):
     assert name.startswith(record["boot_id"] + "_") and name_again.startswith(record_again["boot_id"] + "_")
 
 
+# WSL's own files, from the fake /proc's parent: /run beside /proc.
+WSL_FILES = ["run/WSL", "proc/sys/fs/binfmt_misc/WSLInterop", "proc/sys/fs/binfmt_misc/WSLInterop-late"]
+
+
+def wsl_file(root: Path, marker: str) -> None:
+    (root / marker).parent.mkdir(parents=True, exist_ok=True)
+    (root / marker).touch()
+
+
+@pytest.mark.parametrize("marker", WSL_FILES)
+def test_in_wsl_on_a_kernel_of_its_own_the_boot_is_the_distros(run_hook, tmp_path, marker):
+    # A custom kernel from .wslconfig needn't say "microsoft".
+    proc = fake_proc(tmp_path / "proc", "6.12.1-custom", 1234)
+    wsl_file(tmp_path, marker)
+    [record] = run_hook(("start", {"session_id": SID}), proc=proc).values()
+    assert record["boot_id"] == VM_BOOT.replace("-", "")[:20] + f"{1234:012x}"
+
+
 def test_elsewhere_the_boot_is_the_kernels(run_hook, tmp_path):
     [record] = run_hook(("start", {"session_id": SID}), proc=fake_proc(tmp_path, "6.8.0-31-generic", 1234)).values()
     assert record["boot_id"] == VM_BOOT
 
 
-@pytest.mark.parametrize("release", ["6.6.87.2-microsoft-standard-WSL2", "6.8.0-31-generic"])
-def test_wsl_records_are_what_the_launcher_reads(run_hook, tmp_path, release):
+@pytest.mark.parametrize(
+    ("release", "marker"),
+    [
+        ("6.6.87.2-microsoft-standard-WSL2", None),
+        ("6.8.0-31-generic", None),
+        *(("6.12.1-custom", m) for m in WSL_FILES),
+    ],
+)
+def test_wsl_records_are_what_the_launcher_reads(run_hook, tmp_path, release, marker):
     from claude_launcher.platforms.linux.host import LinuxHost
     from claude_launcher.restart import _RECORD_NAME, Record, normalize_boot_id
 
     proc = fake_proc(tmp_path / "proc", release, 4321)
+    if marker:
+        wsl_file(tmp_path, marker)
     records = run_hook(("start", {"session_id": SID}), proc=proc)
     (name,) = records
     assert _RECORD_NAME.fullmatch(name)

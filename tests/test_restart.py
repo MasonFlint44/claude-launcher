@@ -2,6 +2,7 @@
 tests/linux/test_restart_journal.py has the rule with Linux's own events."""
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -29,8 +30,8 @@ def setup(claude_home):
             now=lambda: clock[0],
         )
 
-    def record(session_id, boot=LAST_BOOT, pid=100, started=NOW - 3600, ended=None, name=None):
-        write_record(claude_home.paths, session_id, boot, pid, started, ended, name=name)
+    def record(session_id, boot=LAST_BOOT, pid=100, started=NOW - 3600, ended=None, name=None, **extra):
+        write_record(claude_home.paths, session_id, boot, pid, started, ended, name=name, **extra)
 
     def session():
         return claude_home.log("/tmp", conversation("x", "/tmp"))
@@ -107,6 +108,19 @@ def test_still_running_stays_and_leaves_the_group(setup, claude_home):
     assert records(claude_home) == [f"{THIS_BOOT}_200"]
 
 
+@pytest.mark.parametrize(("this_boot", "last_boot"), [("0" * 32, "f" * 32), ("f" * 32, "0" * 32)])
+def test_running_again_stays_out_whichever_record_is_read_last(setup, claude_home, this_boot, last_boot):
+    # Records are read in name order, and names start with the boot ID: the
+    # last boot's record of a session running again can come after its own.
+    setup.host.boot = this_boot
+    sid = setup.session()
+    setup.record(sid, boot=last_boot, ended=RESTART.start + 1)
+    setup.record(sid, boot=this_boot, pid=200, started=NOW - 60)
+    setup.host.running.add(200)
+    assert len(setup.make(RESTART).sort()) == 0
+    assert records(claude_home) == [f"{this_boot}_200"]
+
+
 def test_the_newer_closing_wins_whichever_record_is_read_last(setup):
     # One session resumed in another boot and closed again: two records.
     # Records are read in name order, and the boot read last holds the older one.
@@ -131,9 +145,14 @@ class TestSystemCantBeAsked:
         assert setup.make(readable=False).sort().sessions == {sid: Closed(BOOT_STARTED, "restart")}
 
     def test_old_undecided_records_are_dropped(self, setup, claude_home):
-        setup.record(setup.session(), started=NOW - KEEP - 1, ended=NOW - KEEP)
+        setup.record(setup.session(), started=NOW - KEEP - 2, ended=NOW - KEEP - 1)
         setup.make(readable=False).sort()
         assert records(claude_home) == []
+
+    def test_an_undecided_record_waits_from_its_end(self, setup, claude_home):
+        setup.record(setup.session(), started=NOW - KEEP - 1, ended=NOW - 700)
+        setup.make(readable=False).sort()
+        assert records(claude_home) == [f"{LAST_BOOT}_100"]
 
 
 def test_expires_after_keep(setup):
@@ -153,9 +172,48 @@ def test_sessions_whose_log_is_gone_are_dropped(setup, claude_home):
 def test_bad_records_are_removed_and_ones_being_written_are_left(setup, claude_home):
     claude_home.paths.open_records.mkdir(parents=True)
     (claude_home.paths.open_records / f"{LAST_BOOT}_1").write_text("{not json")
-    (claude_home.paths.open_records / f"{LAST_BOOT}_2.tmp").write_text("{}")
+    writing = claude_home.paths.open_records / f"{LAST_BOOT}_2.tmp"
+    writing.write_text("{}")
+    os.utime(writing, (NOW - 5, NOW - 5))
     setup.make(RESTART).sort()
     assert records(claude_home) == [f"{LAST_BOOT}_2.tmp"]
+
+
+def test_a_record_left_half_written_is_removed_after_a_minute(setup, claude_home):
+    # A hook killed between writing a record and renaming it.
+    claude_home.paths.open_records.mkdir(parents=True)
+    left = claude_home.paths.open_records / f"{LAST_BOOT}_2.tmp"
+    left.write_text("{}")
+    other = claude_home.paths.open_records / "notes.tmp"  # not a record's: left alone
+    other.write_text("")
+    for path in (left, other):
+        os.utime(path, (NOW - 61, NOW - 61))
+    setup.make(RESTART).sort()
+    assert records(claude_home) == ["notes.tmp"]
+
+
+def test_a_record_moved_aside_is_read(setup):
+    # The hook keeps a record under <name>_<session id> when a new Claude gets its pid.
+    sid = setup.session()
+    setup.record(sid, boot=THIS_BOOT, ended=LOGOUT.start + 1, name=f"{THIS_BOOT}_100_{sid}")
+    assert setup.make(LOGOUT).sort().sessions == {sid: Closed(LOGOUT.start, "logout")}
+
+
+def test_a_record_moved_aside_whose_session_runs_again_is_deleted(setup, claude_home):
+    sid = setup.session()
+    setup.record(sid, boot=THIS_BOOT, started=LOGOUT.start - 100, name=f"{THIS_BOOT}_100_{sid}")
+    setup.record(sid, boot=THIS_BOOT, pid=200, started=NOW - 60)
+    setup.host.running.add(200)
+    assert len(setup.make(LOGOUT).sort()) == 0
+    assert records(claude_home) == [f"{THIS_BOOT}_200"]
+
+
+def test_a_record_moved_aside_that_crashed_is_deleted(setup, claude_home):
+    # No end, and nothing after it started in this boot: it crashed or was killed.
+    sid = setup.session()
+    setup.record(sid, boot=THIS_BOOT, started=LOGOUT.end + 10, name=f"{THIS_BOOT}_100_{sid}")
+    assert len(setup.make(LOGOUT).sort()) == 0
+    assert records(claude_home) == []
 
 
 def test_drop_and_drop_all(setup):
@@ -198,6 +256,9 @@ def test_a_sort_cut_short_loses_nothing(setup, claude_home):
             if self.asked == 2:
                 raise Interrupted
             return [RESTART]
+
+        def boot_lost(self, record):
+            return False
 
     state = RestartState(claude_home.paths, FailsOnTheSecond(), setup.host, now=lambda: NOW)
     with pytest.raises(Interrupted):
@@ -338,6 +399,25 @@ def test_record_loads_start_ticks_if_there(tmp_path, extra, ticks):
     assert record is not None and record.start_ticks == ticks and record.started == NOW
 
 
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"started_at": "nan"},
+        {"started_at": "inf"},
+        {"ended_at": "nan"},
+        {"ended_at": "-inf"},
+        {"started_at": float("nan")},
+    ],
+)
+def test_record_times_that_arent_times_are_bad(tmp_path, bad):
+    from claude_launcher.restart import Record
+
+    path = tmp_path / "record"
+    data = {"session_id": "s", "pid": 7, "boot_id": THIS_BOOT, "login_session": "", "started_at": NOW, **bad}
+    path.write_text(json.dumps(data))
+    assert Record.load(path) is None
+
+
 def test_the_host_gets_the_records_start_ticks(setup, claude_home):
     asked = []
 
@@ -353,3 +433,260 @@ def test_the_host_gets_the_records_start_ticks(setup, claude_home):
     setup.make().sort()
     assert asked == [(100, NOW - 60, 4321)]
     assert path.exists()  # still running: kept
+
+
+def test_a_record_a_new_claude_wrote_during_the_sort_is_kept(setup, claude_home):
+    # The sort asks for events (seconds, on Linux) after reading the records.
+    # Meanwhile a new Claude gets the gone one's pid: its hook moves the old
+    # record aside and writes its own under the name the sort decided on.
+    old, new = setup.session(), setup.session()
+    setup.record(old, boot=THIS_BOOT, started=NOW - 600)
+    path = claude_home.paths.open_records / f"{THIS_BOOT}_100"
+
+    class PidReused:
+        def events(self, record, same_boot):
+            os.replace(path, f"{path}_{old}")
+            write_record(claude_home.paths, new, THIS_BOOT, 100, NOW - 1)
+            return [Event(NOW - 300, NOW - 299, "logout")]
+
+    state = RestartState(claude_home.paths, PidReused(), setup.host, now=lambda: NOW)
+    assert state.sort().sessions == {old: Closed(NOW - 300, "logout")}
+    assert records(claude_home) == sorted([f"{THIS_BOOT}_100", f"{THIS_BOOT}_100_{old}"])
+    assert json.loads(path.read_text())["session_id"] == new
+
+
+def test_a_record_the_same_session_wrote_again_during_the_sort_is_kept(setup, claude_home):
+    # The session resumed under the same pid while the sort ran: its new record
+    # has the same name and session ID, but it's another record.
+    sid = setup.session()
+    setup.record(sid, boot=THIS_BOOT, started=NOW - 600, ended=NOW - 299.5)
+    path = claude_home.paths.open_records / f"{THIS_BOOT}_100"
+
+    class Resumed:
+        def events(self, record, same_boot):
+            write_record(claude_home.paths, sid, THIS_BOOT, 100, NOW - 1)
+            return [Event(NOW - 300, NOW - 299, "logout")]
+
+    state = RestartState(claude_home.paths, Resumed(), setup.host, now=lambda: NOW)
+    assert state.sort().sessions == {sid: Closed(NOW - 300, "logout")}
+    assert json.loads(path.read_text())["started_at"] == NOW - 1
+
+
+# A boot the system has lost (a journal kept only in memory, a full or
+# cleared event log): the latest end among its records stands in for its
+# restart.
+OTHER_BOOT = "3" * 32
+
+
+def lost(setup, *events):
+    state = setup.make(*events)
+    state.events.lost = True
+    return state
+
+
+def test_a_lost_boot_offers_back_only_the_ends_at_its_last_moment(setup):
+    by_hand, a, b = setup.session(), setup.session(), setup.session()
+    setup.record(by_hand, pid=1, ended=NOW - 2000)
+    setup.record(a, pid=2, ended=NOW - 705)
+    setup.record(b, pid=3, ended=NOW - 700)
+    assert lost(setup).sort().sessions == {a: Closed(NOW - 700, "restart"), b: Closed(NOW - 700, "restart")}
+
+
+@pytest.mark.parametrize(("before", "counts"), [(LEAD, True), (LEAD + 1, False)])
+def test_a_lost_boot_has_the_usual_margin(setup, before, counts):
+    last, earlier = setup.session(), setup.session()
+    setup.record(last, pid=1, ended=NOW - 700)
+    setup.record(earlier, pid=2, ended=NOW - 700 - before)
+    assert (earlier in lost(setup).sort().sessions) is counts
+
+
+def test_each_lost_boot_has_its_own_last_moment(setup):
+    a, b = setup.session(), setup.session()
+    setup.record(a, pid=1, ended=NOW - 5000)
+    setup.record(b, boot=OTHER_BOOT, pid=1, ended=NOW - 700)
+    assert lost(setup).sort().sessions == {a: Closed(NOW - 5000, "restart"), b: Closed(NOW - 700, "restart")}
+
+
+def test_a_lost_boots_last_moment_counts_a_session_open_again(setup):
+    # It's open again, so it isn't offered back, but its end still says when
+    # that boot ended: the tab closed by hand long before isn't a ↻ row.
+    reopened, by_hand = setup.session(), setup.session()
+    setup.record(reopened, pid=1, ended=NOW - 700)
+    setup.record(by_hand, pid=2, ended=NOW - 2000)
+    setup.record(reopened, boot=THIS_BOOT, pid=200, started=NOW - 60)
+    setup.host.running.add(200)
+    assert lost(setup).sort().sessions == {}
+
+
+def test_a_lost_boots_last_moment_counts_a_session_whose_log_is_gone(setup):
+    by_hand = setup.session()
+    setup.record("0b2f1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b", pid=1, ended=NOW - 700)
+    setup.record(by_hand, pid=2, ended=NOW - 2000)
+    assert lost(setup).sort().sessions == {}
+
+
+def test_a_lost_boots_session_with_no_end_shares_its_restart(setup):
+    # One restart, one time: not this boot's start for one and the boot's
+    # last moment for the others.
+    open_, ended = setup.session(), setup.session()
+    setup.record(open_, pid=1)
+    setup.record(ended, pid=2, ended=NOW - 700)
+    assert lost(setup).sort().sessions == {
+        open_: Closed(NOW - 700, "restart"),
+        ended: Closed(NOW - 700, "restart"),
+    }
+
+
+def test_a_session_with_no_end_started_after_the_boots_last_end_counts_from_this_boot(setup):
+    open_, ended = setup.session(), setup.session()
+    setup.record(open_, pid=1, started=NOW - 650)
+    setup.record(ended, pid=2, ended=NOW - 700)
+    assert lost(setup).sort().sessions[open_] == Closed(BOOT_STARTED, "restart")
+
+
+def test_a_session_with_no_end_shares_its_boots_last_end_when_the_system_cant_be_asked(setup, claude_home):
+    open_, ended = setup.session(), setup.session()
+    setup.record(open_, pid=1)
+    setup.record(ended, pid=2, ended=NOW - 700)
+    assert setup.make(readable=False).sort().sessions == {open_: Closed(NOW - 700, "restart")}
+    assert records(claude_home) == [f"{LAST_BOOT}_2"]  # the one with an end waits
+
+
+def test_a_lost_boots_events_still_count(setup):
+    # WSL: the Windows log is lost, but WSL stopping is WSL's own.
+    sid = setup.session()
+    logout = Event(NOW - 2000, NOW - 1999, "logout")
+    setup.record(sid, pid=1, ended=NOW - 1999.5)
+    setup.record(setup.session(), pid=2, ended=NOW - 700)
+    assert lost(setup, logout).sort().sessions[sid] == Closed(logout.start, "logout")
+
+
+def test_a_boot_not_lost_has_no_stand_in(setup, claude_home):
+    sid = setup.session()
+    setup.record(sid, ended=NOW - 700)
+    assert setup.make().sort().sessions == {}
+    assert records(claude_home) == []
+
+
+def test_whether_a_boot_is_lost_can_wait(setup, claude_home):
+    sid = setup.session()
+    setup.record(sid, ended=NOW - 700)
+    state = setup.make()
+    state.events.lost = None
+    assert state.sort().sessions == {}
+    assert records(claude_home) == [f"{LAST_BOOT}_100"]
+    assert lost(setup).sort().sessions == {sid: Closed(NOW - 700, "restart")}
+
+
+class NeverAsked(FakeEvents):
+    def boot_lost(self, record):
+        raise AssertionError("asked whether the boot is lost")
+
+
+def test_this_boots_record_an_event_closed_never_asks_if_its_lost(setup, claude_home):
+    sid = setup.session()
+    setup.record(sid, boot=THIS_BOOT, ended=LOGOUT.start + 1)
+    state = RestartState(claude_home.paths, NeverAsked([LOGOUT]), setup.host, now=lambda: NOW)
+    assert state.sort().sessions == {sid: Closed(LOGOUT.start, "logout")}
+
+
+class TestThisBootLost:
+    """Windows' Fast Startup shuts down without a new boot, so a record of
+    this boot can have ended before what the log still has. Nothing closed
+    it as far as the system knows, but it waits rather than go."""
+
+    def test_not_lost_goes(self, setup, claude_home):
+        setup.record(setup.session(), boot=THIS_BOOT, ended=NOW - 100)
+        assert setup.make().sort().sessions == {}
+        assert records(claude_home) == []
+
+    @pytest.mark.parametrize("answer", [True, None], ids=["lost", "cant-say"])
+    def test_lost_waits(self, setup, claude_home, answer):
+        setup.record(setup.session(), boot=THIS_BOOT, ended=NOW - 100)
+        state = setup.make()
+        state.events.lost = answer
+        assert state.sort().sessions == {}
+        assert records(claude_home) == [f"{THIS_BOOT}_100"]
+
+    def test_the_next_full_restart_works_it_out(self, setup, claude_home):
+        by_hand, open_at_shutdown = setup.session(), setup.session()
+        setup.record(by_hand, pid=1, boot=THIS_BOOT, ended=NOW - 5000)
+        setup.record(open_at_shutdown, pid=2, boot=THIS_BOOT, ended=NOW - 3000)
+        assert lost(setup).sort().sessions == {}
+        assert len(records(claude_home)) == 2
+        setup.host.boot = "4" * 32  # a full restart
+        assert lost(setup).sort().sessions == {open_at_shutdown: Closed(NOW - 3000, "restart")}
+        assert records(claude_home) == []
+
+    def test_it_waits_until_keep_after_its_end(self, setup, claude_home):
+        setup.record(setup.session(), boot=THIS_BOOT, started=NOW - KEEP - 100, ended=NOW - KEEP - 1)
+        assert lost(setup).sort().sessions == {}
+        assert records(claude_home) == []
+
+
+class TestMovedAsideByItsOwnClaude:
+    """Claude ran the start hook for its next session (/clear, /resume)
+    before the end hook for this one: the record was moved aside, and the
+    end hook didn't find it. Its own Claude still runs."""
+
+    def test_it_was_an_end_you_chose(self, setup, claude_home):
+        old, new = setup.session(), setup.session()
+        setup.record(old, boot=THIS_BOOT, started=NOW - 600, name=f"{THIS_BOOT}_100_{old}")
+        setup.record(new, boot=THIS_BOOT, started=NOW - 60)
+        setup.host.running.add(100)
+        assert len(setup.make(LOGOUT).sort()) == 0
+        assert records(claude_home) == [f"{THIS_BOOT}_100"]
+        # Not offered back once that Claude has gone, either.
+        setup.host.running.clear()
+        assert old not in setup.make(Event(NOW - 30, NOW - 20, "logout")).sort().sessions
+
+    def test_a_dead_claudes_is_sorted_as_before(self, setup, claude_home):
+        # Moved aside when another Claude got its pid: the host says the
+        # pid's process isn't the record's own, so it's sorted as any other.
+        old = setup.session()
+        setup.record(old, boot=THIS_BOOT, started=LOGOUT.start - 100, name=f"{THIS_BOOT}_100_{old}")
+        setup.record(setup.session(), boot=THIS_BOOT, started=NOW - 60)
+
+        class Host(FakeHost):
+            def claude_running(self, pid, started=None, start_ticks=None):
+                return pid == 100 and started == NOW - 60
+
+        host = Host(boot=THIS_BOOT, started=lambda now: BOOT_STARTED)
+        state = RestartState(claude_home.paths, FakeEvents([LOGOUT]), host, now=lambda: NOW)
+        assert state.sort().sessions == {old: Closed(LOGOUT.start, "logout")}
+        assert records(claude_home) == [f"{THIS_BOOT}_100"]
+
+    def test_once_that_claude_has_gone_too(self, setup, claude_home):
+        # /clear, the end hook killed before it deleted the record (an older
+        # hook, which moved it aside), then the next session ran for hours
+        # and a logout closed it. Both records are that one Claude's (the
+        # same start_ticks): only the later session was open at the logout.
+        old, new = setup.session(), setup.session()
+        setup.record(old, boot=THIS_BOOT, started=LOGOUT.start - 7200, name=f"{THIS_BOOT}_100_{old}", start_ticks=5)
+        setup.record(new, boot=THIS_BOOT, started=LOGOUT.start - 3600, start_ticks=5)
+        assert setup.make(LOGOUT).sort().sessions == {new: Closed(LOGOUT.start, "logout")}
+        assert records(claude_home) == []
+
+    def test_another_claude_with_the_pid_isnt_it(self, setup):
+        # Different start_ticks: a Claude the logout killed, then a new one
+        # that got its pid. Both were open at the logout.
+        old, new = setup.session(), setup.session()
+        setup.record(old, boot=THIS_BOOT, started=LOGOUT.start - 7200, name=f"{THIS_BOOT}_100_{old}", start_ticks=5)
+        setup.record(new, boot=THIS_BOOT, started=LOGOUT.start - 3600, start_ticks=6)
+        assert setup.make(LOGOUT).sort().sessions.keys() == {old, new}
+
+    def test_without_start_ticks_it_cant_be_told(self, setup):
+        # Windows' records, and an older hook's: as before.
+        old, new = setup.session(), setup.session()
+        setup.record(old, boot=THIS_BOOT, started=LOGOUT.start - 7200, name=f"{THIS_BOOT}_100_{old}")
+        setup.record(new, boot=THIS_BOOT, started=LOGOUT.start - 3600)
+        assert setup.make(LOGOUT).sort().sessions.keys() == {old, new}
+
+    def test_the_latest_of_its_sessions_is_still_sorted(self, setup):
+        # That Claude's two sessions moved aside (the later one by a new
+        # Claude with the pid): the later one was open at the logout.
+        a, b, c = setup.session(), setup.session(), setup.session()
+        setup.record(a, boot=THIS_BOOT, started=LOGOUT.start - 7200, name=f"{THIS_BOOT}_100_{a}", start_ticks=5)
+        setup.record(b, boot=THIS_BOOT, started=LOGOUT.start - 3600, name=f"{THIS_BOOT}_100_{b}", start_ticks=5)
+        setup.record(c, boot=THIS_BOOT, started=LOGOUT.end + 100, start_ticks=9)
+        assert setup.make(LOGOUT).sort().sessions == {b: Closed(LOGOUT.start, "logout")}

@@ -1,10 +1,7 @@
 #!/usr/bin/env python3
 """Pick a project directory or a recent session, then start Claude Code there.
-When Claude exits, the picker comes back. See README.md for the keys, and
-src/claude_launcher/launcher.py for how it runs.
-
-  claude-launcher [claude options]   pick, then run claude with those options
-  claude-launcher --resume <id>      skip the picker: resume that session in its directory
+`claude-launcher --help` for how to run it (launcher.USAGE), README.md for
+the keys, and src/claude_launcher/launcher.py for how it runs.
 """
 
 import os

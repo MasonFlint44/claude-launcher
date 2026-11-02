@@ -137,3 +137,30 @@ class TestTerminalColors:
         theme.restore(t.slave, tmp_path / "colors.json")
         self.settle(t)
         assert t.received == ["DA1"]
+
+
+class Replies:
+    """A Host whose terminal answers with `buf`, whatever it was asked."""
+
+    def __init__(self, buf):
+        self.buf = buf
+
+    def terminal_reply(self, fd, query, done, timeout):
+        return self.buf
+
+
+def test_replies_to_slots_not_asked_are_left_out(monkeypatch, tmp_path):
+    # Something else asked too (a shell's prompt), and its answers arrived with ours.
+    from test_platforms import platform
+
+    from claude_launcher import platforms
+
+    buf = b"\x1b]11;rgb:0000/0000/0000\x1b\\\x1b]4;200;rgb:ffff/ffff/ffff\x07\x1b]13;rgb:1/2/3\x07\x1b[?62;22c"
+    host = Replies(buf)
+    assert theme.ask(0, ["11"], host) == {"11": "#000000"}
+    monkeypatch.setattr(platforms, "_current", platform("mine", host=host))
+    writes = []
+    monkeypatch.setattr(theme.os, "write", lambda fd, data: writes.append(data))
+    saved = tmp_path / "colors.json"
+    assert theme.apply(0, theme.Theme.parse("background = #1f1e1d\n"), saved)
+    assert writes == [b"\x1b]11;#1f1e1d\x1b\\"]

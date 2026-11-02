@@ -9,8 +9,8 @@ Most of the launcher is the same everywhere: the picker (`picker.py`), the sessi
 | Part | What it does | Linux's |
 |---|---|---|
 | `Host` | Boot ID and start, whether a process is the record's Claude and still running (`claude_running(pid, started, start_ticks)`: the record's start, and the process's own start if the hook wrote it), the user, a lock between processes, the terminal (opening it, and reading its answers to queries unechoed) | `/proc`, `flock`, `/dev/tty`, `termios` |
-| `EventSource` | The restarts and logouts in a record's boot that could have closed its Claude. Only events: the margins and which one wins are `restart.py`'s | the systemd journal |
-| `Setup` | What the installer (`install.py`, run by install.sh or install.ps1) checks first (`check`), sets up after fzf and the hook, and undoes; what settings.json runs for the hook; any core commands of the platform's own | links in `~/.local/bin`, Ghostty theme link, icon, desktop entries, terminal profiles; `terminal list`, `terminal open guake` |
+| `EventSource` | The restarts and logouts in a record's boot that could have closed its Claude, and whether the system has lost what could have closed a record that ended (`boot_lost`: an earlier boot's end, or on Windows a Fast Startup shutdown in this one). Only events: the margins, which one wins, and what stands in for a lost boot's restart (the latest end among its records) are `restart.py`'s | the systemd journal |
+| `Setup` | What the installer (`install.py`, run by install.sh or install.ps1) checks first (`check`: the machine, and `--terminal` and `--icon`, before anything changes), sets up after fzf and the hook, and undoes; what settings.json runs for the hook; any core commands of the platform's own | links in `~/.local/bin`, Ghostty theme link, icon, desktop entries, terminal profiles; `terminal list`, `terminal open guake` |
 | `Platform` fields | fzf's name for the OS (for the fetched build), the shell fzf runs key bindings with, the core's command line quoted for it, more environment for fzf, columns fzf leaves unused, how the picker reaches fzf while it runs (a Unix socket, or a localhost port where Python has no Unix sockets), where the launcher keeps its own files, and any reasons a session was closed beyond restart and logout (`reasons`: `restart.Reason`, with its key, its wording and its rank) | `linux`, `bash -c`, `shlex`, none, 0, socket, `~/.local/share/claude-launcher`, none |
 | session hook | Writes the record `restart.Record` reads, for each interactive Claude | `bin/claude-session-hook` (bash; Windows: `bin/claude-session-hook.py`, run through a .cmd that finds Python, then an entry script) |
 | path text | Separators, `~`, what's inside what, path mode's splitting | `pathtext.py`: POSIX rules, or Windows' (drives, shares, either slash, case ignored), by `os.name` |
@@ -21,7 +21,7 @@ A reason that's in a record's group but that no platform knows (from an older or
 
 ## Picking one
 
-`platforms.current()` picks the platform once per run: `platforms/fork.py` if it exists, else Windows on `win32`, and on Linux WSL when the kernel says "microsoft" and WSL's markers are there (`wsl.is_wsl`), else Linux. On any other OS, the launcher and the installer say "claude-launcher doesn't run on <os> yet" and exit 1. This repo never creates `fork.py`.
+`platforms.current()` picks the platform once per run: `platforms/fork.py` if it exists, else Windows on `win32`, and on Linux WSL when WSL's own files are there, or `WSL_DISTRO_NAME` is set and the kernel says "microsoft" (`wsl.is_wsl`), else Linux. On any other OS, the launcher and the installer say "claude-launcher doesn't run on <os> yet" and exit 1. This repo never creates `fork.py`.
 
 ## Adding a platform here
 

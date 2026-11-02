@@ -1,8 +1,10 @@
-"""Where Claude Code keeps its files, and where the launcher keeps its own."""
+"""Where Claude Code keeps its files, where the launcher keeps its own, and
+where the programs it runs are."""
 
 from __future__ import annotations
 
 import os
+import shutil
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,6 +15,16 @@ PACKAGE_DIR = Path(__file__).resolve().parent
 REPO_DIR = PACKAGE_DIR.parent.parent
 THEME_FILE = REPO_DIR / "themes" / "claude-dark"
 CORE = REPO_DIR / "libexec" / "claude-launcher-core"
+
+
+def which(program: str, env: Mapping[str, str] = os.environ, windows: bool = os.name == "nt") -> str | None:
+    """`program`'s full path on PATH. On Windows, never one in the current
+    directory, which shutil.which looks in first (`windows.on_path`)."""
+    if not windows:
+        return shutil.which(program, path=env.get("PATH"))
+    from .platforms.windows import on_path
+
+    return on_path(env, program)
 
 
 @dataclass(frozen=True)

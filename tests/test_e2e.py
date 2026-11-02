@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import signal
+import time
 
 import pytest
 
@@ -262,6 +264,64 @@ def test_resume_from_the_sessions_view(launch, claude_home, tmp_path):
     assert launch.calls() == [(str(proj), f"--resume {sid}")]
 
 
+def in_the_group(claude_home, sid):
+    """Put a session in the restart group, as a restart an hour ago would have."""
+    claude_home.paths.state.mkdir(parents=True, exist_ok=True)
+    claude_home.paths.restored.write_text(json.dumps({sid: {"at": time.time() - 3600, "why": "restart"}}))
+
+
+def left_the_group(t: Term, claude_home, sid, timeout=5.0) -> bool:
+    """Whether the session leaves the group within `timeout`: the launcher
+    takes it out just after starting claude. The terminal keeps being read,
+    then a little longer, so what came after shows on it."""
+    end = time.time() + timeout
+    while sid in json.loads(claude_home.paths.restored.read_text()):
+        if time.time() > end:
+            return False
+        t.settle(0.05)
+    t.settle(0.5)
+    return True
+
+
+def test_a_resumed_session_leaves_the_group_once_claude_starts(launch, claude_home, tmp_path):
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    sid = claude_home.log(proj, conversation("open at the restart", proj))
+    in_the_group(claude_home, sid)
+    hold = tmp_path / "hold"
+    t = launch(CLAUDE_HOLD=str(hold))
+    t.wait_for("Select a project directory for Claude")
+    t.send("ctrl-s")
+    t.wait_for("open at the restart")  # its row: the projects view shows a ↻ line too
+    t.send("enter")
+    t.wait_for("fake claude in")
+    assert launch.calls() == [(str(proj), f"--resume {sid}")]
+    assert left_the_group(t, claude_home, sid)
+    assert "Select a project directory" not in t.text()  # while Claude still runs
+    hold.touch()
+    t.wait_for("Select a project directory for Claude")
+    quit_with_esc(t)
+
+
+def test_a_session_claude_cant_resume_stays_in_the_group(launch, claude_home, tmp_path):
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    sid = claude_home.log(proj, conversation("open at the restart", proj))
+    in_the_group(claude_home, sid)
+    (tmp_path / "bin" / "claude").unlink()
+    # Only its own bin, and bash for fzf's key bindings: no other claude
+    # (the distro images have one in /usr/local/bin).
+    (tmp_path / "bin" / "bash").symlink_to(shutil.which("bash"))
+    t = launch(PATH=str(tmp_path / "bin"))
+    t.wait_for("Select a project directory for Claude")
+    t.send("ctrl-s")
+    t.wait_for("open at the restart")
+    t.send("enter")
+    t.wait_for("claude isn't on your PATH")
+    t.wait_for("Select a project directory for Claude")
+    assert sid in json.loads(claude_home.paths.restored.read_text())
+
+
 def test_ctrl_s_and_esc_go_back(launch, claude_home):
     claude_home.log("/tmp", conversation("hello", "/tmp"))
     t = launch()
@@ -415,6 +475,20 @@ def test_resume_on_the_command_line(launch, claude_home, tmp_path):
     t.wait_for("fake claude in")
     assert t.wait_exit() == 0
     assert launch.calls() == [(str(proj), f"--resume {sid}")]
+
+
+def test_resume_on_the_command_line_leaves_the_group_once_claude_starts(launch, claude_home, tmp_path):
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    sid = claude_home.log(proj, conversation("x", proj))
+    in_the_group(claude_home, sid)
+    hold = tmp_path / "hold"
+    t = launch("--resume", sid, CLAUDE_HOLD=str(hold))
+    t.wait_for("fake claude in")
+    assert left_the_group(t, claude_home, sid)
+    assert t.status is None  # while Claude still runs
+    hold.touch()
+    assert t.wait_exit() == 0
 
 
 def test_resume_on_the_command_line_uses_the_colors(launch, claude_home, tmp_path):

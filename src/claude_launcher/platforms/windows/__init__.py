@@ -3,6 +3,7 @@ the System event log for restarts and logoffs (eventlog.py)."""
 
 from __future__ import annotations
 
+import ntpath
 import os
 import re
 import sys
@@ -19,9 +20,54 @@ def _events():
     return WindowsEvents(EventLog())
 
 
+def getenv(env: Mapping[str, str], name: str) -> str | None:
+    """Windows' environment ignores case (SystemRoot, SYSTEMROOT); a plain
+    mapping, as in tests, doesn't."""
+    if name in env:
+        return env[name]
+    folded = name.upper()
+    return next((v for k, v in env.items() if k.upper() == folded), None)
+
+
+def system32(env: Mapping[str, str], program: str) -> str:
+    """`program` in System32, by full path: by its bare name CreateProcess
+    looks in the current directory first, which is the user's project.
+    Without SystemRoot (a scrubbed environment), the bare name, as for cmd."""
+    root = getenv(env, "SystemRoot")
+    return ntpath.join(root, "System32", program) if root else program
+
+
+_PATHEXT = ".COM;.EXE;.BAT;.CMD"
+
+
+def on_path(env: Mapping[str, str], program: str, cwd: str | None = None) -> str | None:
+    """`program` (a bare name) by its full path on PATH, trying PATHEXT's
+    extensions as shutil.which does, but never in the current directory:
+    shutil.which looks there first on Windows, and a cloned repo could plant
+    a fzf.bat or claude.cmd. PATH entries that are relative, or are the
+    current directory, are skipped too."""
+    here = _folded(cwd or os.getcwd())
+    # Lower case, as programs are usually named; Windows ignores case anyway.
+    exts = [e.lower() for e in (getenv(env, "PATHEXT") or _PATHEXT).split(";") if e]
+    names = [program] if program.lower().endswith(tuple(exts)) else [program + e for e in exts]
+    for entry in (getenv(env, "PATH") or "").split(os.pathsep):
+        if not os.path.isabs(entry) or _folded(entry) == here:
+            continue
+        for name in names:
+            path = os.path.join(entry, name)
+            if os.path.isfile(path):
+                return path
+    return None
+
+
+def _folded(path: str) -> str:
+    return os.path.normcase(os.path.realpath(path)).casefold()
+
+
 def local_app_data(env: Mapping[str, str]) -> Path:
     """%LOCALAPPDATA%, or where it is by default when it isn't set."""
-    return Path(env.get("LOCALAPPDATA") or os.path.join(env.get("USERPROFILE") or str(Path.home()), "AppData", "Local"))
+    home = getenv(env, "USERPROFILE") or str(Path.home())
+    return Path(getenv(env, "LOCALAPPDATA") or os.path.join(home, "AppData", "Local"))
 
 
 def data_dir(env: Mapping[str, str]) -> Path:

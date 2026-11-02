@@ -78,6 +78,16 @@ class EventSource(Protocol):
         the system can't be asked yet; the record is then decided later."""
         ...
 
+    def boot_lost(self, record: Record) -> bool | None:
+        """Whether the system has lost what could have closed the record's
+        Claude (Linux: the journal no longer lists its boot; Windows: the
+        System log no longer reaches back to its end), so events() can't say.
+        Asked only about a record with an end: of an earlier boot, for which
+        restart.py then works out when that boot ended from its records, or
+        of this boot when no event closed it, which then waits for the boot
+        to end. None if the system can't be asked yet."""
+        ...
+
 
 class Setup(Protocol):
     """What the installer (install.py) sets up for this platform beyond fzf
@@ -99,9 +109,10 @@ class Setup(Protocol):
         `terminal_names` and `icon` are the installer's --terminal and --icon."""
         ...
 
-    def check(self) -> None:
-        """Raise if this machine can't be set up at all, before the installer
-        changes anything (WSL: which distro this is)."""
+    def check(self, terminal_names: str | None, icon: str | None) -> None:
+        """Raise if this machine can't be set up (WSL: which distro this is),
+        or install() would turn down --terminal or --icon, before the
+        installer changes anything."""
         ...
 
     def uninstall(self) -> Iterator[str]:

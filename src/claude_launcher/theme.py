@@ -152,14 +152,15 @@ def ask(fd: int, slots, host: Host | None = None) -> dict[str, str] | None:
         from .platforms import current
 
         host = current().host
-    query = b"".join(_osc(f"{slot};?") for slot in slots) + b"\x1b[c"
+    asked = list(slots)
+    query = b"".join(_osc(f"{slot};?") for slot in asked) + b"\x1b[c"
     buf = host.terminal_reply(fd, query, _DA1_REPLY, REPLY_TIMEOUT)
     if buf is None:
         return None
     found = {}
     for slot, value in _REPLY.findall(buf):
         color = normalize(value.decode(errors="replace"))
-        if color:
+        if color and slot.decode() in asked:  # not answers to something else that asked
             found[slot.decode()] = color
     return found
 

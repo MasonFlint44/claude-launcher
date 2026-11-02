@@ -6,6 +6,7 @@ any Linux, so CI covers them."""
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -13,20 +14,56 @@ from pathlib import Path
 import pytest
 
 from claude_launcher import install
+from claude_launcher.platforms import Event
 from claude_launcher.platforms.windows import terminal
 from claude_launcher.platforms.windows.setup import DEFAULT_ICON
 from claude_launcher.platforms.wsl.events import WslEvents
 from claude_launcher.platforms.wsl.interop import Interop
 from claude_launcher.platforms.wsl.setup import WslSetup
+from claude_launcher.restart import Record
 from conftest import FakeHost, FakePlatform
 
 LOCAL = "C:\\Users\\José\\AppData\\Local"
+# User names cmd trips on, as in the native Windows tests (test_windows_setup.py).
+HOSTILE = ["A&B", "a^b", "100%", "José", "x!y!", "Jo (work)", "Jo Smith (A&B) ^1 100% !x! [é]"]
+
+
+def cmd_c(line: str, env: dict[str, str]) -> tuple[int, str]:
+    """Enough of `cmd /c LINE` for these tests: %VAR% expanded first, then
+    the line split at & and ^ taken out (outside quotes), then echo and set."""
+    line = re.sub(r"%([^%]+)%", lambda m: env.get(m.group(1).upper(), m.group()), line)
+    commands, current, quoted, i = [], "", False, 0
+    while i < len(line):
+        ch = line[i]
+        if ch == '"':
+            quoted = not quoted
+        elif ch == "^" and not quoted and i + 1 < len(line):
+            i += 1
+            ch = line[i]
+        elif ch == "&" and not quoted:
+            commands.append(current.strip())
+            current, i = "", i + 1
+            continue
+        current += ch
+        i += 1
+    commands.append(current.strip())
+    out, code = "", 0
+    for command in commands:
+        word, _, rest = command.partition(" ")
+        if word.lower() == "echo":
+            out, code = out + rest + "\r\n", 0
+        elif word.lower() == "set":
+            found = sorted(f"{k}={v}" for k, v in env.items() if k.upper().startswith(rest.upper()))
+            out, code = out + "".join(f + "\r\n" for f in found), 0 if found else 1
+        else:
+            code = 9009  # not a command
+    return code, out
 
 
 class FakeWindows:
     """Windows' side: C: mounted at `drive`, and what its programs say."""
 
-    def __init__(self, tmp_path: Path, mount_at: str = "c"):
+    def __init__(self, tmp_path: Path, mount_at: str = "c", user: str = "José"):
         self.drive = tmp_path / mount_at
         self.system32 = self.drive / "Windows" / "System32"
         self.system32.mkdir(parents=True)
@@ -38,13 +75,18 @@ class FakeWindows:
             f"C:\\134 {escaped} 9p rw,noatime,aname=drvfs;path=C:\\134 0 0\n"
             "/dev/sdc / ext4 rw 0 0\n"
         )
-        self.cmd_out = (LOCAL + "\r\n").encode("utf-16-le")
+        self.user = user
+        self.local_app_data = f"C:\\Users\\{user}\\AppData\\Local"
+        # What cmd.exe's environment holds (a name that starts the same, too),
+        # or, if set, exactly what it prints.
+        self.windows_env = {"LOCALAPPDATA": self.local_app_data, "LOCALAPPDATA_OLD": "D:\\old"}
+        self.cmd_out: bytes | None = None
         self.fail: dict[str, BaseException] = {}
         self.calls: list[tuple[list[str], Path | None]] = []
         self.distro_root = "\\\\wsl.localhost\\Ubuntu\\"
 
     def local(self) -> Path:
-        return self.drive / "Users" / "José" / "AppData" / "Local"
+        return self.drive / "Users" / self.user / "AppData" / "Local"
 
     def run(self, argv, cwd=None) -> bytes:
         argv = list(argv)
@@ -54,10 +96,15 @@ class FakeWindows:
             raise self.fail[program]
         if program == "cmd.exe":
             assert argv[0] == str(self.system32 / "cmd.exe") and cwd == self.system32
-            assert argv[1:] == ["/d", "/u", "/c", "echo", "%LOCALAPPDATA%"]
-            return self.cmd_out
-        if argv[:3] == ["wslpath", "-u", LOCAL]:
-            return (str(self.local()) + "\n").encode()
+            assert argv[1:4] == ["/d", "/u", "/c"]
+            if self.cmd_out is not None:
+                return self.cmd_out
+            code, out = cmd_c(" ".join(argv[4:]), self.windows_env)
+            if code:
+                raise subprocess.CalledProcessError(code, argv, stderr=b"")
+            return out.encode("utf-16-le")
+        if argv[:2] == ["wslpath", "-u"] and argv[2].startswith("C:\\"):
+            return (str(self.drive) + argv[2][2:].replace("\\", "/") + "\n").encode()
         if argv[:3] == ["wslpath", "-w", "/"]:
             return (self.distro_root + "\n").encode()
         if argv[:2] == ["wslpath", "-w"]:
@@ -153,6 +200,33 @@ def test_events_without_interop_are_unknown(windows, failure):
     assert events.windows._sid() is None
 
 
+@pytest.mark.parametrize(
+    ("failure", "interop_there"),
+    [
+        (FileNotFoundError(2, "No such file"), False),
+        (OSError(8, "Exec format error"), False),  # interop turned off
+        (subprocess.CalledProcessError(1, "x"), True),
+        (subprocess.TimeoutExpired("x", 20), True),  # slow after a restart
+    ],
+)
+def test_a_failed_query_is_told_from_no_interop(windows, failure, interop_there):
+    windows.fail = {"wevtutil.exe": failure}
+    interop = Interop({"PATH": ""}, str(windows.mounts), windows.run)
+    record = Record("s", 1, "2" * 32, "", 100.0, ended=200.0)
+    events = WslEvents(FakeHost(started=lambda now: 1000.0), interop=interop, now=lambda: 2000.0)
+    if interop_there:  # it waits, as on native Windows
+        assert events.events(record, same_boot=False) is None
+    else:
+        assert events.events(record, same_boot=False) == [Event(1000.0, 1000.0, "wsl-stop")]
+    assert interop.reachable() is interop_there
+
+
+def test_no_system32_is_no_interop(tmp_path):
+    (tmp_path / "mounts").write_text("/dev/sdc / ext4 rw 0 0\n")
+    interop = Interop({"PATH": ""}, str(tmp_path / "mounts"), lambda *a, **k: b"")
+    assert interop.reachable() is False
+
+
 # --- The profile ------------------------------------------------------------
 
 
@@ -176,14 +250,39 @@ def test_writes_a_profile_for_this_distro_and_user(windows, home):
 
 def test_localappdata_through_autorun_and_code_pages(windows, home):
     # /d keeps AutoRun quiet, but anything before the path is skipped anyway.
-    windows.cmd_out = ("Clink v1.6 banner\r\n\r\n" + LOCAL + "\r\n").encode("utf-16-le")
+    windows.cmd_out = ("Clink v1.6 banner\r\n\r\nLOCALAPPDATA=" + LOCAL + "\r\n").encode("utf-16-le")
+    assert make(windows, home)._local_app_data() == LOCAL
+
+
+def test_localappdata_after_a_byte_order_mark(windows, home):
+    windows.cmd_out = ("\ufeffLOCALAPPDATA=" + LOCAL + "\r\n").encode("utf-16-le")
+    assert make(windows, home)._local_app_data() == LOCAL
+    windows.cmd_out = ("\ufeffLOCALAPPDATA=" + LOCAL + "\r\n").encode("utf-8")
     assert make(windows, home)._local_app_data() == LOCAL
 
 
 def test_localappdata_without_utf16(windows, home):
     # If cmd ever wrote its code page instead, ASCII still comes through.
-    windows.cmd_out = b"C:\\Users\\me\\AppData\\Local\r\n"
+    windows.cmd_out = b"LOCALAPPDATA=C:\\Users\\me\\AppData\\Local\r\n"
     assert make(windows, home)._local_app_data() == "C:\\Users\\me\\AppData\\Local"
+
+
+def test_localappdata_is_that_variable_whatever_its_case(windows, home):
+    # set LOCALAPPDATA prints every variable whose name starts with it.
+    windows.cmd_out = "LocalAppData_x=D:\\no\r\nLocalAppData=E:\\Local\r\n".encode("utf-16-le")
+    assert make(windows, home)._local_app_data() == "E:\\Local"
+
+
+@pytest.mark.parametrize("user", HOSTILE)
+def test_localappdata_for_any_user_name(tmp_path, home, user):
+    # echo %LOCALAPPDATA% broke at the parse after expanding: & split it
+    # (9009), ^ was dropped (another user's directory), % was refused.
+    windows = FakeWindows(tmp_path, user=user)
+    setup = make(windows, home)
+    assert setup._local_app_data() == f"C:\\Users\\{user}\\AppData\\Local"
+    lines = list(setup.install(None, None))
+    assert lines[-1].startswith('Added the "Claude Code (Ubuntu)" profile'), lines
+    assert profile_of(windows)["name"] == "Claude Code (Ubuntu)"
 
 
 def test_profile_id_is_the_distros_own_and_stable(windows, home):
@@ -228,10 +327,13 @@ def test_without_windows_the_profile_is_skipped(windows, home, program, failure)
     assert not fragment_dir(windows).exists()
 
 
-def test_localappdata_left_unexpanded(windows, home):
-    windows.cmd_out = "%LOCALAPPDATA%\r\n".encode("utf-16-le")
+def test_localappdata_not_set(windows, home):
+    windows.windows_env = {"LOCALAPPDATAX": "D:\\x"}  # only a name that starts the same
     lines = list(make(windows, home).install(None, None))
     assert lines[-1] == "warning: Windows didn't say where %LOCALAPPDATA% is; the Windows Terminal profile was skipped"
+    windows.windows_env = {}  # set exits 1
+    lines = list(make(windows, home).install(None, None))
+    assert lines[-1] == "warning: cmd.exe failed; the Windows Terminal profile was skipped"
 
 
 def test_no_drive_found(tmp_path, home):
@@ -311,6 +413,8 @@ def test_icon_must_be_a_png_file(windows, home, tmp_path, name):
     if not name.startswith("missing"):
         icon.write_text("x")
     with pytest.raises(ValueError):
+        make(windows, home).check(None, str(icon))
+    with pytest.raises(ValueError):
         list(make(windows, home).install(None, str(icon)))
     assert not (home / ".local" / "bin").exists()  # before anything
 
@@ -344,6 +448,15 @@ def test_installer_without_a_distro_stops_first(windows, home, claude_home, fzf_
     assert not (claude_home.paths.config / "settings.json").exists()
 
 
+def test_installer_with_a_bad_icon_stops_first(windows, home, claude_home, fzf_found, tmp_path):
+    icon = tmp_path / "mine.svg"
+    icon.write_text("<svg/>")
+    lines = list(install.install(FakePlatform(make(windows, home), tmp_path / "data"), None, str(icon)))
+    assert lines == ["error: the icon for Windows Terminal must be a .png"]
+    assert not (claude_home.paths.config / "settings.json").exists()
+    assert not (home / ".local" / "bin").exists()
+
+
 def test_installer_round_trip(windows, home, claude_home, fzf_found, tmp_path):
     platform = FakePlatform(make(windows, home), tmp_path / "data")
     lines = list(install.install(platform))
@@ -359,3 +472,36 @@ def test_the_profiles_user_is_the_hosts(tmp_path):
     from claude_launcher.platforms.linux.host import LinuxHost
 
     assert WslSetup({"HOME": str(tmp_path)}).user() == LinuxHost().user()
+
+
+# --- Under sudo ----------------------------------------------------------------
+
+
+@pytest.mark.parametrize("variable", ["SUDO_USER", "DOAS_USER"])
+def test_sudo_stops_before_anything(windows, home, claude_home, fzf_found, tmp_path, monkeypatch, variable):
+    # The profile would open as root, and the links would go in /root. doas
+    # sets DOAS_USER instead.
+    monkeypatch.setattr("os.geteuid", lambda: 0)
+    lines = list(install.install(FakePlatform(make(windows, home, **{variable: "me"}), tmp_path / "data")))
+    assert lines == [
+        "error: run install.sh as yourself, without sudo or doas: the profile opens as the user who installs it",
+    ]
+    assert not (home / ".local" / "bin").exists()
+    assert not (claude_home.paths.config / "settings.json").exists()
+    assert not fragment_dir(windows).exists()
+
+
+@pytest.mark.parametrize("by", [{}, {"SUDO_USER": "root"}, {"DOAS_USER": "root"}])
+def test_root_itself_can_install(windows, home, monkeypatch, by):
+    # A distro whose user is root (its default, or sudo or doas from root).
+    monkeypatch.setattr("os.geteuid", lambda: 0)
+    setup = WslSetup(
+        {"WSL_DISTRO_NAME": "Ubuntu", "HOME": str(home), **by},
+        windows.run,
+        str(windows.mounts),
+        user=lambda: "root",
+    )
+    setup.check(None, None)
+    lines = list(setup.install(None, None))
+    assert profile_of(windows)["commandline"].startswith("wsl.exe -d Ubuntu -u root ")
+    assert lines[-1].startswith('Added the "Claude Code (Ubuntu)" profile')
