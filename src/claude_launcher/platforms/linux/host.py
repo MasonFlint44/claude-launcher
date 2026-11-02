@@ -36,6 +36,31 @@ _KEPT = 20
 _SAME_PROCESS = 10
 
 
+# What WSL puts in a distro and not in a container on its kernel (Docker
+# Desktop's, a devcontainer's): its interop's directory, and the binfmt entry
+# that runs Windows programs (WSLInterop-late when systemd cleared the first).
+# /run is beside /proc. claude-session-hook looks for the same files.
+_WSL_FILES = ("../run/WSL", "sys/fs/binfmt_misc/WSLInterop", "sys/fs/binfmt_misc/WSLInterop-late")
+
+
+def wsl_files(proc: str = "/proc") -> bool:
+    """Whether WSL's own files are here: a WSL distro, whatever its kernel."""
+    return any(os.path.exists(os.path.normpath(os.path.join(proc, f))) for f in _WSL_FILES)
+
+
+def wsl_kernel(proc: str = "/proc") -> bool:
+    """Whether this runs in WSL's VM: its kernel says so (a distro's, or a
+    container's on it), or WSL's files are there (a distro on a custom
+    kernel, from .wslconfig, that doesn't)."""
+    try:
+        with open(f"{proc}/sys/kernel/osrelease") as f:
+            if "microsoft" in f.read().lower():
+                return True
+    except OSError:
+        pass
+    return wsl_files(proc)
+
+
 class LinuxHost:
     def __init__(self, proc: str = "/proc"):
         self.proc = proc  # another for tests
@@ -45,14 +70,14 @@ class LinuxHost:
             return f.read()
 
     def _init_start(self) -> int | None:
-        """When pid 1 started, in clock ticks since the kernel did, under WSL's
-        kernel; else None. Every WSL distro (and Docker Desktop's containers)
-        shares one VM and so its boot ID and uptime, but a distro can stop
-        and start again (wsl --terminate) while the VM runs on: its own
-        start is its pid 1's. claude-session-hook does the same."""
+        """When pid 1 started, in clock ticks since the kernel did, in WSL's
+        VM (`wsl_kernel`); else None. Every WSL distro (and Docker Desktop's
+        containers) shares one VM and so its boot ID and uptime, but a distro
+        can stop and start again (wsl --terminate) while the VM runs on: its
+        own start is its pid 1's. claude-session-hook does the same."""
+        if not wsl_kernel(self.proc):
+            return None
         try:
-            if "microsoft" not in self._read("sys/kernel/osrelease").lower():
-                return None
             fields = self._read("1/stat").rpartition(") ")[2].split()
             return int(fields[19])  # field 22, starttime; the first after "(comm) " is 3
         except (OSError, IndexError, ValueError):
