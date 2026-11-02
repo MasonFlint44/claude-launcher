@@ -245,7 +245,14 @@ def _same_dir(a: str, b: str) -> bool:
 
 def _write(path: Path, text: str) -> None:
     """Write a whole file or leave the old one: a .cmd cut short would run
-    half its lines."""
+    half its lines. One that's already this text is left alone: cmd reads a
+    running batch file by its byte offset, line by line, so an open
+    launcher tab would carry on from that offset in the new file."""
+    try:
+        if path.read_bytes() == text.encode("ascii"):
+            return
+    except OSError:
+        pass
     tmp = path.with_name(path.name + ".tmp")
     try:
         tmp.write_text(text, encoding="ascii", newline="")

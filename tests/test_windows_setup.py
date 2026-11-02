@@ -102,12 +102,13 @@ def test_the_python_search_is_from_the_cmds_own_directory(installed):
     # %~$PATH: may look in the current directory first: a python.exe in
     # Claude's directory would be taken. Each search is from %~dp0, and the
     # current directory is back before Python runs.
+    pushd = 'pushd "%~dp0."'
     list(installed.install(None, None))
     for name in ("claude-launcher", "claude-session-hook"):
         lines = (installed.data_dir / f"{name}.cmd").read_text().splitlines()
         inside = False
         for line in lines:
-            if line == 'pushd "%~dp0."':
+            if line == pushd:
                 inside = True
             elif line == "popd":
                 inside = False
@@ -115,7 +116,7 @@ def test_the_python_search_is_from_the_cmds_own_directory(installed):
                 assert inside, line
             elif '"%~dp0' in line:
                 assert not inside, line
-        assert lines.count('pushd "%~dp0."') == lines.count("popd") == 3
+        assert lines.count(pushd) == lines.count("popd") == 3
 
 
 def test_the_cmds_own_variables_never_reach_python(installed):
@@ -227,6 +228,9 @@ def test_a_failed_write_leaves_the_old_file(setup, env, monkeypatch, name):
     # A disk that fills up partway: a .cmd cut short would run half its lines.
     list(setup.install(None, None))
     shim = Path(env["USERPROFILE"]) / ".local" / "bin" / "claude-launcher.cmd"
+    # An older version, so it's written again.
+    target = setup.data_dir / name
+    target.write_bytes(target.read_bytes() + b"rem older\r\n")
     before = {p: p.read_bytes() for p in [*setup.data_dir.iterdir(), shim]}
     write_text = Path.write_text
 
@@ -241,6 +245,27 @@ def test_a_failed_write_leaves_the_old_file(setup, env, monkeypatch, name):
         list(WindowsSetup(setup.data_dir, env=env).install(None, None))
     assert {p: p.read_bytes() for p in before} == before
     assert not list(setup.data_dir.glob("*.tmp")) and not list(shim.parent.glob("*.tmp"))
+
+
+def test_files_already_as_they_should_be_are_left_alone(setup, env, monkeypatch):
+    # cmd reads a running .cmd by its byte offset, so running install.ps1
+    # again mustn't touch one that open launcher tabs are running.
+    list(setup.install(None, None))
+    shim = Path(env["USERPROFILE"]) / ".local" / "bin" / "claude-launcher.cmd"
+    ours = [*(setup.data_dir / n for n in ("claude-launcher.cmd", "claude-session-hook.cmd")), shim]
+    ours += list(setup.data_dir.glob("*.py"))
+    replaced = []
+    real = files.replace
+    monkeypatch.setattr(files, "replace", lambda src, dst: (replaced.append(Path(dst)), real(src, dst)))
+    list(WindowsSetup(setup.data_dir, env=env).install(None, None))
+    assert not set(replaced) & set(ours)
+    # One that's changed is written again.
+    hook_cmd = setup.data_dir / "claude-session-hook.cmd"
+    hook_cmd.write_bytes(b"@echo old\r\n")
+    list(WindowsSetup(setup.data_dir, env=env).install(None, None))
+    assert (
+        hook_cmd in replaced and hook_cmd.read_bytes() == windows_setup.run_cmd("claude-session-hook.py", "-I").encode()
+    )
 
 
 def test_a_file_in_use_for_a_moment_is_still_written(setup, env, monkeypatch):

@@ -6,6 +6,8 @@ import os
 import shutil
 import subprocess
 import sys
+import time
+import warnings
 
 import pytest
 
@@ -230,6 +232,41 @@ def test_too_old_and_nothing_else(tmp_path, pythons, monkeypatch):
     cmd.write_text(windows_setup.run_cmd("entry.py"), encoding="ascii", newline="")
     done = run_probe(cmd, pythons["real"])
     assert done.returncode == windows_setup.TOO_OLD and "needs Python 99.0 or newer (found" in done.stderr
+
+
+def test_a_running_cmd_replaced_with_other_text(tmp_path):
+    # Why the installer leaves a .cmd that's unchanged alone: cmd reads a
+    # running batch file a line at a time, from a byte offset, so an open
+    # launcher tab could run part of a new one. Here the .cmd is replaced
+    # while a command in it runs, and the new text has, at the old offset of
+    # the next line, a line of its own. Which ran says what cmd did.
+    sleep = f'"{sys.executable}" -c "import time; time.sleep(3)"'
+    old = f"@echo off\r\n{sleep}\r\necho AFTER-OLD\r\n"
+    new = f"@echo off\r\n{sleep}XXecho MIDLINE\r\necho AFTER-NEW\r\n"
+    assert new.index("echo MIDLINE") == old.index("echo AFTER-OLD")
+    cmd = tmp_path / "running.cmd"
+    cmd.write_text(old, encoding="ascii", newline="")
+    running = subprocess.Popen(
+        f'"{CMD}" /d /c "{cmd}"', stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8"
+    )
+    time.sleep(1)
+    tmp = tmp_path / "running.cmd.tmp"
+    tmp.write_text(new, encoding="ascii", newline="")
+    try:
+        os.replace(tmp, cmd)
+        replaced = "replaced"
+    except PermissionError:
+        replaced = "refused (cmd holds it open)"
+    out, err = running.communicate(timeout=30)
+    ran_after = out.split()
+    known = {
+        ("MIDLINE", "AFTER-NEW"): "carried on at its byte offset in the new file",
+        ("AFTER-OLD",): "carried on in the old file",
+        ("AFTER-NEW",): "carried on at the next line of the new file",
+    }
+    outcome = known.get(tuple(ran_after), f"ran {ran_after!r}, said {err.strip()!r}")
+    warnings.warn(f"a running .cmd: {replaced}; cmd {outcome}", stacklevel=1)
+    assert replaced == "replaced" or ran_after == ["AFTER-OLD"]
 
 
 def test_fzf_find_takes_a_fetched_fzf_exe(tmp_path):
