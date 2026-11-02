@@ -63,10 +63,10 @@ def _hook(setup, settings_path: Path) -> Iterator[str]:
 
 def install(platform, terminal_names: str | None = None, icon: str | None = None) -> Iterator[str]:
     setup = platform.setup()
-    # A setup that can't go ahead here (WSL that can't tell its distro) says
-    # so before anything is changed.
+    # A setup that can't go ahead here (WSL that can't tell its distro, an
+    # unknown terminal, an icon it can't use) says so before anything is changed.
     try:
-        setup.check()
+        setup.check(terminal_names, icon)
     except FAILURES as e:
         yield f"error: {e}"
         return

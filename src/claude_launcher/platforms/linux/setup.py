@@ -68,6 +68,10 @@ def unlink_commands(env: Mapping[str, str] = os.environ) -> Iterator[str]:
         yield from unlink_ours(bin_dir(env) / name)
 
 
+def _names(terminal_names: str | None) -> list[str] | None:
+    return [n for n in terminal_names.split(",") if n] if terminal_names else None
+
+
 class LinuxSetup:
     what = "the desktop launcher"
     done = 'Open "Claude Code" from your apps, or run claude-launcher in any terminal.'
@@ -82,11 +86,15 @@ class LinuxSetup:
         yield from link(THEME_FILE, _ghostty_themes() / "claude-dark")
         ctx = _context(bin_dir() / "claude-launcher")
         yield desktop.install_icon(ctx, icon)
-        names = [n for n in terminal_names.split(",") if n] if terminal_names else None
-        yield from desktop.install_terminals(ctx, names)
+        yield from desktop.install_terminals(ctx, _names(terminal_names))
 
-    def check(self) -> None:
-        """Nothing to check before installing here."""
+    def check(self, terminal_names: str | None, icon: str | None) -> None:
+        """--terminal and --icon, before anything is changed."""
+        names = _names(terminal_names)
+        if names:
+            desktop.check_terminals(names)
+        if icon and icon != "default":
+            desktop.check_icon(icon)
 
     def uninstall(self) -> Iterator[str]:
         """Takes out what install() set up, going on past a part that fails,

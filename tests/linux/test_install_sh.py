@@ -9,6 +9,7 @@ import pytest
 
 from claude_launcher.paths import REPO_DIR
 from claude_launcher.platforms.linux.desktop import APP_ID, ICON_SIZES
+from claude_launcher.platforms.linux.terminals import TERMINALS
 from conftest import desktop_only
 
 # In WSL the installer would write to the real Windows Terminal's settings.
@@ -32,6 +33,13 @@ def run(home, *args):
     done = subprocess.run([str(REPO_DIR / "install.sh"), *args], env=env, capture_output=True, text=True)
     assert "fetching" not in done.stdout, done.stdout
     return done
+
+
+def nothing_written(home):
+    """The install stopped before any step: no hook, links, fzf or icon."""
+    assert not (home / ".claude" / "settings.json").exists()
+    assert not (home / ".local").exists()
+    assert not (home / ".config").exists()
 
 
 def test_install_then_uninstall(tmp_path):
@@ -84,9 +92,30 @@ def test_leaves_a_real_file_alone(tmp_path):
     assert (themes / "claude-dark").read_text() == "background = #000000\n"
 
 
+def test_an_unknown_terminal_stops_before_anything(tmp_path):
+    home = tmp_path / "home"
+    done = run(home, "--terminal", "ghostty,no-such-terminal")
+    assert done.returncode != 0
+    assert done.stderr.endswith(f"unknown terminal: no-such-terminal (one of: {', '.join(TERMINALS)})\n")
+    nothing_written(home)
+
+
+@pytest.mark.parametrize(("name", "error"), [("x.jpg", "svg or .png"), ("wide.png", "square")])
+def test_a_bad_icon_stops_before_anything(tmp_path, name, error):
+    home = tmp_path / "home"
+    icon = tmp_path / name
+    icon.write_bytes(b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR" + (64).to_bytes(4, "big") + (32).to_bytes(4, "big"))
+    done = run(home, "--icon", str(icon))
+    assert done.returncode != 0
+    assert error in done.stderr
+    nothing_written(home)
+
+
 def test_a_failed_step_says_so(tmp_path):
     home = tmp_path / "home"
-    done = run(home, "--terminal", "no-such-terminal")
+    (home / ".local" / "share").mkdir(parents=True)
+    (home / ".local" / "share" / "applications").write_text("not a directory")  # no desktop entry fits
+    done = run(home)
     assert done.returncode != 0
     assert "could not set up the desktop launcher" in done.stderr
 
@@ -109,8 +138,6 @@ def test_uninstall_goes_on_past_a_failed_step(tmp_path):
 
 
 def test_help_lists_the_platforms_terminals(tmp_path):
-    from claude_launcher.platforms.linux.terminals import TERMINALS
-
     done = run(tmp_path, "--help")
     assert done.returncode == 0
     text = " ".join(done.stdout.split())

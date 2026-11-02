@@ -224,6 +224,18 @@ def test_icon_must_be_a_png(setup, tmp_path):
         list(setup.install(None, str(tmp_path / "x.svg")))
 
 
+def test_check_turns_down_a_bad_icon_before_anything(setup, tmp_path):
+    (tmp_path / "x.svg").write_text("<svg/>")
+    with pytest.raises(ValueError, match="^the icon for Windows Terminal must be a .png$"):
+        setup.check(None, str(tmp_path / "x.svg"))
+    with pytest.raises(ValueError, match="^not a file: "):
+        setup.check(None, str(tmp_path / "missing.png"))
+    (tmp_path / "mine.png").write_bytes(b"png")
+    setup.check(None, str(tmp_path / "mine.png"))
+    setup.check("ghostty", "Default")  # --terminal is only warned about
+    assert not (tmp_path / "data").exists()
+
+
 def test_someone_elses_cmd_is_left_alone(setup, env):
     shim = Path(env["USERPROFILE"]) / ".local" / "bin" / "claude-launcher.cmd"
     shim.parent.mkdir(parents=True)

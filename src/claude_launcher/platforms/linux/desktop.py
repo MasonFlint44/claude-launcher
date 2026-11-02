@@ -67,16 +67,23 @@ def saved_terminals(ctx: Context) -> list[str] | None:
     return [n for n in names if n in TERMINALS] if isinstance(names, list) else None
 
 
+def check_terminals(names: list[str] | None) -> list[Terminal]:
+    """The terminals `names` (or "auto") picks; raises if one is unknown or
+    isn't installed."""
+    chosen = pick(None) if names == ["auto"] else pick(names)
+    missing = [t.label for t in chosen if not t.installed()]
+    if missing:
+        raise ValueError(f"not installed: {', '.join(missing)}")
+    return chosen
+
+
 def install_terminals(ctx: Context, names: list[str] | None) -> list[str]:
     """Set up the desktop entries (and any profiles) for `names`, or the ones
     chosen last time, or the first installed terminal. Returns what it did.
     The old entries stay until the new ones are in, so a failed run leaves
     a working launcher."""
     saved = saved_terminals(ctx)
-    chosen = pick(None) if names == ["auto"] else pick(names or saved)
-    missing = [t.label for t in chosen if not t.installed()]
-    if missing:
-        raise ValueError(f"not installed: {', '.join(missing)}")
+    chosen = check_terminals(names or saved)
     profiled = []
     try:
         for term in chosen:
@@ -165,6 +172,16 @@ def theme_size(size: int) -> int:
     return next((s for s in THEME_SIZES if s >= size), THEME_SIZES[-1])
 
 
+def check_icon(icon: str) -> Path:
+    """The icon file --icon names, if it's one the desktop can show."""
+    src = Path(icon).expanduser()
+    if src.suffix.lower() not in (".svg", ".png") or not src.is_file():
+        raise ValueError(f"{icon}: the icon must be an .svg or .png file")
+    if src.suffix.lower() == ".png" and _png_size(src) is None:
+        raise ValueError(f"{icon}: a PNG icon must be square")
+    return src
+
+
 def install_icon(ctx: Context, icon: str | None) -> str:
     """Put the app icon in the icon theme: yours if you've given one (--icon
     FILE, kept until --icon default), else the one in share/icons."""
@@ -173,11 +190,7 @@ def install_icon(ctx: Context, icon: str | None) -> str:
         for old in own_dir.glob("icon.*"):
             old.unlink()
     elif icon:
-        src = Path(icon).expanduser()
-        if src.suffix.lower() not in (".svg", ".png") or not src.is_file():
-            raise ValueError(f"{icon}: the icon must be an .svg or .png file")
-        if src.suffix.lower() == ".png" and _png_size(src) is None:
-            raise ValueError(f"{icon}: a PNG icon must be square")
+        src = check_icon(icon)
         own_dir.mkdir(parents=True, exist_ok=True)
         for old in own_dir.glob("icon.*"):
             old.unlink()

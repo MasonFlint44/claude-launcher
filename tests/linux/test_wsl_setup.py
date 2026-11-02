@@ -311,6 +311,8 @@ def test_icon_must_be_a_png_file(windows, home, tmp_path, name):
     if not name.startswith("missing"):
         icon.write_text("x")
     with pytest.raises(ValueError):
+        make(windows, home).check(None, str(icon))
+    with pytest.raises(ValueError):
         list(make(windows, home).install(None, str(icon)))
     assert not (home / ".local" / "bin").exists()  # before anything
 
@@ -342,6 +344,15 @@ def test_installer_without_a_distro_stops_first(windows, home, claude_home, fzf_
         "error: can't tell which WSL distro this is; run install.sh in a WSL terminal, without sudo",
     ]
     assert not (claude_home.paths.config / "settings.json").exists()
+
+
+def test_installer_with_a_bad_icon_stops_first(windows, home, claude_home, fzf_found, tmp_path):
+    icon = tmp_path / "mine.svg"
+    icon.write_text("<svg/>")
+    lines = list(install.install(FakePlatform(make(windows, home), tmp_path / "data"), None, str(icon)))
+    assert lines == ["error: the icon for Windows Terminal must be a .png"]
+    assert not (claude_home.paths.config / "settings.json").exists()
+    assert not (home / ".local" / "bin").exists()
 
 
 def test_installer_round_trip(windows, home, claude_home, fzf_found, tmp_path):

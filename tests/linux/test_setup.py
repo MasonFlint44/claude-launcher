@@ -165,6 +165,47 @@ def test_uninstall_goes_on_past_a_failing_part(home, calls, monkeypatch):
     ]
 
 
+# --- check(): --terminal and --icon before anything is changed ----------------
+
+
+def test_check_takes_what_install_would(home, tmp_path, monkeypatch):
+    monkeypatch.setattr(terminals.Terminal, "installed", lambda self: True)
+    svg = tmp_path / "mine.svg"
+    svg.write_text("<svg/>")
+    setup = LinuxSetup()
+    for names in (None, "", "auto", "ghostty,kitty"):
+        setup.check(names, None)
+    for icon in (None, "default", str(svg), str(desktop.ICONS_DIR / "claude-launcher-256.png")):
+        setup.check(None, icon)
+    assert not (home / ".local").exists() and not (tmp_path / "data").exists()
+
+
+@pytest.mark.parametrize(
+    ("names", "error"),
+    [("ghostty,nope", "unknown terminal: nope"), ("kitty", "not installed: kitty")],
+)
+def test_check_turns_down_a_terminal(home, monkeypatch, names, error):
+    monkeypatch.setattr(terminals.Terminal, "installed", lambda self: self.name != "kitty")
+    with pytest.raises(ValueError, match=error):
+        LinuxSetup().check(names, None)
+
+
+@pytest.mark.parametrize(
+    ("name", "content", "error"),
+    [
+        ("x.jpg", b"", "svg or .png"),
+        ("missing.svg", None, "svg or .png"),
+        ("wide.png", b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR" + (64).to_bytes(4, "big") + (32).to_bytes(4, "big"), "square"),
+    ],
+)
+def test_check_turns_down_an_icon(home, tmp_path, name, content, error):
+    icon = tmp_path / name
+    if content is not None:
+        icon.write_bytes(content)
+    with pytest.raises(ValueError, match=error):
+        LinuxSetup().check(None, str(icon))
+
+
 # --- terminal list, terminal open --------------------------------------------
 
 

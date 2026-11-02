@@ -24,8 +24,10 @@ class FakeSetup:
         self.check_fails = check
         self.uninstall_fails = uninstall_fails
         self.installed = False
+        self.checked = None
 
-    def check(self):
+    def check(self, terminal_names, icon):
+        self.checked = (terminal_names, icon)
         if self.check_fails:
             raise self.check_fails
 
@@ -116,6 +118,14 @@ def test_fzf_that_cant_be_fetched_stops_before_anything_changes(env, monkeypatch
 def test_a_setup_that_cant_go_ahead_stops_first(env):
     lines = run(env, FakeSetup(hook=env.hook, check=RuntimeError("not here")))
     assert lines == ["error: not here"]
+    assert not env.settings.exists()
+
+
+def test_the_check_sees_the_options(env):
+    setup = FakeSetup(hook=env.hook, check=ValueError("unknown terminal: nope"))
+    lines = list(install.install(FakePlatform(setup, env.data), "nope", "/x/icon.png"))
+    assert setup.checked == ("nope", "/x/icon.png")
+    assert lines == ["error: unknown terminal: nope"]
     assert not env.settings.exists()
 
 

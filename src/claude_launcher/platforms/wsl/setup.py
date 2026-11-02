@@ -19,7 +19,7 @@ from ..linux import data_dir as linux_data_dir
 from ..linux.host import LinuxHost
 from ..linux.setup import bin_dir, link_commands, unlink_commands
 from ..windows import terminal
-from ..windows.setup import DEFAULT_ICON
+from ..windows.setup import DEFAULT_ICON, check_icon
 from . import interop
 
 
@@ -72,10 +72,12 @@ class WslSetup:
     def hook_command(self) -> Path:
         return bin_dir(self.env) / "claude-session-hook"
 
-    def check(self) -> None:
+    def check(self, terminal_names: str | None, icon: str | None) -> None:
         """Before the installer does anything: the profile is per distro."""
         if not self.distro:
             raise RuntimeError("can't tell which WSL distro this is; run install.sh in a WSL terminal, without sudo")
+        if icon and icon != "default":
+            check_icon(icon)
 
     def _wslpath(self, flag: str, path: str) -> str:
         return self.run(["wslpath", flag, path]).decode("utf-8", errors="surrogateescape").strip()
@@ -110,16 +112,13 @@ class WslSetup:
         if icon == "default":
             kept.unlink(missing_ok=True)
         elif icon:
-            if not icon.lower().endswith(".png"):
-                raise ValueError("for Windows Terminal, --icon takes a .png")
-            if not os.path.isfile(icon):
-                raise ValueError(f"not a file: {icon}")
+            check_icon(icon)
             kept.parent.mkdir(parents=True, exist_ok=True)
             terminal.copy_icon(icon, kept)
         return kept if kept.is_file() else DEFAULT_ICON
 
     def install(self, terminal_names: str | None, icon: str | None) -> Iterator[str]:
-        self.check()
+        self.check(terminal_names, icon)
         if terminal_names:
             yield "warning: --terminal is for Linux desktops; in WSL the launcher opens in Windows Terminal"
         shown = self._icon(icon)
