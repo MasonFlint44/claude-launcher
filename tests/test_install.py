@@ -4,6 +4,7 @@ setup: what the lines say, and what's left as it was when a step fails."""
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import shutil
 from pathlib import Path
@@ -126,6 +127,37 @@ def test_fzf_fetched_then_the_rest(env, monkeypatch, found):
     assert asked == [(env.data / "bin", "linux")]
     assert lines[1] == f"Installed fzf 0.67.0 to {fetched}"
     assert lines[2].startswith("Added the session hook to ") and lines[-1] == "Done. Open it."
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX's execute permission")
+def test_a_fetched_fzf_that_cant_run_is_an_error(env, monkeypatch):
+    # As from a data directory mounted noexec: the launcher couldn't run it either.
+    monkeypatch.setattr(install.fzf, "find", lambda own: (None, None))
+    fetched = env.data / "bin" / "fzf"
+    fetched.parent.mkdir(parents=True)
+    fetched.write_text("#!/bin/sh\necho 0.74.5\n")
+    fetched.chmod(0o644)
+    monkeypatch.setattr(install.fzf, "fetch", lambda own, system: fetched)
+    setup = FakeSetup(hook=env.hook)
+    lines = run(env, setup)
+    assert lines[-1] == (
+        f"error: the fzf fetched to {fetched} doesn't run there: Permission denied; "
+        "install fzf 0.67 or newer, then re-run"
+    )
+    assert not env.settings.exists() and not setup.installed
+
+
+@pytest.mark.skipif(os.name == "nt", reason="a shell script as the fetched fzf")
+def test_a_fetched_fzf_that_says_no_version_is_an_error(env, monkeypatch):
+    # It starts, so there's no reason to give, but it isn't an fzf the launcher can use.
+    monkeypatch.setattr(install.fzf, "find", lambda own: (None, None))
+    fetched = env.data / "bin" / "fzf"
+    fetched.parent.mkdir(parents=True)
+    fetched.write_text("#!/bin/sh\necho nope\n")
+    fetched.chmod(0o755)
+    monkeypatch.setattr(install.fzf, "fetch", lambda own, system: fetched)
+    lines = run(env, FakeSetup(hook=env.hook))
+    assert lines[-1] == f"error: the fzf fetched to {fetched} doesn't run there; install fzf 0.67 or newer, then re-run"
 
 
 def test_a_setup_that_cant_go_ahead_stops_first(env):

@@ -46,7 +46,24 @@ def _fzf(platform) -> Iterator[str]:
         yield f"warning: {e}"
         yield "error: could not fetch fzf; install fzf 0.67 or newer, then re-run"
         return
-    yield f"Installed fzf {fzf.show(fzf.version(str(path)))} to {path}"
+    version = fzf.version(str(path))
+    if not version or version < fzf.MIN_VERSION:
+        # A data directory mounted noexec, say: the launcher couldn't run it either.
+        why = _why_not(path)
+        yield f"error: the fzf fetched to {path} doesn't run there{why}; install fzf 0.67 or newer, then re-run"
+        return
+    yield f"Installed fzf {fzf.show(version)} to {path}"
+
+
+def _why_not(path: Path) -> str:
+    """Why a program won't start, as ": <reason>", or "" if it does start."""
+    try:
+        subprocess.run([str(path), "--version"], capture_output=True, timeout=5)
+    except OSError as e:
+        return f": {e.strerror or e}"
+    except subprocess.SubprocessError:
+        pass
+    return ""
 
 
 def _hook(setup, settings_path: Path) -> Iterator[str]:
