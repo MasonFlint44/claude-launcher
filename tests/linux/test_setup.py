@@ -3,6 +3,7 @@
 import json
 import os
 import subprocess
+import time
 
 import pytest
 
@@ -164,6 +165,20 @@ def test_uninstall_goes_on_past_a_failing_part(home, calls, monkeypatch):
         "warning: could not remove every desktop entry and profile: Permission denied",
         "warning: could not remove the app icon: Permission denied",
     ]
+
+
+@desktop_only
+def test_uninstall_with_no_terminals_says_nothing(home, tmp_path, monkeypatch):
+    # The real terminals' uninstall(), with gsettings (if it's here) finding no
+    # schemas: nothing to remove, nothing to warn about, and quick.
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    monkeypatch.setenv("XDG_DATA_DIRS", str(empty))
+    monkeypatch.setenv("GSETTINGS_SCHEMA_DIR", str(empty))
+    monkeypatch.setenv("GSETTINGS_BACKEND", "memory")
+    start = time.monotonic()
+    assert list(LinuxSetup().uninstall()) == []
+    assert time.monotonic() - start < 3
 
 
 # --- check(): --terminal and --icon before anything is changed ----------------

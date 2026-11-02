@@ -40,8 +40,11 @@ def run(fzf_dir):
 
 def _run(home, fzf_dir, *args):
     # Fetching fzf goes to a closed port and fails: no test reaches the network.
+    # Uninstall runs gsettings for every terminal's profile; the memory backend
+    # keeps it off this machine's own settings.
     env = {
         "HOME": str(home),
+        "GSETTINGS_BACKEND": "memory",
         "PATH": f"{home}/.local/bin:{home}/stubs:{fzf_dir}:/usr/bin:/bin",
         "LANG": "C.UTF-8",
         "https_proxy": "http://127.0.0.1:9",

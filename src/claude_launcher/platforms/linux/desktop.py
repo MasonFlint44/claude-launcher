@@ -8,7 +8,6 @@ import json
 import os
 import shutil
 import struct
-import subprocess
 from pathlib import Path
 
 from ...paths import REPO_DIR
@@ -99,10 +98,12 @@ def install_terminals(ctx: Context, names: list[str] | None) -> list[str]:
     profiled = []
     try:
         for term in chosen:
-            term.install(ctx)
+            # Noted before it starts: an install that fails partway can leave
+            # part of a profile, and uninstall() takes that out too.
             profiled.append(term.name)
+            term.install(ctx)
     except BaseException:
-        # Note what has a profile now, so uninstall takes it out.
+        # Note what may have a profile now, so a later switch takes it out.
         _save_terminals(ctx, list(dict.fromkeys([*(saved or []), *profiled])))
         raise
     done, written = [], set()
@@ -140,14 +141,17 @@ def _remove_entries(ctx: Context, keep: set[Path] = frozenset()) -> list[str]:
 def _remove_profiles(names: list[str], ctx: Context, keep: set[str] = frozenset()) -> None:
     for name in names:
         if name not in keep:
-            with contextlib.suppress(OSError, RuntimeError, subprocess.SubprocessError):
+            # One that fails doesn't stop the rest.
+            with contextlib.suppress(Exception):
                 TERMINALS[name].uninstall(ctx)
 
 
 def remove_terminals(ctx: Context) -> list[str]:
-    """Take out the desktop entries and the profiles."""
+    """Take out the desktop entries and the profiles: every terminal's, not
+    only the ones terminals.json names, since it may be gone. Each uninstall()
+    is a no-op where there's nothing of ours."""
     removed = _remove_entries(ctx)
-    _remove_profiles(saved_terminals(ctx) or [], ctx)
+    _remove_profiles(list(TERMINALS), ctx)
     _state_file(ctx).unlink(missing_ok=True)
     _refresh_desktop(ctx)
     return removed

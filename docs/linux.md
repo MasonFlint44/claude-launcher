@@ -79,4 +79,4 @@ Changes to the launcher, hook and theme apply right away. If the desktop launche
 ~/git/claude-launcher/install.sh --uninstall
 ```
 
-This removes the links, the desktop launcher, the session hook and the launcher's own files in `~/.local/share/claude-launcher` (its fzf, your icon, the options you gave). It leaves the launcher's state in `~/.claude/state/claude-launcher` and says how to remove it.
+This removes the links, the desktop launcher, the Claude Code profile from any terminal that has one, the session hook and the launcher's own files in `~/.local/share/claude-launcher` (its fzf, your icon, the options you gave). It leaves the launcher's state in `~/.claude/state/claude-launcher` and says how to remove it.

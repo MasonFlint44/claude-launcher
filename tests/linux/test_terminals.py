@@ -389,7 +389,34 @@ class TestInstallTerminals:
             desktop.install_terminals(ctx, ["ptyxis"])
         assert self.entries(ctx) == [f"{APP_ID}.desktop"]
         assert (ctx.data_home / "applications" / f"{APP_ID}.desktop").read_text() == before
-        assert desktop.saved_terminals(ctx) == ["ghostty"]
+        # Noted, since it may have left part of a profile.
+        assert desktop.saved_terminals(ctx) == ["ghostty", "ptyxis"]
+
+    @pytest.mark.parametrize("then", ["switch", "uninstall"])
+    def test_a_profile_that_fails_partway_comes_out(self, ctx, then):
+        desktop.install_terminals(ctx, ["ghostty"])
+        gsettings = ctx.run
+
+        def palette_fails(argv):
+            if argv[:2] == ["gsettings", "set"] and argv[3] == "palette":
+                return subprocess.CompletedProcess(argv, 1, "", "dconf is read-only")
+            return gsettings(argv)
+
+        ctx.run = palette_fails
+        with pytest.raises(RuntimeError, match="palette failed"):
+            desktop.install_terminals(ctx, ["ptyxis"])
+        ptyxis = TERMINALS["ptyxis"]
+        profile_keys = lambda: [k for k in gsettings.values if k[0] == ptyxis._profile()]  # noqa: E731
+        assert profile_keys() and ptyxis.palette_file(ctx).exists()  # it got partway
+
+        ctx.run = gsettings
+        if then == "switch":
+            desktop.install_terminals(ctx, ["ghostty"])
+        else:
+            desktop.remove_terminals(ctx)
+        assert profile_keys() == []
+        assert not ptyxis.palette_file(ctx).exists()
+        assert ptyxis.profile_id not in gsettings.values[("org.gnome.Ptyxis", "profile-uuids")]
 
     def test_ptyxis_palette_goes_without_gsettings(self, ctx):
         desktop.install_terminals(ctx, ["ptyxis"])
@@ -411,6 +438,64 @@ class TestInstallTerminals:
         assert self.entries(ctx) == []
         assert not (ctx.data_home / "konsole" / "ClaudeLauncher.profile").exists()
         assert desktop.saved_terminals(ctx) is None
+
+    def test_remove_without_the_saved_choice(self, ctx):
+        # terminals.json gone (the data directory deleted by hand): every
+        # terminal's profile still comes out.
+        desktop.install_terminals(ctx, ["ptyxis", "gnome-terminal", "konsole"])
+        (ctx.data_home / "claude-launcher" / "terminals.json").unlink()
+        desktop.remove_terminals(ctx)
+        assert self.entries(ctx) == []
+        # Left: the lists, and the plain default profile a fresh Ptyxis got.
+        assert set(ctx.run.values) == {*FakeGSettings.LISTS, ("org.gnome.Ptyxis", "default-profile-uuid")}
+        for schema, key in FakeGSettings.LISTS:
+            assert not any(
+                t.profile_id in ctx.run.values[schema, key] for t in (TERMINALS["ptyxis"], TERMINALS["gnome-terminal"])
+            )
+        assert not TERMINALS["ptyxis"].palette_file(ctx).exists()
+        assert not (ctx.data_home / "konsole" / "ClaudeLauncher.profile").exists()
+
+    def test_remove_leaves_other_profiles(self, ctx):
+        ctx.run.values[("org.gnome.Terminal.ProfilesList", "list")] = "['mine']"
+        ctx.run.values[("org.gnome.Terminal.Legacy.Profile:/org/gnome/terminal/legacy/profiles:/:mine/", "x")] = "1"
+        desktop.remove_terminals(ctx)
+        assert ctx.run.values == {
+            ("org.gnome.Terminal.ProfilesList", "list"): "['mine']",
+            ("org.gnome.Terminal.Legacy.Profile:/org/gnome/terminal/legacy/profiles:/:mine/", "x"): "1",
+        }
+
+    @pytest.mark.parametrize("gsettings", ["missing", "no schemas", "fails"])
+    def test_remove_with_nothing_there(self, ctx, gsettings):
+        def run(argv):
+            if argv[0] != "gsettings":
+                return subprocess.CompletedProcess(argv, 0, "", "")
+            if gsettings == "missing":
+                raise FileNotFoundError(argv[0])
+            if gsettings == "fails":
+                raise subprocess.TimeoutExpired(argv, 30)
+            return subprocess.CompletedProcess(argv, 1, "", "No schemas installed")
+
+        ctx.run = run
+        assert desktop.remove_terminals(ctx) == []
+
+    def test_profile_settings_go_even_if_the_list_cant_be_set(self, ctx):
+        desktop.install_terminals(ctx, ["gnome-terminal"])
+        gsettings = ctx.run
+
+        def list_fails(argv):
+            if argv[:2] == ["gsettings", "set"]:
+                return subprocess.CompletedProcess(argv, 1, "", "dconf is read-only")
+            return gsettings(argv)
+
+        ctx.run = list_fails
+        desktop.remove_terminals(ctx)
+        assert not [k for k in gsettings.values if k[0] == TERMINALS["gnome-terminal"]._profile()]
+
+    def test_switching_keeps_what_is_still_chosen(self, ctx):
+        desktop.install_terminals(ctx, ["ptyxis", "konsole"])
+        desktop.install_terminals(ctx, ["konsole"])
+        assert (ctx.data_home / "konsole" / "ClaudeLauncher.profile").exists()
+        assert not TERMINALS["ptyxis"].palette_file(ctx).exists()
 
 
 class TestIcon:
