@@ -88,6 +88,11 @@ def test_up_a_level(query, expected):
         ("\\\\srv\\", "\\\\srv\\"),
         ("//srv/", "\\\\srv\\"),
         ("\\\\", "\\\\"),
+        # One separator is the current drive's root, not a share.
+        ("\\", "\\"),
+        ("/", "\\"),
+        ("\\x\\", "\\x"),
+        ("/x//y", "\\x\\y"),
     ],
 )
 def test_normal(path, expected):
@@ -145,7 +150,10 @@ def test_tilde(directory, expected):
         ("C:\\a\\b\\", "C:\\a\\b"),
         ("C:\\", "C:\\"),
         ("C:", "C:\\"),
+        # A share's root loses its separator: \\srv\share names it as well.
         ("\\\\srv\\share\\", "\\\\srv\\share"),
+        ("//srv/share/", "//srv/share"),
+        ("\\", "\\"),
         ("~\\", "~"),
     ],
 )
@@ -195,6 +203,7 @@ def test_expand(monkeypatch):
     assert w.expand("~\\git\\") == "C:\\Users\\me\\git"
     assert w.expand("D:") == "D:\\"
     assert w.expand("d:/a//b/") == "d:\\a\\b"
+    assert w.expand("\\") == w.expand("/") == "\\"
 
 
 def test_home_is_the_profile_not_git_bashs_home():
