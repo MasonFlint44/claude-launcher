@@ -22,6 +22,10 @@ CHOSEN_ENDS = ("prompt_input_exit", "clear", "resume", "logout")  # the record g
 # file open for a moment, and Windows then refuses to replace or delete it.
 _TRIES, _PAUSE = 5, 0.01
 _BOOT_KEY = r"SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\PrefetchParameters"
+# A process that began this long after a record's Claude started isn't that
+# Claude, but a new one given its pid: the same margin as the launcher's
+# (platforms/windows/host.py).
+_REUSED_AFTER = 10
 
 
 def windows_boot_id() -> str:
@@ -30,6 +34,34 @@ def windows_boot_id() -> str:
 
     with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, _BOOT_KEY) as key:
         return format(int(winreg.QueryValueEx(key, "BootId")[0]), "032x")
+
+
+def process_created(pid):
+    """When process `pid` began, as a Unix time, or None if it can't be told.
+    Asked only when another session's record is under the pid, so most runs
+    never load ctypes."""
+    import ctypes
+    from ctypes import wintypes
+
+    try:
+        kernel32 = ctypes.WinDLL("kernel32")  # its own, so no one else's types change
+    except (AttributeError, OSError):  # not Windows
+        return None
+    kernel32.OpenProcess.restype = ctypes.c_void_p
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.GetProcessTimes.argtypes = [ctypes.c_void_p] + [ctypes.POINTER(wintypes.FILETIME)] * 4
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+    handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        return None
+    try:
+        times = [wintypes.FILETIME() for _ in range(4)]
+        if not kernel32.GetProcessTimes(handle, *(ctypes.byref(t) for t in times)):
+            return None
+    finally:
+        kernel32.CloseHandle(handle)
+    # FILETIME counts 100 ns from 1601.
+    return ((times[0].dwHighDateTime << 32 | times[0].dwLowDateTime) - 116444736000000000) / 1e7
 
 
 def _retry(action, *args):
@@ -42,7 +74,7 @@ def _retry(action, *args):
             time.sleep(_PAUSE)
 
 
-def run(event, payload, env, boot_id=windows_boot_id, now=time.time):
+def run(event, payload, env, boot_id=windows_boot_id, now=time.time, created=process_created):
     # Only interactive terminal sessions: not `claude -p` or the SDK (sdk-cli).
     if env.get("CLAUDE_CODE_ENTRYPOINT") != "cli" or event not in ("start", "end"):
         return
@@ -74,19 +106,34 @@ def run(event, payload, env, boot_id=windows_boot_id, now=time.time):
     except (OSError, ValueError):
         old = None
     old_session = str(old.get("session_id", "")) if isinstance(old, dict) else ""
+    # Another session's record that this same Claude wrote (it had begun by
+    # that record's start): its session before this one, which it ended by
+    # choice (/clear, /resume). Claude waits only a moment for the end hook
+    # before starting the next session, and then kills it, so that end may
+    # not have got to delete it.
+    earlier = False
+    if UUID.fullmatch(old_session) and old_session != session_id:
+        old_start = old.get("started_at")
+        if isinstance(old_start, (int, float)) and not isinstance(old_start, bool):
+            began = created(pid)
+            earlier = began is not None and began <= old_start + _REUSED_AFTER
     if event == "end" and reason in CHOSEN_ENDS:
-        # Only this session's record: another's (no start was seen for this
-        # one) is left for the launcher to sort.
-        if old_session == session_id:
+        # Only this session's record, or this Claude's earlier one: another's
+        # (no start was seen for this one) is left for the launcher to sort.
+        if old_session == session_id or earlier:
             with contextlib.suppress(OSError):
                 _retry(os.remove, record)
         return
-    # Another session's record under this pid: a Claude killed with no end
-    # (a logoff or Fast Startup, say) whose pid came back before the launcher
-    # sorted it, or this Claude's session before, when no start was seen for
-    # this one. Keep it aside, under its session's ID, for the launcher to
-    # find. Windows reuses pids quickly.
-    if UUID.fullmatch(old_session) and old_session != session_id:
+    # Another session's record under this pid: this Claude's earlier one
+    # goes. Anything else is a Claude killed with no end (a logoff or Fast
+    # Startup, say) whose pid came back before the launcher sorted it, or
+    # this Claude's earlier one when its start couldn't be read. Keep it
+    # aside, under its session's ID, for the launcher to find. Windows reuses
+    # pids quickly.
+    if earlier:
+        with contextlib.suppress(OSError):
+            _retry(os.remove, record)
+    elif UUID.fullmatch(old_session) and old_session != session_id:
         with contextlib.suppress(OSError):
             _retry(os.replace, record, f"{record}_{old_session}")
     if event == "start":
