@@ -16,6 +16,7 @@ from ...install import FAILURES
 from ...paths import THEME_FILE
 from ...theme import Theme
 from ..linux import data_dir as linux_data_dir
+from ..linux import shell as login
 from ..linux.host import LinuxHost
 from ..linux.setup import bin_dir, link_commands, unlink_commands
 from ..windows import terminal
@@ -32,11 +33,13 @@ class WslSetup:
         run: Callable[..., bytes] = interop.run,
         mounts: str = "/proc/mounts",
         user: Callable[[], str] | None = None,
+        shell: Callable[[str], str] | None = None,
     ):
         self.env = env
         self.run = run  # a program's output; raises if it fails
         self.windows = interop.Interop(env, mounts, run)
         self.user = user or LinuxHost().user  # WSL's host is Linux's
+        self.shell = shell or login.login_shell
         self.data_dir = linux_data_dir(env)
         self._distro: str | None = None
         self.skipped = False  # the profile, this run
@@ -113,10 +116,12 @@ class WslSetup:
     def _commandline(self) -> str:
         # Unquoted: wsl.exe keeps quotes around -d's and -u's values as part
         # of the name (checked in the VM: "There is no distribution with the
-        # supplied name"), and distro and user names hold no spaces.
-        return (
-            f'wsl.exe -d {self.distro} -u {self.user()} --cd ~ -- bash -lc "~/.local/bin/claude-launcher || exec bash"'
-        )
+        # supplied name"), and distro and user names hold no spaces, nor
+        # does the shell's path (shell.login_shell checks).
+        user = self.user()
+        shell = self.shell(user)
+        script = login.script(shell, "~/.local/bin/claude-launcher")
+        return f'wsl.exe -d {self.distro} -u {user} --cd ~ -- {shell} -lic "{script}"'
 
     def _icon(self, icon: str | None) -> Path:
         """The icon to show: --icon's (kept, so it can move), last time's, or

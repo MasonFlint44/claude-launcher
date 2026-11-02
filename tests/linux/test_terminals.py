@@ -83,7 +83,13 @@ def exec_line(entry: str) -> list[str]:
 
 
 def test_command(ctx):
-    assert ctx.argv == ["bash", "-lc", "/home/me/.local/bin/claude-launcher || exec bash"]
+    assert ctx.argv == ["bash", "-lic", "/home/me/.local/bin/claude-launcher || exec bash"]
+
+
+def test_command_in_your_shell(ctx):
+    ctx.shell = "/usr/bin/zsh"
+    assert ctx.argv == ["/usr/bin/zsh", "-lic", "/home/me/.local/bin/claude-launcher || exec /usr/bin/zsh"]
+    assert ctx.command == "/usr/bin/zsh -lic '/home/me/.local/bin/claude-launcher || exec /usr/bin/zsh'"
 
 
 ODD_PATH = Path("/home/me/odd dir/it's $HOME, `here` \\ 100%/claude-launcher")

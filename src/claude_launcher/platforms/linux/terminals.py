@@ -32,6 +32,7 @@ from pathlib import Path
 
 from ...paths import THEME_FILE
 from ...theme import Theme
+from . import shell as login
 
 APP_ID = "io.github.masonflint44.ClaudeLauncher"
 PROFILE_NAME = "Claude Code"
@@ -53,22 +54,23 @@ class Context:
     data_home: Path  # ~/.local/share
     run: Run = _run
     theme: Path = THEME_FILE
+    shell: str = login.FALLBACK  # the login shell the launcher starts in (shell.py)
 
     @classmethod
     def from_env(cls, launcher: Path, core: Path, env: Mapping[str, str] = os.environ) -> Context:
         home = Path(env.get("HOME") or Path.home())
         data = Path(env.get("XDG_DATA_HOME") or home / ".local" / "share")
-        return cls(launcher=launcher, core=core, home=home, data_home=data)
+        return cls(launcher=launcher, core=core, home=home, data_home=data, shell=login.login_shell())
 
     @property
     def command(self) -> str:
-        """The launcher as one shell command: a login shell, for the PATH that
-        finds claude, and a shell to fall back to if the launcher fails."""
-        return "bash -lc " + shlex.quote(f"{shlex.quote(str(self.launcher))} || exec bash")
+        """The launcher as one shell command, in your interactive login shell
+        (shell.py), with a shell to fall back to if the launcher fails."""
+        return shlex.join(self.argv)
 
     @property
     def argv(self) -> list[str]:
-        return shlex.split(self.command)
+        return login.argv(self.shell, shlex.quote(str(self.launcher)))
 
 
 class Terminal:

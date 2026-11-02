@@ -81,7 +81,7 @@ def test_install_then_uninstall(tmp_path, run):
     assert os.readlink(bin_dir / "claude-session-hook") == str(REPO_DIR / "bin" / "claude-session-hook")
     assert (home / ".config" / "ghostty" / "themes" / "claude-dark").resolve() == REPO_DIR / "themes" / "claude-dark"
     desktop = home / ".local" / "share" / "applications" / f"{APP_ID}.desktop"
-    assert "--command=bash -lc" in desktop.read_text()
+    assert "-lic" in desktop.read_text()
     icons = home / ".local" / "share" / "icons" / "hicolor"
     assert (icons / "scalable" / "apps" / f"{APP_ID}.svg").resolve() == REPO_DIR / "share/icons/claude-launcher.svg"
     for size in ICON_SIZES:
