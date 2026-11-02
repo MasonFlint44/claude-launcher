@@ -4,7 +4,10 @@ claude-session-hook leaves a record in state/open/<boot id>_<pid> for each
 interactive Claude. An exit you chose (/exit, /clear, switching with /resume) deletes it;
 any other end (closing the tab, or the desktop closing every window) keeps it,
 with the time it ended. A new Claude that gets the pid of one whose record
-is still there moves that record to <boot id>_<pid>_<its session id>.
+is still there moves that record to <boot id>_<pid>_<its session id>. So
+does the same Claude when it starts its next session (/clear, /resume)
+before ending this one, so a record moved aside whose own Claude still runs
+was an end it chose, and is deleted.
 
 A record is one line of JSON (`Record.load` reads it and ignores keys it
 doesn't know): "session_id", "pid", "boot_id", "login_session" (the login
@@ -63,7 +66,7 @@ if TYPE_CHECKING:
     from .platforms import Event, EventSource, Host
 
 # <boot id>_<pid>, or with _<session id> after it: a record the hook moved
-# aside when a new Claude got its pid. "<record>.tmp" is one being written.
+# aside when another session took its name. "<record>.tmp" is one being written.
 _RECORD_NAME = re.compile(r"[0-9a-f-]{32,36}_[0-9]+(?:_[0-9a-f-]{36})?")
 _TMP_STALE = 60  # a hook writes and renames in milliseconds
 KEEP = 7 * 86400  # how long closed sessions stay in the group
@@ -299,6 +302,13 @@ class RestartState:
                 and record.ended is None
                 and self.host.claude_running(record.pid, record.started, record.start_ticks)
             ):
+                if path.name.count("_") == 2:
+                    # Moved aside, yet its own Claude still runs: that Claude
+                    # started another session before ending this one (/clear
+                    # or /resume, with the start hook run first), so the end
+                    # hook didn't find it. An end it chose.
+                    decided.append((path, record))
+                    continue
                 running.add(record.session_id)
             else:
                 gone.append((path, record, same_boot))

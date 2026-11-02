@@ -570,3 +570,36 @@ def test_this_boot_is_never_lost(setup, claude_home):
     setup.record(sid, boot=THIS_BOOT, ended=NOW - 100)
     state = RestartState(claude_home.paths, NeverAsked([]), setup.host, now=lambda: NOW)
     assert state.sort().sessions == {}
+
+
+class TestMovedAsideByItsOwnClaude:
+    """Claude ran the start hook for its next session (/clear, /resume)
+    before the end hook for this one: the record was moved aside, and the
+    end hook didn't find it. Its own Claude still runs."""
+
+    def test_it_was_an_end_you_chose(self, setup, claude_home):
+        old, new = setup.session(), setup.session()
+        setup.record(old, boot=THIS_BOOT, started=NOW - 600, name=f"{THIS_BOOT}_100_{old}")
+        setup.record(new, boot=THIS_BOOT, started=NOW - 60)
+        setup.host.running.add(100)
+        assert len(setup.make(LOGOUT).sort()) == 0
+        assert records(claude_home) == [f"{THIS_BOOT}_100"]
+        # Not offered back once that Claude has gone, either.
+        setup.host.running.clear()
+        assert old not in setup.make(Event(NOW - 30, NOW - 20, "logout")).sort().sessions
+
+    def test_a_dead_claudes_is_sorted_as_before(self, setup, claude_home):
+        # Moved aside when another Claude got its pid: the host says the
+        # pid's process isn't the record's own, so it's sorted as any other.
+        old = setup.session()
+        setup.record(old, boot=THIS_BOOT, started=LOGOUT.start - 100, name=f"{THIS_BOOT}_100_{old}")
+        setup.record(setup.session(), boot=THIS_BOOT, started=NOW - 60)
+
+        class Host(FakeHost):
+            def claude_running(self, pid, started=None, start_ticks=None):
+                return pid == 100 and started == NOW - 60
+
+        host = Host(boot=THIS_BOOT, started=lambda now: BOOT_STARTED)
+        state = RestartState(claude_home.paths, FakeEvents([LOGOUT]), host, now=lambda: NOW)
+        assert state.sort().sessions == {old: Closed(LOGOUT.start, "logout")}
+        assert records(claude_home) == [f"{THIS_BOOT}_100"]
