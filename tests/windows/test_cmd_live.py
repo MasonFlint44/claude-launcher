@@ -253,21 +253,24 @@ def test_fzf_find_takes_the_installed_one():
     assert path == str(own / "fzf.exe") and version >= fzf.MIN_VERSION
 
 
-def test_npms_claude_cmd_gets_its_arguments_as_they_were(tmp_path):
-    # npm installs claude as claude.cmd; the launcher runs it through cmd.
-    import json
-    import subprocess
-    import sys
-
+def test_npms_claude_cmd_gets_its_arguments_as_they_were(tmp_path, monkeypatch):
+    # npm installs claude as claude.cmd; the launcher finds it on PATH and
+    # runs it through cmd, as _claude does when the picker starts it.
     from claude_launcher import launcher
 
     d = tmp_path / "npm claude (x)"
     d.mkdir()
+    out = tmp_path / "args.json"
     show = d / "show.py"
-    show.write_text("import json, sys; print(json.dumps(sys.argv[1:]))")
+    show.write_text(f"import json, sys; open({str(out)!r}, 'w').write(json.dumps(sys.argv[1:]))")
     cmd = d / "claude.cmd"
     cmd.write_text(f'@echo off\r\n"{sys.executable}" "{show}" %*\r\n', newline="")
+    monkeypatch.setenv("PATH", str(d))
     args = ["--resume", "a b", "x&y", "100%", '"q"', "^caret", "!x!", "%PATH%", "C:\\x\\", "end\\\\"]
-    line = launcher._claude_command(args, which=lambda name: str(cmd), windows=True)
-    out = subprocess.run(line, capture_output=True, text=True, check=True).stdout
-    assert json.loads(out) == args
+    assert isinstance(launcher._claude_command(args), str)  # through cmd, not by name
+    signals = launcher._Signals.__new__(launcher._Signals)  # without its TERM handler
+    signals.pending, signals.in_child = None, False
+    started = []
+    assert launcher._claude(signals, str(tmp_path), args, lambda: started.append(1)) == 0
+    assert started == [1]
+    assert json.loads(out.read_text()) == args

@@ -130,6 +130,47 @@ def test_not_started_when_claude_cant_start(monkeypatch, tmp_path):
     assert calls == []
 
 
+class CapturesArgv:
+    """subprocess.run and Popen as _Signals.run calls them: records argv."""
+
+    def __init__(self, monkeypatch):
+        self.argv = []
+        monkeypatch.setattr(subprocess, "run", self.run)
+        monkeypatch.setattr(subprocess, "Popen", self.popen)
+
+    def run(self, argv, **kwargs):
+        self.argv.append(argv)
+        return subprocess.CompletedProcess(argv, 0)
+
+    def popen(self, argv, **kwargs):
+        self.argv.append(argv)
+        return FakeChild(argv)
+
+
+class FakeChild:
+    def __init__(self, args):
+        self.args = args
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def wait(self):
+        return 0
+
+
+@pytest.mark.parametrize("started", [None, lambda: None], ids=["run", "popen"])
+def test_a_command_line_reaches_subprocess_as_it_is(monkeypatch, started):
+    # npm's claude.cmd on Windows: one string for cmd, not a list of its characters.
+    captured = CapturesArgv(monkeypatch)
+    line = '"C:\\Windows\\System32\\cmd.exe" /d /e:on /v:off /s /c ""C:\\npm\\claude.cmd" "-c""'
+    launcher._Signals.run(RunsForReal(), line, started)
+    launcher._Signals.run(RunsForReal(), ("claude", "-c"), started)
+    assert captured.argv == [line, ["claude", "-c"]]
+
+
 class FakeRestart:
     dropped: list = []
 
@@ -256,6 +297,30 @@ def test_version_without_a_commit(monkeypatch, tmp_path):
     assert launcher.version() == __version__  # git can't read it
     monkeypatch.setenv("PATH", str(tmp_path / "nothing"))
     assert launcher.version() == __version__  # no git
+
+
+def test_help_names_the_short_options():
+    assert "claude-launcher -r <id>" in launcher.USAGE and "--help, -h" in launcher.USAGE
+
+
+@pytest.mark.parametrize(
+    ("described", "shown"),
+    [
+        ("v{v}", "{v}"),  # exactly the release: no need to say it twice
+        ("v{v}-dirty", "{v} (v{v}-dirty)"),
+        ("v{v}-3-gabc1234", "{v} (v{v}-3-gabc1234)"),
+        ("v0.0.9", "{v} (v0.0.9)"),  # another release's tag
+        ("abc1234", "{v} (abc1234)"),  # no tags at all
+    ],
+)
+def test_version_from_git(monkeypatch, tmp_path, described, shown):
+    from claude_launcher import __version__, paths
+
+    monkeypatch.setattr(paths, "REPO_DIR", tmp_path)
+    (tmp_path / ".git").mkdir()
+    out = described.format(v=__version__) + "\n"
+    monkeypatch.setattr(subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(argv, 0, stdout=out))
+    assert launcher.version() == shown.format(v=__version__)
 
 
 def test_help_after_another_argument_goes_to_claude(monkeypatch, tmp_path):
