@@ -229,9 +229,12 @@ class TestRestart:
         assert make().sort().sessions == {sid: Closed(BOOT_STARTED, "restart")}
 
     def test_boot_not_in_the_journal(self, setup, claude_home):
+        # A journal kept only in memory, vacuumed or cleared: offered back,
+        # since it may have ended at that boot's restart.
         make, record, session, _ = setup
-        record(100, session(), boot="33333333-3333-3333-3333-333333333333", ended=NOW - 900)
-        assert len(make().sort()) == 0
+        sid = session()
+        record(100, sid, boot="33333333-3333-3333-3333-333333333333", ended=NOW - 900)
+        assert make().sort().sessions == {sid: Closed(NOW - 900, "restart")}
         assert records(claude_home) == []
 
 
