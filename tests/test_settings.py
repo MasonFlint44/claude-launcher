@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from claude_launcher import files
 from claude_launcher import settings as hook_settings
 
 
@@ -54,6 +55,30 @@ class TestHook:
         assert "SessionStart" in json.loads(real.read_text())["hooks"]
         if os.name != "nt":  # Windows files have no such modes
             assert real.stat().st_mode & 0o777 == 0o600
+
+    @pytest.mark.parametrize("windows", [True, False])
+    def test_settings_in_use_for_a_moment(self, tmp_path, monkeypatch, windows):
+        # Windows refuses to replace a file another process has open, for as
+        # long as it has it; elsewhere a refusal is final, as it always was.
+        path = tmp_path / "settings.json"
+        monkeypatch.setattr(hook_settings, "_WINDOWS", windows)
+        monkeypatch.setattr(files, "_PAUSE", 0)
+        real, calls = os.replace, []
+
+        def busy(src, dst):
+            calls.append(dst)
+            if len(calls) == 1:
+                raise PermissionError(13, "in use")
+            real(src, dst)
+
+        monkeypatch.setattr(os, "replace", busy)
+        if windows:
+            assert hook_settings.add_hook(path, Path("/x/claude-session-hook"))
+            assert "SessionStart" in json.loads(path.read_text())["hooks"] and len(calls) == 2
+        else:
+            with pytest.raises(PermissionError):
+                hook_settings.add_hook(path, Path("/x/claude-session-hook"))
+            assert len(calls) == 1 and not path.exists()
 
     def test_remove(self, tmp_path):
         path = tmp_path / "settings.json"

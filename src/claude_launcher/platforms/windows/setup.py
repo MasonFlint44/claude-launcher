@@ -23,6 +23,7 @@ import re
 from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 
+from ... import files
 from ...paths import REPO_DIR, THEME_FILE
 from ...theme import Theme
 from . import terminal
@@ -248,7 +249,7 @@ def _write(path: Path, text: str) -> None:
     tmp = path.with_name(path.name + ".tmp")
     try:
         tmp.write_text(text, encoding="ascii", newline="")
-        os.replace(tmp, path)
+        files.replace(tmp, path)
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise

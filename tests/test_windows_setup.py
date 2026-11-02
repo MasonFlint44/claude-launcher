@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from claude_launcher import files
 from claude_launcher.paths import REPO_DIR
 from claude_launcher.platforms.windows import data_dir, terminal
 from claude_launcher.platforms.windows import setup as windows_setup
@@ -240,6 +241,25 @@ def test_a_failed_write_leaves_the_old_file(setup, env, monkeypatch, name):
         list(WindowsSetup(setup.data_dir, env=env).install(None, None))
     assert {p: p.read_bytes() for p in before} == before
     assert not list(setup.data_dir.glob("*.tmp")) and not list(shim.parent.glob("*.tmp"))
+
+
+def test_a_file_in_use_for_a_moment_is_still_written(setup, env, monkeypatch):
+    # A virus scanner or indexer can hold a file just written; Windows then
+    # refuses to replace it until it lets go.
+    monkeypatch.setattr(files, "_PAUSE", 0)
+    real, failures = os.replace, []
+
+    def busy(src, dst):
+        if len(failures) < 3:
+            failures.append(dst)
+            raise PermissionError(13, "The process cannot access the file because it is being used by another process")
+        real(src, dst)
+
+    monkeypatch.setattr(os, "replace", busy)
+    list(setup.install(None, None))
+    assert len(failures) == 3
+    assert (setup.data_dir / "claude-launcher.cmd").read_bytes() == windows_setup.run_cmd("claude-launcher.py").encode()
+    assert not list(setup.data_dir.glob("*.tmp"))
 
 
 def run_entry(tmp_path, target: Path, *args, env=None):

@@ -8,11 +8,16 @@ import re
 import shlex
 from pathlib import Path
 
+from . import files
+
 HOOK_NAME = "claude-session-hook"
 # The names the hook is run by: the script (Linux, WSL), Windows' entry
 # script, and the .cmd that runs it.
 HOOK_FILES = (HOOK_NAME, HOOK_NAME + ".py", HOOK_NAME + ".cmd")
 HOOK_EVENTS = (("SessionStart", "start"), ("SessionEnd", "end"))
+# Windows can refuse to replace settings.json for a moment while another
+# process has it open (files.replace tries again); elsewhere it's os.replace.
+_WINDOWS = os.name == "nt"
 
 
 def _read_settings(path: Path) -> tuple[str, dict]:
@@ -62,7 +67,7 @@ def _write_settings(path: Path, settings: dict, old_text: str) -> bool:
     tmp.write_text(new, encoding="utf-8", newline="")
     if target.exists():
         os.chmod(tmp, target.stat().st_mode & 0o7777)
-    os.replace(tmp, target)
+    (files.replace if _WINDOWS else os.replace)(tmp, target)
     return True
 
 

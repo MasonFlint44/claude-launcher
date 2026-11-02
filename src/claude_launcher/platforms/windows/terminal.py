@@ -14,6 +14,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from ... import files
 from ...theme import Theme
 from . import local_app_data
 
@@ -120,7 +121,7 @@ def write(
     data = fragment(commandline, starting_directory, windows_path(shown_icon), theme, profile)
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(json.dumps(data, indent=4) + "\n", encoding="utf-8", newline="")
-    os.replace(tmp, path)
+    files.replace(tmp, path)
     return path
 
 
