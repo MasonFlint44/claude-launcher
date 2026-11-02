@@ -425,3 +425,34 @@ def test_the_profiles_user_is_the_hosts(tmp_path):
     from claude_launcher.platforms.linux.host import LinuxHost
 
     assert WslSetup({"HOME": str(tmp_path)}).user() == LinuxHost().user()
+
+
+# --- Under sudo ----------------------------------------------------------------
+
+
+def test_sudo_stops_before_anything(windows, home, claude_home, fzf_found, tmp_path, monkeypatch):
+    # The profile would open as root, and the links would go in /root.
+    monkeypatch.setattr("os.geteuid", lambda: 0)
+    lines = list(install.install(FakePlatform(make(windows, home, SUDO_USER="me"), tmp_path / "data")))
+    assert lines == [
+        "error: run install.sh as yourself, without sudo: the profile opens as the user who installs it",
+    ]
+    assert not (home / ".local" / "bin").exists()
+    assert not (claude_home.paths.config / "settings.json").exists()
+    assert not fragment_dir(windows).exists()
+
+
+@pytest.mark.parametrize("sudo_user", [None, "root"])
+def test_root_itself_can_install(windows, home, monkeypatch, sudo_user):
+    # A distro whose user is root (its default, or sudo from root).
+    monkeypatch.setattr("os.geteuid", lambda: 0)
+    setup = WslSetup(
+        {"WSL_DISTRO_NAME": "Ubuntu", "HOME": str(home), **({"SUDO_USER": sudo_user} if sudo_user else {})},
+        windows.run,
+        str(windows.mounts),
+        user=lambda: "root",
+    )
+    setup.check()
+    lines = list(setup.install(None, None))
+    assert profile_of(windows)["commandline"].startswith("wsl.exe -d Ubuntu -u root ")
+    assert lines[-1].startswith('Added the "Claude Code (Ubuntu)" profile')

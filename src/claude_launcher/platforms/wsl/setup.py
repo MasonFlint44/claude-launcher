@@ -73,7 +73,12 @@ class WslSetup:
         return bin_dir(self.env) / "claude-session-hook"
 
     def check(self) -> None:
-        """Before the installer does anything: the profile is per distro."""
+        """Before the installer does anything: the profile opens as the user
+        who installed it, and is per distro."""
+        # Under sudo the profile would run wsl.exe -u root, and the links go
+        # in /root. Root on its own (the distro's default user) is fine.
+        if os.geteuid() == 0 and self.env.get("SUDO_USER", "root") != "root":
+            raise RuntimeError("run install.sh as yourself, without sudo: the profile opens as the user who installs it")
         if not self.distro:
             raise RuntimeError("can't tell which WSL distro this is; run install.sh in a WSL terminal, without sudo")
 
