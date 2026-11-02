@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -25,19 +26,23 @@ def run_hook(tmp_path):
     config = tmp_path / "config"
     records = config / "state" / "claude-launcher" / "open"
 
-    def run(*events: tuple[str, dict], entrypoint: str = "cli", tty: bool = True, as_=None) -> dict[str, dict]:
-        """`as_`: the command line that runs the script, instead of the native `claude` binary."""
+    def run(
+        *events: tuple[str, dict], entrypoint: str = "cli", tty: bool = True, as_=None, proc: str = "/proc"
+    ) -> dict[str, dict]:
+        """`as_`: the command line that runs the script, instead of the native
+        `claude` binary. `proc`: where the hook reads the boot's files."""
         script = "".join(
             f"printf '%s' {shlex.quote(json.dumps(payload))} | {shlex.quote(str(HOOK))} {arg}\n"
             for arg, payload in events
         )
-        script += "echo $$ > pid; echo done\n"
+        script += "echo $$ > pid; cat /proc/$$/stat > stat; echo done\n"
         env = {
             "PATH": "/usr/bin:/bin",
             "HOME": str(tmp_path),
             "CLAUDE_CONFIG_DIR": str(config),
             "CLAUDE_CODE_ENTRYPOINT": entrypoint,
             **{k: v for k, v in os.environ.items() if k == "LC_ALL"},
+            **({"CLAUDE_LAUNCHER_TEST_PROC": proc} if proc != "/proc" else {}),
         }
         argv = [str(claude), "-c", script]
         if as_ is not None:
@@ -64,7 +69,7 @@ def run_hook(tmp_path):
             )
         if not records.exists():
             return {}
-        pid = f"{boot_id()}_" + (tmp_path / "pid").read_text().strip()
+        pid = f"{boot_id(proc)}_" + (tmp_path / "pid").read_text().strip()
         found = {p.name: json.loads(p.read_text()) for p in records.iterdir()}
         if as_ is not None and not as_[1].endswith(("claude", "cli.js")):
             # Walking up past a non-Claude process can reach a real Claude running these tests.
@@ -75,8 +80,10 @@ def run_hook(tmp_path):
     return run
 
 
-def boot_id() -> str:
-    return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+def boot_id(proc: str = "/proc") -> str:
+    from claude_launcher.platforms.linux.host import LinuxHost
+
+    return LinuxHost(proc).boot_id()
 
 
 def test_start_writes_a_record(run_hook):
@@ -85,6 +92,20 @@ def test_start_writes_a_record(run_hook):
     assert record["boot_id"] == boot_id()
     assert record["login_session"] == Path("/proc/self/sessionid").read_text().strip().replace("4294967295", "")
     assert "ended_at" not in record
+
+
+def test_start_ticks_are_claudes_own(run_hook, tmp_path):
+    """The record's start_ticks are field 22 of Claude's /proc/<pid>/stat,
+    which LinuxHost matches exactly."""
+    [record] = run_hook(("start", {"session_id": SID})).values()
+    stat = (tmp_path / "stat").read_text()  # Claude's, saved while it ran
+    assert record["start_ticks"] == int(stat.rpartition(") ")[2].split()[19])
+    proc = tmp_path / "proc"
+    (proc / str(record["pid"])).mkdir(parents=True)
+    (proc / str(record["pid"]) / "stat").write_text(stat)
+    from claude_launcher.platforms.linux.host import LinuxHost
+
+    assert LinuxHost(str(proc))._start_ticks(record["pid"]) == record["start_ticks"]
 
 
 def test_closed_tab_keeps_the_record_with_its_end(run_hook):
@@ -150,3 +171,69 @@ def test_npm_install(run_hook, as_):
 
 def test_some_other_node_program(run_hook):
     assert run_hook(("start", {"session_id": SID}), as_=("node", "some-app/index.js")) == {}
+
+
+def test_records_are_what_the_launcher_reads(run_hook, tmp_path):
+    """The hook's half of the record format: restart.Record loads what it
+    writes, with this boot's ID as the platform's Host reports it."""
+    from claude_launcher.platforms import current
+    from claude_launcher.restart import Record, normalize_boot_id
+
+    records = run_hook(("start", {"session_id": SID}), ("end", {"session_id": SID, "reason": "other"}))
+    (name,) = records
+    path = tmp_path / "record.json"
+    path.write_text(json.dumps(records[name]))
+    record = Record.load(path)
+    assert record is not None
+    assert record.session_id == SID
+    assert record.boot_id == normalize_boot_id(current().host.boot_id())
+    assert record.ended is not None and record.started <= record.ended
+    assert record.start_ticks == records[name]["start_ticks"] and isinstance(record.start_ticks, int)
+
+
+VM_BOOT = "5e1c2a7b-0d4f-4e8a-9b3c-6f2d1e0a9c84"
+
+
+def fake_proc(root: Path, release: str, init_start: int) -> str:
+    """The files the hook reads for the boot: WSL's VM's, with a distro whose
+    pid 1 started `init_start` clock ticks after the VM did."""
+    (root / "sys" / "kernel" / "random").mkdir(parents=True)
+    (root / "sys" / "kernel" / "random" / "boot_id").write_text(VM_BOOT + "\n")
+    (root / "sys" / "kernel" / "osrelease").write_text(release + "\n")
+    (root / "1").mkdir()
+    rest = " ".join(["S", "0", "1", "1"] + ["0"] * 15 + [str(init_start), "1000"])
+    (root / "1" / "stat").write_text(f"1 (init (x) y) {rest}\n")  # a name with ") " in it
+    (root / "uptime").write_text("5000.00 9000.00\n")
+    return str(root)
+
+
+@pytest.mark.parametrize("release", ["6.6.87.2-microsoft-standard-WSL2", "4.4.0-19041-Microsoft"])
+def test_in_wsl_the_boot_is_the_distros(run_hook, tmp_path, release):
+    # wsl --terminate stops one distro while the VM, and its boot ID, go on.
+    first = run_hook(("start", {"session_id": SID}), proc=fake_proc(tmp_path / "a", release, 1234))
+    shutil.rmtree(tmp_path / "config")
+    again = run_hook(("start", {"session_id": SID}), proc=fake_proc(tmp_path / "b", release, 98765))
+    [(name, record)] = first.items()
+    [(name_again, record_again)] = again.items()
+    assert record["boot_id"] == VM_BOOT.replace("-", "")[:20] + f"{1234:012x}"
+    assert record_again["boot_id"] == VM_BOOT.replace("-", "")[:20] + f"{98765:012x}"
+    assert name.startswith(record["boot_id"] + "_") and name_again.startswith(record_again["boot_id"] + "_")
+
+
+def test_elsewhere_the_boot_is_the_kernels(run_hook, tmp_path):
+    [record] = run_hook(("start", {"session_id": SID}), proc=fake_proc(tmp_path, "6.8.0-31-generic", 1234)).values()
+    assert record["boot_id"] == VM_BOOT
+
+
+@pytest.mark.parametrize("release", ["6.6.87.2-microsoft-standard-WSL2", "6.8.0-31-generic"])
+def test_wsl_records_are_what_the_launcher_reads(run_hook, tmp_path, release):
+    from claude_launcher.platforms.linux.host import LinuxHost
+    from claude_launcher.restart import _RECORD_NAME, Record, normalize_boot_id
+
+    proc = fake_proc(tmp_path / "proc", release, 4321)
+    records = run_hook(("start", {"session_id": SID}), proc=proc)
+    (name,) = records
+    assert _RECORD_NAME.fullmatch(name)
+    path = tmp_path / "record.json"
+    path.write_text(json.dumps(records[name]))
+    assert Record.load(path).boot_id == normalize_boot_id(LinuxHost(proc).boot_id())

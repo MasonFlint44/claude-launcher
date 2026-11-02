@@ -1,5 +1,5 @@
 """A stand-in for Claude, run as /usr/local/bin/claude (a link to python3), so
-its command line is what restart.is_claude and the hook look for. It runs the
+its command line is what platforms.linux.host.is_claude and the hook look for. It runs the
 real claude-session-hook as Claude Code would: `start` when it begins, and
 `end` (reason "other") when its terminal closes (SIGHUP) or it's stopped
 (SIGTERM). usage: claude fake_claude.py SESSION_ID"""

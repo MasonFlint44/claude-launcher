@@ -14,7 +14,7 @@ package = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "tests"]
 markers = ["e2e: drives the real launcher and fzf in a pseudo-terminal"]
 
 [tool.ruff]

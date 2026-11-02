@@ -1,0 +1,93 @@
+"""Which platform the launcher picks."""
+
+from __future__ import annotations
+
+import importlib.machinery
+import sys
+import types
+from pathlib import Path
+
+import pytest
+
+from claude_launcher import platforms
+
+
+def platform(name, **parts):
+    return platforms.Platform(
+        **{
+            "name": name,
+            "host": None,
+            "events": lambda: None,
+            "setup": lambda: None,
+            "fzf_os": "x",
+            "fzf_shell": "sh -c",
+            "core_command": " ".join,
+            "fzf_env": {},
+            "columns_lost": 0,
+            "fzf_listen": "socket",
+            "data_dir": lambda env: Path("/data"),
+            **parts,
+        }
+    )
+
+
+@pytest.fixture
+def fresh(monkeypatch):
+    monkeypatch.setattr(platforms, "_current", None)
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="loads Linux's platform")
+def test_linux(fresh, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
+    from claude_launcher.platforms.wsl import is_wsl
+
+    assert platforms.current().name == ("wsl" if is_wsl() else "linux")
+    assert platforms.current() is platforms.current()
+
+
+@pytest.mark.parametrize("name", ["darwin", "plan9"])
+def test_unsupported(fresh, monkeypatch, name):
+    monkeypatch.setattr(sys, "platform", name)
+    with pytest.raises(platforms.Unsupported, match=name):
+        platforms.current()
+
+
+def test_a_forks_platform_comes_first(fresh, monkeypatch):
+    name = "claude_launcher.platforms.fork"
+    fork = types.ModuleType(name)
+    fork.__spec__ = importlib.machinery.ModuleSpec(name, None)
+    mine = platform("mine", setup=lambda: None)
+    fork.platform = lambda: mine
+    monkeypatch.setitem(sys.modules, name, fork)
+    assert platforms.current() is mine
+
+
+def test_the_core_runs_a_platforms_own_commands(fresh, monkeypatch, capsys):
+    from claude_launcher import cli
+
+    calls = []
+
+    class Setup:
+        commands = {"hello": lambda args: calls.append(args) or 7}
+
+    mine = platform("mine", setup=Setup)
+    monkeypatch.setattr(platforms, "_current", mine)
+    assert cli.main(["hello", "a", "b"]) == 7
+    assert calls == [["a", "b"]]
+    assert cli.main(["nope"]) == 2
+    assert "install run" in capsys.readouterr().err  # the usage
+
+
+def test_platforms_add_reasons_but_share_restart_and_logout():
+    assert platform("mine").reasons == ()
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="builds on Linux's platform")
+def test_wsl_adds_wsl_stopping_after_restarts_and_logouts():
+    from test_picker import WSL_STOP
+
+    from claude_launcher.platforms import wsl
+    from claude_launcher.restart import reasons
+
+    assert wsl.platform().reasons == (WSL_STOP,)
+    assert [r.key for r in reasons(wsl.platform().reasons)] == ["restart", "logout", "wsl-stop"]

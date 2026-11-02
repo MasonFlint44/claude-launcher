@@ -1,15 +1,19 @@
+import dataclasses
 import json
+import os
+import re
+import sys
+import time
 
 import pytest
 
-from claude_launcher.journal import Journal
 from claude_launcher.picker import Pick, Picker
-from claude_launcher.restart import RestartState
+from claude_launcher.restart import Reason, RestartState
 from claude_launcher.text import strip_ansi, width
 from claude_launcher.theme import Theme
-from conftest import conversation
+from conftest import NOW, FakeEvents, FakeHost, conversation, log_dirs_for, posix_only
 
-NOW = 1_800_000_000.0
+S = os.sep  # the separator the picker builds paths with
 
 
 def closed(at, why="restart"):
@@ -32,11 +36,9 @@ def env(claude_home, tmp_path):
     run.mkdir()
     restart = RestartState(
         claude_home.paths,
-        Journal(lambda args: None),
+        FakeEvents(),
+        FakeHost(),
         now=clock,
-        boot_id=lambda: "b",
-        boot_start=lambda now: now - 60,
-        running=lambda pid: False,
     )
     restored = []
 
@@ -79,12 +81,34 @@ def plain(rows):
 
 
 def _not_config(row):
-    return not row.split("\t", 1)[0].endswith("/.claude")  # the fake home's Claude config
+    return not row.split("\t", 1)[0].endswith((f"{os.sep}.claude", "/.claude"))  # the fake home's Claude config
 
 
 def displayed(rows):
     """What fzf shows: the fields after the first, a tab shown as a space (--tabstop=1)."""
     return [r.split("\t", 1)[1].replace("\t", " ").rstrip() for r in plain(rows) if _not_config(r)]
+
+
+# WSL's own reason, as platforms/wsl gives it (test_platforms checks).
+WSL_STOP = Reason("wsl-stop", "WSL stopped", "WSL stop", 30)
+
+
+@pytest.fixture
+def wsl(monkeypatch):
+    """The picker on a platform with WSL's reason."""
+    from claude_launcher import picker
+
+    real = picker._platform()
+    monkeypatch.setattr(picker, "_platform", lambda: dataclasses.replace(real, reasons=(WSL_STOP,)))
+
+
+# The local midnight that starts NOW's day.
+MIDNIGHT = time.mktime((*time.localtime(NOW)[:3], 0, 0, 0, 0, 0, -1))
+
+
+def _date(at):
+    t = time.localtime(at)
+    return time.strftime("%b ", t) + str(t.tm_mday)
 
 
 def start(env, cols=100):
@@ -94,6 +118,7 @@ def start(env, cols=100):
 
 
 class TestProjects:
+    @posix_only  # Windows doesn't allow control characters in a name
     def test_directory_name_with_an_escape(self, env):
         odd = project(env, "a\x1b[31mb", NOW - 600)
         p, _ = start(env)
@@ -122,7 +147,15 @@ class TestProjects:
         assert any(o.startswith("--bind=enter:transform:") for o in opts)
         assert any(o.startswith("--bind=ctrl-s:transform:") for o in opts)
         assert not any(o.startswith("--bind=btab") for o in opts)
-        assert any(o.startswith(f"--listen={env.run}/fzf.sock") for o in opts)
+        listen = "localhost:0" if sys.platform == "win32" else str(env.run / "fzf.sock")  # no Unix sockets there
+        assert f"--listen={listen}" in opts
+
+    def test_files_fzf_reads_have_plain_newlines(self, env):
+        # Windows' text mode would write \r\n, and fzf would show the \r.
+        project(env, "a", NOW - 600)
+        start(env)
+        for name in ("rows", "header"):
+            assert b"\r" not in (env.run / name).read_bytes()
 
     def test_notes_dont_match(self, env):
         project(env, "a", NOW - 600)
@@ -164,7 +197,7 @@ class TestPathMode:
     def test_tilde_alone_is_home(self, env):
         make_dirs(env, "a")
         p, _ = start(env)
-        assert listed(p.rows(query="~"))[1] == "~/a"
+        assert listed(p.rows(query="~"))[1] == f"~{S}a"  # ~ alone is home, in the OS's form
         assert keys(p.rows(query="~")) == keys(p.rows(query="~/"))
 
     def test_absolute_form_kept(self, env):
@@ -187,7 +220,7 @@ class TestPathMode:
         rows = p.rows(query="~/")
         shown = listed(rows)
         assert [r.split()[0] for r in shown[1:]] == ["~/parent", "~/used", "~/aaa", "~/zzz"]
-        assert shown[1].split(None, 1)[1] == "→ git/proj, 1m ago"
+        assert shown[1].split(None, 1)[1] == f"→ git{S}proj, 1m ago"
         assert shown[2].split(None, 1)[1] == "2h ago"
         assert shown[3] == "~/aaa"
 
@@ -207,7 +240,7 @@ class TestPathMode:
         env.log(env.home / deep, conversation("x", env.home / deep), mtime=NOW - 60)
         p, _ = start(env)
         note = listed(p.rows(query="~/"))[1].split(None, 1)[1]
-        assert note.startswith("→ …") and note.endswith("directory/directory, 1m ago")
+        assert note.startswith("→ …") and note.endswith(f"directory{S}directory, 1m ago")
         assert width(note) <= 100 - 50
 
     def test_exact_name_first(self, env):
@@ -223,6 +256,7 @@ class TestPathMode:
         p, _ = start(env)
         assert listed(p.rows(query="~/"))[1:] == ["~/link", "~/real"]
 
+    @posix_only  # Windows doesn't allow control characters in a name
     def test_odd_names_left_out(self, env):
         make_dirs(env, "ok", "bad\nname", "esc\x1b[31m")
         p, _ = start(env)
@@ -240,6 +274,7 @@ class TestPathMode:
         assert len(p.rows()) == 1
         assert strip_ansi(p.make_header()).startswith("No such directory: ~no-such-user-here")
 
+    @posix_only  # chmod can't lock a directory on Windows
     def test_unreadable_directory(self, env):
         make_dirs(env, "locked/inner")
         (env.home / "locked").chmod(0)
@@ -278,7 +313,20 @@ class TestPathMode:
         env.log(env.home / "git/a/b", conversation("x", env.home / "git/a/b"), mtime=NOW - 60)
         env.log(env.home / "git/c", conversation("x", env.home / "git/c"), mtime=NOW - 600)
         p, _ = start(env)
-        assert listed(p.rows(query="~/git/"))[0].split(None, 1) == ["~/git/", "→ a/b, 1m ago"]
+        assert listed(p.rows(query="~/git/"))[0].split(None, 1) == ["~/git/", f"→ a{S}b, 1m ago"]
+
+    @posix_only  # on Windows // starts a share
+    def test_doubled_leading_slash_is_the_same_directory(self, env):
+        # Linux reads //home as /home, so its history still applies.
+        make_dirs(env, "git/x")
+        env.log(env.home / "git", conversation("x", env.home / "git"), mtime=NOW - 7200)
+        p, _ = start(env)
+        typed = "/" + str(env.home / "git") + "/"
+        rows = p.rows(query=typed)
+        assert keys(rows)[0] == str(env.home / "git")
+        assert listed(rows)[0].split() == [typed, "2h", "ago"]
+        assert listed(rows)[1] == typed + "x"  # shown as typed, so Tab completes it
+        assert keys(rows)[1] == str(env.home / "git/x")
 
     def test_hints(self, env):
         make_dirs(env, "git/claude-launcher")
@@ -325,11 +373,11 @@ class TestPathKeys:
         env.log(env.home / "git/proj", conversation("x", env.home / "git/proj"), mtime=NOW - 60)
         p, _ = start(env)
         monkeypatch.setenv("FZF_POS", "2")
-        assert p.on_tab("") == "change-query:~/git/proj/"
+        assert p.on_tab("") == f"change-query:~{S}git{S}proj{S}"  # from the row's own path
         assert p.on_tab("pro") == ""  # the second row of what "pro" matches: none
         monkeypatch.setenv("FZF_POS", "1")
-        assert p.on_tab("") == "change-query:~/"
-        assert p.on_tab("pro") == "change-query:~/git/proj/"
+        assert p.on_tab("") == f"change-query:~{S}"
+        assert p.on_tab("pro") == f"change-query:~{S}git{S}proj{S}"
 
     def test_tab_in_a_sessions_view_does_nothing(self, env):
         env.log("/tmp", conversation("hello", "/tmp"))
@@ -437,8 +485,11 @@ class TestHeader:
         p, _ = start(env, cols=120)
         monkeypatch.setenv("FZF_POS", "2")
         p.on_enter(str(d), "")
-        hints = "   ".join(line.strip() for line in strip_ansi(p.make_header()).split("\n")[1:2])
-        assert hints == "enter resume   ctrl-x dismiss ↻   alt-x dismiss all   ctrl-s all sessions   esc back"
+        # Where the hints wrap depends on the title, which holds the test's own path.
+        lines = strip_ansi(p.make_header()).split("\n")[:2]
+        parts = {part for line in lines for part in re.split(r" {3,}", line.strip())}
+        hints = {"enter resume", "ctrl-x dismiss ↻", "alt-x dismiss all", "ctrl-s all sessions", "esc back"}
+        assert hints <= parts and len(parts - hints) == 1  # and the title
 
     def test_press_again_keeps_the_header_height(self, env):
         p, _ = start(env, cols=90)
@@ -465,19 +516,128 @@ class TestHeader:
         a = env.log("/tmp", conversation("a", "/tmp"))
         b = env.log("/tmp", conversation("b", "/tmp"))
         env.paths.state.mkdir(parents=True)
-        env.paths.restored.write_text(json.dumps({a: closed(NOW - 300, "logout"), b: closed(NOW - 600, "logout")}))
+        env.paths.restored.write_text(json.dumps({a: closed(NOW - 300, "logout"), b: closed(NOW - 300, "logout")}))
         p, _ = start(env)
-        assert "2 sessions were open when your session ended" in strip_ansi(p.make_header())
+        assert "2 sessions were open when you logged out" in strip_ansi(p.make_header())
         p.on_sessions()
-        assert "↻ open when your session ended" in strip_ansi(p.make_header())
+        assert "↻ open when you logged out" in strip_ansi(p.make_header())
 
-    def test_mixed_nudge(self, env):
+    def test_wsl_stop_nudge(self, env, wsl):
+        a = env.log("/tmp", conversation("a", "/tmp"))
+        env.paths.state.mkdir(parents=True)
+        env.paths.restored.write_text(json.dumps({a: closed(NOW - 300, "wsl-stop")}))
+        p, _ = start(env)
+        assert "1 session was open when WSL stopped" in strip_ansi(p.make_header())
+
+    def test_one_line_per_event_newest_first(self, env, wsl):
+        a, b, c = (env.log("/tmp", conversation(n, "/tmp")) for n in "abc")
+        env.paths.state.mkdir(parents=True)
+        env.paths.restored.write_text(
+            json.dumps({a: closed(NOW - 300, "wsl-stop"), b: closed(NOW - 9000), c: closed(NOW - 9000)})
+        )
+        p, _ = start(env)
+        lines = strip_ansi(p.make_header()).split("\n")
+        assert "↻ 1 session was open when WSL stopped" in lines[2] and lines[2].endswith("ctrl-s to see them")
+        assert lines[3].startswith("↻ 2 sessions were open when your computer restarted (")
+        assert lines[4] == " "
+
+    def test_events_past_three_share_a_line(self, env):
+        ids = [env.log("/tmp", conversation(f"s{i}", "/tmp")) for i in range(5)]
+        env.paths.state.mkdir(parents=True)
+        restored = {sid: closed(NOW - 1000 * (i + 1), "logout") for i, sid in enumerate(ids[:3])}
+        restored |= {ids[3]: closed(NOW - 9000), ids[4]: closed(NOW - 9000)}
+        env.paths.restored.write_text(json.dumps(restored))
+        p, _ = start(env)
+        lines = strip_ansi(p.make_header()).split("\n")[2:-1]
+        assert len(lines) == 3
+        assert lines[1].startswith("↻ 1 session was open when you logged out")
+        assert lines[2] == "↻ 3 more from earlier"
+
+    def test_exactly_three_events_get_a_line_each(self, env, wsl):
+        a, b, c = (env.log("/tmp", conversation(n, "/tmp")) for n in "abc")
+        env.paths.state.mkdir(parents=True)
+        env.paths.restored.write_text(
+            json.dumps({a: closed(NOW - 300, "wsl-stop"), b: closed(NOW - 3000, "logout"), c: closed(NOW - 9000)})
+        )
+        p, _ = start(env)
+        lines = strip_ansi(p.make_header()).split("\n")[2:-1]
+        assert [line.split(" (")[0] for line in lines] == [
+            "↻ 1 session was open when WSL stopped",
+            "↻ 1 session was open when you logged out",
+            "↻ 1 session was open when your computer restarted",
+        ]
+
+    def test_one_restart_read_at_slightly_different_times_is_one_line(self, env):
+        a, b = (env.log("/tmp", conversation(n, "/tmp")) for n in "ab")
+        env.paths.state.mkdir(parents=True)
+        env.paths.restored.write_text(json.dumps({a: closed(NOW - 300), b: closed(NOW - 300.01)}))
+        p, _ = start(env)
+        lines = strip_ansi(p.make_header()).split("\n")
+        assert "↻ 2 sessions were open when your computer restarted" in lines[2] and lines[3] == " "
+
+    def test_a_reason_this_platform_doesnt_know(self, env):
+        a = env.log("/tmp", conversation("a", "/tmp"))
+        env.paths.state.mkdir(parents=True)
+        env.paths.restored.write_text(json.dumps({a: closed(MIDNIGHT + 60, "gone")}))
+        p, _ = start(env)
+        assert "↻ 1 session was open when Claude was stopped" in strip_ansi(p.make_header())
+        p.on_sessions()
+        assert "↻ open when Claude was stopped" in strip_ansi(p.make_header())
+        assert displayed(p.rows())[1].startswith("↻ today stop ")
+
+    def test_sessions_view_says_all_three_reasons(self, env, wsl):
+        a, b, c = (env.log("/tmp", conversation(n, "/tmp")) for n in "abc")
+        env.paths.state.mkdir(parents=True)
+        env.paths.restored.write_text(
+            json.dumps({a: closed(NOW - 300, "wsl-stop"), b: closed(NOW - 3000, "logout"), c: closed(NOW - 9000)})
+        )
+        p, _ = start(env)
+        p.on_sessions()
+        header = strip_ansi(p.make_header())
+        assert "↻ open when your computer restarted, you logged out or WSL stopped" in header
+
+    def test_a_directorys_view_says_only_its_rows_reasons(self, env, monkeypatch):
+        d = project(env, "proj", NOW - 60)
+        elsewhere = env.log("/tmp", conversation("b", "/tmp"))
+        env.paths.state.mkdir(parents=True)
+        env.paths.restored.write_text(
+            json.dumps({sid_in(env, d): closed(NOW - 300, "logout"), elsewhere: closed(NOW - 9000)})
+        )
+        p, _ = start(env, cols=120)
+        monkeypatch.setenv("FZF_POS", "2")
+        p.on_enter(str(d), "")
+        header = strip_ansi(p.make_header())
+        assert "↻ open when you logged out" in header and "restarted" not in header
+
+    def test_a_directorys_view_without_its_own_restored_rows_says_nothing(self, env, monkeypatch):
+        d = project(env, "proj", NOW - 60)
+        elsewhere = env.log("/tmp", conversation("b", "/tmp"))
+        env.paths.state.mkdir(parents=True)
+        env.paths.restored.write_text(json.dumps({elsewhere: closed(NOW - 300)}))
+        p, _ = start(env, cols=120)
+        monkeypatch.setenv("FZF_POS", "2")
+        p.on_enter(str(d), "")
+        assert "↻" not in strip_ansi(p.make_header())
+
+    def test_each_reason_has_its_texts(self, env, wsl):
+        # Whatever the platform's reasons, the picker has a header and a row text for each, in the order they win.
+        from claude_launcher.restart import SHARED, reasons
+
+        p, _ = start(env)
+        expected = reasons([WSL_STOP])
+        assert [r[0] for r in p.state.reasons] == [r.key for r in expected] == ["restart", "logout", "wsl-stop"]
+        assert p.state.reasons == [[r.key, r.header, r.row, r.rank] for r in expected]
+        assert all(r.header and r.row for r in expected)
+        assert {r.key for r in SHARED} <= {r[0] for r in p.state.reasons}
+
+    def test_sessions_view_says_each_reason_shown(self, env):
         a = env.log("/tmp", conversation("a", "/tmp"))
         b = env.log("/tmp", conversation("b", "/tmp"))
         env.paths.state.mkdir(parents=True)
-        env.paths.restored.write_text(json.dumps({a: closed(NOW - 300, "logout"), b: closed(NOW - 600)}))
+        env.paths.restored.write_text(json.dumps({a: closed(NOW - 300, "logout"), b: closed(NOW - 9000)}))
         p, _ = start(env)
-        assert "2 sessions were closed by a restart or logout" in strip_ansi(p.make_header())
+        p.on_sessions()
+        assert "↻ open when your computer restarted or you logged out" in strip_ansi(p.make_header())
 
 
 class TestSessions:
@@ -485,7 +645,7 @@ class TestSessions:
         env.log("/tmp", conversation("hello", "/tmp"))
         p, _ = start(env)
         out = p.on_sessions()
-        assert out.startswith("clear-query+change-prompt(session> )+change-nth(2)+reload-sync(")
+        assert out.startswith("clear-query+change-prompt(session> )+change-nth(2)+reload(")
         assert "Recent Claude sessions" in out
         assert displayed(p.rows())[1].split()[-1] == "hello"
         assert "Select a project directory" in env.picker().on_sessions()
@@ -504,14 +664,50 @@ class TestSessions:
         older = env.log("/tmp", conversation("open at restart", "/tmp"), mtime=NOW - 9000)
         env.log("/tmp", conversation("recent", "/tmp"), mtime=NOW - 60)
         env.paths.state.mkdir(parents=True)
-        env.paths.restored.write_text(json.dumps({older: closed(NOW - 300)}))
+        env.paths.restored.write_text(json.dumps({older: closed(MIDNIGHT + 60)}))
         p, _ = start(env)
         p.on_sessions()
         shown = displayed(p.rows())
         assert shown[1].startswith("↻ ") and shown[1].endswith("open at restart")
+        assert shown[1].split()[1:3] == ["today", "restart"]  # what closed it, not its age
         assert not shown[2].startswith("↻")
         assert shown[2].endswith("recent")
         assert "ctrl-x dismiss ↻" in strip_ansi(p.make_header())
+
+    @pytest.mark.parametrize(
+        ("at", "why", "when"),
+        [
+            (MIDNIGHT + 60, "restart", "today restart"),
+            (MIDNIGHT - 60, "logout", "yesterday logout"),
+            (MIDNIGHT - 86400 + 60, "logout", "yesterday logout"),
+            (MIDNIGHT - 86400 - 60, "restart", time.strftime("%a", time.localtime(MIDNIGHT - 86400 - 60)) + " restart"),
+            (MIDNIGHT - 5 * 86400, "wsl-stop", time.strftime("%a", time.localtime(MIDNIGHT - 5 * 86400)) + " WSL stop"),
+            # A week back has today's weekday, so past six days it's a date.
+            (NOW - 6 * 86400 - 60, "restart", _date(NOW - 6 * 86400 - 60) + " restart"),
+        ],
+    )
+    def test_a_restored_rows_day_and_reason(self, env, wsl, at, why, when):
+        sid = env.log("/tmp", conversation("x", "/tmp"), mtime=NOW - 9000)
+        env.paths.state.mkdir(parents=True)
+        env.paths.restored.write_text(json.dumps({sid: closed(at, why)}))
+        p, _ = start(env)
+        p.on_sessions()
+        assert displayed(p.rows())[1].startswith(f"↻ {when} ")
+
+    @pytest.mark.parametrize(("why", "column"), [(None, 12), ("logout", 16), ("restart", 17), ("wsl-stop", 18)])
+    def test_the_first_column_is_as_wide_as_its_rows(self, env, wsl, why, column):
+        sid = env.log("/tmp", conversation("a title long enough to be cut " * 4, "/tmp"), mtime=NOW - 9000)
+        if why:
+            env.paths.state.mkdir(parents=True)
+            env.paths.restored.write_text(json.dumps({sid: closed(MIDNIGHT - 60, why)}))
+        p, _ = start(env, cols=80)
+        p.on_sessions()
+        heading, row = plain(p.rows())[:2]
+        assert heading.split()[:2] == (["When", "Directory"] if why else ["Last", "active"])
+        assert heading.index("Directory") == 1 + 2 + column + 1  # the tab, the mark, the column, a space
+        shown = displayed(p.rows())[1]
+        assert width(shown) == 77  # what fzf leaves of 80 columns, filled
+        assert width(shown[shown.index("a title") :]) == 80 - 31 - column  # at 80 columns, at least 31 for the title
 
     def test_ages_and_marks_dont_match(self, env, monkeypatch):
         d = project(env, "proj", NOW - 60)
@@ -546,12 +742,12 @@ class TestSessions:
         monkeypatch.setenv("FZF_POS", "2")
         p.on_enter(str(d), "")
         title = strip_ansi(p.make_header()).split("\n")[0]
-        assert title.startswith("Claude sessions in …") and title.endswith("directory/directory")
+        assert title.startswith("Claude sessions in …") and title.endswith(f"directory{S}directory")
         assert width(title) == 57
 
 
 def sid_in(env, d):
-    return next(p.stem for p in env.paths.log_dirs_for(str(d))[0].glob("*.jsonl"))
+    return next(p.stem for p in log_dirs_for(env.paths, str(d))[0].glob("*.jsonl"))
 
 
 # Before the test logs' message timestamps, so a log's mtime is when it was last active.
@@ -601,7 +797,7 @@ class TestDirectorySessions:
         env.log(env.home / "proj/sub", conversation("deeper", env.home / "proj/sub"), mtime=EARLY - 60)
         start(env)
         assert "Claude sessions in" in self.enter(env, monkeypatch, env.home / "proj", "~/proj")
-        assert displayed(env.picker().rows())[2].split()[2:] == ["proj/sub", "deeper"]
+        assert displayed(env.picker().rows())[2].split()[2:] == [f"proj{S}sub", "deeper"]
 
     def test_any_depth_and_nothing_outside(self, env, monkeypatch):
         make_dirs(env, "proj/a/b", "project-other")
@@ -628,13 +824,16 @@ class TestDirectorySessions:
         make_dirs(env, "x")
         at_home = env.log(env.home, conversation("at home", env.home), mtime=EARLY - 600)
         inside = env.log(env.home / "x", conversation("inside", env.home / "x"), mtime=EARLY - 60)
-        env.log("/tmp", conversation("elsewhere", "/tmp"), mtime=EARLY - 30)
+        elsewhere = env.tmp / "elsewhere"
+        elsewhere.mkdir()
+        env.log(elsewhere, conversation("elsewhere", elsewhere), mtime=EARLY - 30)
         start(env)
         self.enter(env, monkeypatch, env.home)
         rows = env.picker().rows()
         assert keys(rows) == [f"+{env.home}", inside, at_home]
-        assert [r.split()[2] for r in displayed(rows)[2:]] == ["~/x", "~"]
+        assert [r.split()[2] for r in displayed(rows)[2:]] == [f"~{S}x", "~"]
 
+    @posix_only  # Windows has a root per drive; see test_pathtext_windows
     def test_root_holds_everything(self, env, monkeypatch):
         env.log("/tmp", conversation("elsewhere", "/tmp"), mtime=EARLY - 30)
         env.log(env.home, conversation("at home", env.home), mtime=EARLY - 60)
@@ -649,7 +848,7 @@ class TestDirectorySessions:
         env.log(env.home / "git/proj/tests", conversation("b", env.home / "git/proj/tests"), mtime=EARLY - 60)
         start(env)
         self.enter(env, monkeypatch, env.home / "git/proj", "~/git/proj")
-        assert [r.split()[2] for r in displayed(env.picker().rows())[2:]] == ["proj/tests", "proj"]
+        assert [r.split()[2] for r in displayed(env.picker().rows())[2:]] == [f"proj{S}tests", "proj"]
 
     def test_a_pasted_session_id_resumes(self, env, monkeypatch):
         d = project(env, "proj", NOW - 60)
@@ -698,7 +897,7 @@ class TestDirectorySessions:
         start(env)
         self.enter(env, monkeypatch, b, "proj", pos=2)
         out = env.picker().on_key("esc", "")
-        assert out.startswith("rebind(result)+change-query(proj)+change-prompt(project> )+change-nth(1)+reload-sync(")
+        assert out.startswith("rebind(result)+change-query(proj)+change-prompt(project> )+change-nth(1)+reload(")
         assert env.picker().state.query == "proj"
         # The cursor goes back once the list's rows are in, not a Sessions view's.
         assert env.picker().on_result(sid_in(env, b)) == ""
@@ -830,7 +1029,7 @@ class TestKeys:
         p.on_sessions()
         env.picker().on_key("alt-x", "")
         out = env.picker().on_key("alt-x", "")
-        assert out.startswith("reload-sync(")
+        assert out.startswith("reload(")
         assert json.loads(env.paths.restored.read_text()) == {}
         assert "↻" not in "".join(displayed(env.picker().rows()))
 
@@ -845,7 +1044,7 @@ class TestKeys:
         env.paths.restored.write_text(json.dumps({a: closed(NOW - 300), b: closed(NOW - 300)}))
         p, _ = start(env)
         p.on_sessions()
-        assert env.picker().on_dismiss(a).startswith("reload-sync(")
+        assert env.picker().on_dismiss(a).startswith("reload(")
         assert list(json.loads(env.paths.restored.read_text())) == [b]
 
 
@@ -928,9 +1127,137 @@ class TestPick:
         assert env.picker().pick("") == "No sessions to resume"
 
 
+@pytest.fixture
+def new_york():
+    """Local time in a zone with daylight saving: 2026's clocks go forward
+    on 8 March and back on 1 November."""
+    if not hasattr(time, "tzset"):
+        pytest.skip("needs time.tzset (POSIX)")
+    old = os.environ.get("TZ")
+    os.environ["TZ"] = "America/New_York"
+    time.tzset()
+    try:
+        yield
+    finally:
+        if old is None:
+            del os.environ["TZ"]
+        else:
+            os.environ["TZ"] = old
+        time.tzset()
+
+
+def local(y, mo, d, h, mi=0):
+    return time.mktime((y, mo, d, h, mi, 0, 0, 0, -1))
+
+
+class TestDay:
+    """A ↻ row's day: today, yesterday, a weekday, or past six days a date."""
+
+    @pytest.mark.parametrize(
+        ("then", "now", "day"),
+        [
+            # A month's end.
+            ((2026, 2, 28, 22), (2026, 3, 1, 10), "yesterday"),
+            ((2026, 2, 27, 22), (2026, 3, 1, 10), "Fri"),
+            ((2026, 10, 31, 23, 59), (2026, 11, 1, 0, 1), "yesterday"),
+            # The new year.
+            ((2026, 12, 31, 23), (2027, 1, 1, 9), "yesterday"),
+            ((2026, 12, 30, 23), (2027, 1, 1, 9), "Wed"),
+            ((2027, 1, 1, 0, 5), (2027, 1, 1, 23, 55), "today"),
+            # 8 March has 23 hours.
+            ((2026, 3, 8, 0, 30), (2026, 3, 9, 0, 30), "yesterday"),
+            ((2026, 3, 7, 23, 30), (2026, 3, 9, 0, 30), "Sat"),
+            ((2026, 3, 7, 0, 10), (2026, 3, 8, 12), "yesterday"),
+            ((2026, 3, 8, 0, 10), (2026, 3, 8, 23, 50), "today"),
+            # 1 November has 25.
+            ((2026, 11, 1, 0, 10), (2026, 11, 2, 0, 30), "yesterday"),
+            ((2026, 10, 31, 23, 50), (2026, 11, 2, 0, 30), "Sat"),
+            ((2026, 11, 1, 0, 5), (2026, 11, 1, 23, 50), "today"),
+            ((2026, 11, 2, 0, 5), (2026, 11, 2, 23, 0), "today"),
+            # Six and seven days back: a week ago has today's weekday (Thursday).
+            ((2026, 10, 23, 13), (2026, 10, 29, 12), "Fri"),
+            ((2026, 10, 23, 11), (2026, 10, 29, 12), "Oct 23"),
+            ((2026, 10, 22, 18), (2026, 10, 29, 12), "Oct 22"),
+            ((2026, 10, 22, 11), (2026, 10, 29, 12), "Oct 22"),
+        ],
+    )
+    def test_day(self, new_york, then, now, day):
+        from claude_launcher.picker import _day
+
+        assert _day(local(*then), local(*now)) == day
+
+
 def test_title_skipped_on_dumb_terminals():
     from claude_launcher import title
 
     assert title.enabled({"TERM": "xterm-256color"})
     assert not title.enabled({"TERM": "dumb"})
-    assert not title.enabled({})
+    assert not title.enabled({}, windows=False)
+    assert title.enabled({}, windows=True)  # Windows' consoles never set TERM
+    assert not title.enabled({"TERM": "dumb"}, windows=True)
+
+
+def test_nth_match_takes_rows_as_fzf_gives_them():
+    # Only \n ends a row: a title can hold other line breaks (U+2028), and
+    # bytes that aren't UTF-8 come back as they went.
+    import shutil
+
+    from claude_launcher.picker import _nth_match
+
+    fzf = shutil.which("fzf")
+    rows = ["a\tone two", "b\tone", "c\x80\tone\udc80"]
+    rows = [r.encode("utf-8", "surrogateescape").decode("utf-8", "surrogateescape") for r in rows]
+    assert _nth_match(fzf, rows, "one", 1) == "a"
+    assert _nth_match(fzf, rows, "one", 3) == "c\x80"
+    assert _nth_match(fzf, rows, "one", 4) == ""
+
+
+def test_nth_match_ignores_the_users_fzf_defaults(monkeypatch, tmp_path):
+    # --exact would match nothing for "lnch"; the picker's fzf never sees it.
+    import shutil
+
+    from claude_launcher.picker import _nth_match
+
+    opts = tmp_path / "opts"
+    opts.write_text("--exact")
+    monkeypatch.setenv("FZF_DEFAULT_OPTS", "--exact")
+    monkeypatch.setenv("FZF_DEFAULT_OPTS_FILE", str(opts))
+    assert _nth_match(shutil.which("fzf"), ["a\tlauncher", "b\tother"], "lnch", 1) == "a"
+
+
+@pytest.mark.parametrize(("os_name", "installer"), [("posix", "install.sh"), ("nt", "install.ps1")])
+def test_fzf_too_old_names_the_platforms_installer(env, monkeypatch, os_name, installer):
+    from claude_launcher import fzf, picker
+
+    monkeypatch.setattr(fzf, "find", lambda private: (None, (0, 44, 0)))
+    real = picker._installer
+    monkeypatch.setattr(picker, "_installer", lambda: real(os_name))
+    with pytest.raises(picker.FzfTooOld, match=f"found 0.44.0. Run {installer} in"):
+        env.picker().start(100)
+
+
+class TestRestoredEvents:
+    """The header's lines: sessions closed within SAME_EVENT of each other by
+    the same reason are one restart or logout."""
+
+    def events(self, *closings):
+        from claude_launcher.picker import _restored
+        from claude_launcher.restart import Closed, Group
+
+        return _restored(Group({f"s{i}": Closed(at, why) for i, (at, why) in enumerate(closings)}))
+
+    @pytest.mark.parametrize("gap", [0.1, 0.5, 0.9, 1.0])
+    def test_closings_a_moment_apart_are_one(self, gap):
+        assert self.events((NOW, "restart"), (NOW - gap, "restart")) == [["restart", NOW, 2]]
+
+    @pytest.mark.parametrize("gap", [1.01, 2.0])
+    def test_closings_over_a_second_apart_are_two(self, gap):
+        assert self.events((NOW, "restart"), (NOW - gap, "restart")) == [["restart", NOW, 1], ["restart", NOW - gap, 1]]
+
+    def test_measured_from_the_newest(self):
+        # Not a chain: each joins the newest closing's line only within a second of it.
+        got = self.events((NOW, "logout"), (NOW - 0.6, "logout"), (NOW - 1.2, "logout"))
+        assert got == [["logout", NOW, 2], ["logout", NOW - 1.2, 1]]
+
+    def test_another_reason_at_the_same_time_is_its_own(self):
+        assert self.events((NOW, "restart"), (NOW - 0.5, "logout")) == [["restart", NOW, 1], ["logout", NOW - 0.5, 1]]

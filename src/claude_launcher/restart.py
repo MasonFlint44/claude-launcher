@@ -5,47 +5,51 @@ interactive Claude. An exit you chose (/exit, /clear, switching with /resume) de
 any other end (closing the tab, or the desktop closing every window) keeps it,
 with the time it ended.
 
+A record is one line of JSON (`Record.load` reads it and ignores keys it
+doesn't know): "session_id", "pid", "boot_id", "login_session" (the login
+session's ID, or ""), "started_at" (a Unix time), and once it ended
+"end_reason" and "ended_at". Optionally "start_ticks", when the process
+started in the platform's own units (Linux: field 22 of /proc/<pid>/stat),
+which the host matches exactly to tell its Claude from one that got the pid
+since; without it, the host compares "started_at" with a margin.
+
 `sort()` runs each time the picker opens and decides, for each record whose
 Claude has gone, whether a restart or a logout closed it. Both are an event
-with a start and an end, from the systemd journal:
-
-- Restart: from logind's shutdown message (or, after a crash or power cut, the
-  boot's last journal entry) to the end of that boot.
-- Logout: your desktop session ending (your systemd user manager stopping
-  graphical-session.target, just before the windows close), or logind's
-  "logged out" for a desktop session of yours or for the login session Claude
-  itself ran in (an SSH session, say), to logind removing that session.
-- Without logind's shutdown message (after a crash, or when only your own
-  journal can be read), a restart starts at the boot's last journal entry.
-  With only your own journal, that's often your desktop session ending, so
-  a logout followed later by a restart may be counted as the restart.
+with a start and an end, which the platform's event source provides (on
+Linux, the systemd journal: platforms/linux/journal.py).
 
 A Claude that ended between LEAD seconds before an event started and TAIL
-seconds after it ended was closed by it; a restart wins over a logout. One
-that never recorded an end (the power was cut, or the hook never got to run)
-was closed by the first event after it started.
+seconds after it ended was closed by it; when several did, the reason with
+the lowest rank wins: a restart over the logout it causes, and a platform's
+own reasons (WSL stopping) after both. One that never recorded an end (the
+power was cut, or the hook never got to run) was closed by the first event
+after it started.
 
 Those join the group in restored.json, {session id: {"at": time, "why":
-"restart" | "logout"}}, for KEEP seconds, or until resumed or dismissed. Any
-other record is deleted once its Claude has gone.
+reason key}}, for KEEP seconds, or until resumed or dismissed. Any other
+record is deleted once its Claude has gone, and only once the group is
+saved, so a sort cut short loses nothing.
+
+This module is the same on every platform; the record and restored.json
+formats are what each platform's hook and event source agree on.
 """
 
 from __future__ import annotations
 
-import contextlib
-import fcntl
 import json
 import os
-import pwd
 import re
 import time
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from .journal import Journal, normalize_boot_id
 from .paths import Paths
+
+if TYPE_CHECKING:
+    from .platforms import Event, EventSource, Host
 
 _RECORD_NAME = re.compile(r"[0-9a-f-]{32,36}_[0-9]+")
 KEEP = 7 * 86400  # how long closed sessions stay in the group
@@ -58,91 +62,70 @@ KEEP = 7 * 86400  # how long closed sessions stay in the group
 # case where logind goes first.
 # TAIL: Claude's SessionEnd hook stamps the end, and Claude may take a moment
 # to run it after its terminal goes away.
-# SPAN_MAX: a session's processes can linger long after it logs out, so its
-# removal can come much later; past this, the logout is treated as over.
 #
 # The margins are generous on purpose. Too wide, and a tab you closed yourself
 # just before logging out shows up as a ↻ row you can dismiss. Too narrow, and
 # a session the logout closed is missing from the list.
 LEAD = 30
 TAIL = 10
-SPAN_MAX = 30
-REASONS = ("restart", "logout")
 _UNDECIDED = object()
+
+
+@dataclass(frozen=True)
+class Reason:
+    """Something that closes every Claude it catches, and how the picker says it."""
+
+    key: str  # Event.why, and "why" in restored.json
+    header: str  # under the title: "↻ 2 sessions were open when {header}"
+    row: str  # a ↻ row's "when": "Mon {row}"
+    rank: int  # when one event closed a Claude that another did too, the lowest wins
+
+
+# Every platform's reasons. A platform adds its own in Platform.reasons.
+SHARED = (
+    Reason("restart", "your computer restarted", "restart", 10),
+    Reason("logout", "you logged out", "logout", 20),
+)
+
+
+def unknown(key: str) -> Reason:
+    """A reason no platform here gives (one from another version's
+    restored.json, say): kept, ranked last, and said plainly."""
+    return Reason(key, "Claude was stopped", "stop", 1_000_000)
+
+
+def reasons(extra: Iterable[Reason] = ()) -> tuple[Reason, ...]:
+    """The shared reasons and a platform's own, in the order they win."""
+    return tuple(sorted((*SHARED, *extra), key=lambda r: r.rank))
 
 
 @dataclass(frozen=True)
 class Closed:
     at: float  # when the restart or logout happened
-    why: str  # "restart" or "logout"
-
-
-@dataclass(frozen=True)
-class _Event:
-    start: float
-    end: float
-    why: str
-
-    def closed(self, ended: float) -> bool:
-        return self.start - LEAD <= ended <= self.end + TAIL
+    why: str  # a Reason's key
 
 
 @dataclass(frozen=True)
 class Group:
     sessions: dict[str, Closed]
 
-    @property
-    def latest(self) -> Closed | None:
-        return max(self.sessions.values(), key=lambda c: c.at, default=None)
-
-    @property
-    def reasons(self) -> set[str]:
-        return {c.why for c in self.sessions.values()}
-
     def __len__(self) -> int:
         return len(self.sessions)
 
 
-def current_boot_id() -> str:
-    with open("/proc/sys/kernel/random/boot_id") as f:
-        return f.read().strip()
+def normalize_boot_id(boot_id: str) -> str:
+    """Boot IDs without dashes, in lower case: Linux's /proc has dashes, journalctl doesn't."""
+    return boot_id.replace("-", "").lower()
 
 
-def boot_start(now: float) -> float:
-    with open("/proc/uptime") as f:
-        return now - float(f.read().split()[0])
-
-
-def is_claude(argv: list[str]) -> bool:
-    """Whether a command line is Claude Code's: the native `claude` binary, or
-    the npm package run by node (whose process name is just "MainThread")."""
-    if not argv:
-        return False
-    if os.path.basename(argv[0]) == "claude":
-        return True
-    return os.path.basename(argv[0]).startswith("node") and any(
-        os.path.basename(a) == "claude" or "/@anthropic-ai/claude-code/" in a for a in argv[1:3]
-    )
-
-
-def claude_running(pid: object) -> bool:
-    if not isinstance(pid, int):
-        return False
-    try:
-        with open(f"/proc/{pid}/cmdline", "rb") as f:
-            argv = f.read().decode(errors="replace").split("\0")
-    except OSError:
-        return False
-    return is_claude([a for a in argv if a])
-
-
-def current_user() -> str:
-    return pwd.getpwuid(os.getuid()).pw_name
+def closes(event: Event, ended: float) -> bool:
+    """Whether a Claude that ended at `ended` was closed by `event`."""
+    return event.start - LEAD <= ended <= event.end + TAIL
 
 
 def _load(path: Path) -> dict | None:
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             value = json.load(f)
     except (OSError, ValueError):
         return None
@@ -150,32 +133,46 @@ def _load(path: Path) -> dict | None:
 
 
 def _remove(path: Path) -> None:
-    with contextlib.suppress(OSError):
-        path.unlink()
+    # On Windows a file another process has open (the hook writing it, an
+    # antivirus scan) can't be removed for a moment.
+    for _ in range(5):
+        try:
+            path.unlink()
+            return
+        except PermissionError:
+            time.sleep(0.01)
+        except OSError:
+            return
 
 
 def _parse_group(data: dict) -> dict[str, Closed]:
     group = {}
     for session_id, value in data.items():
-        if isinstance(value, dict) and isinstance(value.get("at"), (int, float)) and value.get("why") in REASONS:
+        why = value.get("why") if isinstance(value, dict) else None
+        if isinstance(why, str) and why and isinstance(value.get("at"), (int, float)):
             group[session_id] = Closed(float(value["at"]), value["why"])
     return group
 
 
 @dataclass(frozen=True)
-class _Record:
+class Record:
     session_id: str
     pid: object
     boot_id: str
     login_session: str
     started: float
     ended: float | None
+    # When the process started, in the platform's own units, matched exactly
+    # (Linux: clock ticks since boot). Optional: older hooks and Windows'
+    # don't write it.
+    start_ticks: int | None = None
 
     @classmethod
-    def load(cls, path: Path) -> _Record | None:
+    def load(cls, path: Path) -> Record | None:
         data = _load(path) or {}
         try:
             ended = data.get("ended_at")
+            ticks = data.get("start_ticks")
             return cls(
                 session_id=str(data["session_id"]),
                 pid=data.get("pid"),
@@ -183,6 +180,7 @@ class _Record:
                 login_session=str(data.get("login_session", "")),
                 started=float(data["started_at"]),
                 ended=None if ended is None else float(ended),
+                start_ticks=ticks if isinstance(ticks, int) and not isinstance(ticks, bool) else None,
             )
         except (KeyError, TypeError, ValueError):
             return None
@@ -192,28 +190,51 @@ class RestartState:
     def __init__(
         self,
         paths: Paths,
-        journal: Journal | None = None,
+        events: EventSource | None = None,
+        host: Host | None = None,
         now: Callable[[], float] = time.time,
-        boot_id: Callable[[], str] = current_boot_id,
-        boot_start: Callable[[float], float] = boot_start,
-        running: Callable[[object], bool] = claude_running,
-        user: Callable[[], str] = current_user,
+        reasons: Sequence[Reason] | None = None,
     ):
         self.paths = paths
-        self.journal = journal or Journal()
+        self._events_source = events
+        self._host = host
         self._now = now
-        self._boot_id = boot_id
-        self._boot_start = boot_start
-        self._running = running
-        self._user = user
+        self._reasons = reasons
+        self._boot_started: float | None = None
+
+    @property
+    def host(self) -> Host:
+        if self._host is None:
+            from .platforms import current
+
+            self._host = current().host
+        return self._host
+
+    @property
+    def events(self) -> EventSource:
+        """Made on first use: most runs only load the group."""
+        if self._events_source is None:
+            from .platforms import current
+
+            self._events_source = current().events()
+        return self._events_source
+
+    @property
+    def ranks(self) -> dict[str, int]:
+        """Each reason's rank, the platform's own included. Only sorting asks."""
+        if self._reasons is None:
+            from .platforms import current
+
+            self._reasons = reasons(current().reasons)
+        return {r.key: r.rank for r in self._reasons}
 
     @contextmanager
-    def _locked(self) -> Iterator[dict[str, Closed]]:
-        """The group, loaded under a lock and saved afterwards if it changed.
-        Restored tabs can all open the picker at once."""
+    def _locked(self, decided: Iterable[Path] = ()) -> Iterator[dict[str, Closed]]:
+        """The group, loaded under a lock and saved afterwards if it changed;
+        then the `decided` records are deleted. Restored tabs can all open
+        the picker at once."""
         self.paths.open_records.mkdir(parents=True, exist_ok=True)
-        with open(self.paths.lock, "w") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
+        with self.host.lock(self.paths.lock):
             loaded = _parse_group(_load(self.paths.restored) or {})
             group = dict(loaded)
             yield group
@@ -222,36 +243,44 @@ class RestartState:
             if kept != loaded or not self.paths.restored.exists():
                 data = {k: {"at": c.at, "why": c.why} for k, c in kept.items()}
                 tmp = self.paths.restored.with_suffix(".tmp")
-                tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+                tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="")
                 os.replace(tmp, self.paths.restored)
+            for path in decided:
+                _remove(path)
 
     def load(self) -> Group:
         return Group(_parse_group(_load(self.paths.restored) or {}))
 
     def sort(self) -> Group:
-        with self._locked() as group:
-            self._sort_records(group)
+        decided: list[Path] = []  # deleted once the group is saved
+        with self._locked(decided) as group:
+            self._sort_records(group, decided)
         return self.load()
 
-    def _sort_records(self, group: dict[str, Closed]) -> None:
+    def _sort_records(self, group: dict[str, Closed], decided: list[Path]) -> None:
         now = self._now()
-        this_boot = normalize_boot_id(self._boot_id())
+        self._boot_started = None
+        this_boot = normalize_boot_id(self.host.boot_id())
         for path in sorted(self.paths.open_records.iterdir()):
             if not _RECORD_NAME.fullmatch(path.name):
                 continue  # a record being written
-            record = _Record.load(path)
+            record = Record.load(path)
             if record is None:
-                _remove(path)
+                decided.append(path)
                 continue
             same_boot = record.boot_id == this_boot
-            if same_boot and record.ended is None and self._running(record.pid):
+            if (
+                same_boot
+                and record.ended is None
+                and self.host.claude_running(record.pid, record.started, record.start_ticks)
+            ):
                 group.pop(record.session_id, None)  # it's open again
                 continue
             closed = self._closed_by(record, same_boot, now)
             if closed is _UNDECIDED:
                 if now - record.started > KEEP:
-                    _remove(path)
-                continue  # decide once the journal can be read
+                    decided.append(path)
+                continue  # decide once the system can be asked
             if (
                 isinstance(closed, Closed)
                 and now - closed.at < KEEP
@@ -259,13 +288,21 @@ class RestartState:
                 and (record.session_id not in group or group[record.session_id].at < closed.at)
             ):
                 group[record.session_id] = closed
-            _remove(path)
+            decided.append(path)
 
-    def _closed_by(self, record: _Record, same_boot: bool, now: float) -> Closed | None | object:
+    def _boot_start(self, now: float) -> float:
+        """When this boot began, read once per sort: it's worked out from the
+        uptime, which moves on between reads, and the sessions one restart
+        closed should share one time."""
+        if self._boot_started is None:
+            self._boot_started = self.host.boot_start(now)
+        return self._boot_started
+
+    def _closed_by(self, record: Record, same_boot: bool, now: float) -> Closed | None | object:
         """The restart or logout that closed the record's Claude, None if
-        neither did, or _UNDECIDED if the journal can't say yet."""
-        events = self._events(record, same_boot)
-        if events is None:  # the journal can't be read
+        neither did, or _UNDECIDED if the system can't say yet."""
+        events = self.events.events(record, same_boot)
+        if events is None:  # the system can't be asked
             if record.ended is None and not same_boot:
                 return Closed(self._boot_start(now), "restart")  # it was open when that boot ended
             return _UNDECIDED
@@ -274,32 +311,15 @@ class RestartState:
             first = min(after, key=lambda e: e.start, default=None)
             if first:
                 return Closed(first.start, first.why)
-            if not same_boot:  # it was open when that boot ended, though the journal no longer says when
+            if not same_boot:  # it was open when that boot ended, though the system no longer says when
                 return Closed(self._boot_start(now), "restart")
             return None  # it crashed, or was killed
-        matches = [e for e in events if e.closed(record.ended)]
+        matches = [e for e in events if closes(e, record.ended)]
         if not matches:
             return None
-        best = min(matches, key=lambda e: (e.why != "restart", e.start))
+        ranks = self.ranks
+        best = min(matches, key=lambda e: (ranks.get(e.why, unknown(e.why).rank), e.start))
         return Closed(best.start, best.why)
-
-    def _events(self, record: _Record, same_boot: bool) -> list[_Event] | None:
-        """The restarts and logouts that could have closed the record's Claude,
-        in its boot, or None if the journal can't be read."""
-        logouts = self.journal.logouts(record.boot_id, self._user())
-        if logouts is None:
-            return None
-        events = [
-            _Event(e.at, min(e.removed, e.at + SPAN_MAX), "logout")
-            for e in logouts
-            if e.graphical or (record.login_session and e.session_id == record.login_session)
-        ]
-        events += [_Event(t, t, "logout") for t in self.journal.desktop_ends(record.boot_id)]
-        if not same_boot:
-            restart = self.journal.restart_time(record.boot_id)
-            if restart is not None:
-                events.append(_Event(restart, self.journal.last_entry(record.boot_id) or restart, "restart"))
-        return events
 
     def drop(self, session_ids: Iterable[str]) -> Group:
         with self._locked() as group:

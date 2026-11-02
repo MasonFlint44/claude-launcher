@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import signal
 
 import pytest
 
@@ -22,6 +23,10 @@ HOOK = REPO_DIR / "bin" / "claude-session-hook"
 FAKE_CLAUDE = """#!/usr/bin/env bash
 printf '%s\\t%s\\n' "$PWD" "$*" >> "$CLAUDE_CALLS"
 echo "fake claude in $PWD"
+if [[ -n ${CLAUDE_HOLD:-} ]]; then  # stay until that file exists, like a Claude in use
+  trap 'echo "claude got ctrl-c"' INT
+  until [[ -e $CLAUDE_HOLD ]]; do sleep 0.05; done
+fi
 sleep 0.3
 """
 
@@ -54,10 +59,13 @@ def launch(claude_home, tmp_path):
     }
     terms = []
 
-    def start(*args: str) -> Term:
-        t = Term([str(LAUNCHER), *args], env, cwd=str(claude_home.home))
+    def term(argv: list[str], **more_env: str) -> Term:
+        t = Term(argv, {**env, **more_env}, cwd=str(claude_home.home))
         terms.append(t)
         return t
+
+    def start(*args: str, **more_env: str) -> Term:
+        return term([str(LAUNCHER), *args], **more_env)
 
     def claude_calls() -> list[tuple[str, str]]:
         if not calls.exists():
@@ -70,6 +78,7 @@ def launch(claude_home, tmp_path):
             return 0
         return sum(f" ui {action}" in line for line in core_calls.read_text().splitlines())
 
+    start.term = term
     start.calls = claude_calls
     start.core_runs = core_runs
     start.runtime = runtime
@@ -106,6 +115,32 @@ def test_hint_comes_back_after_a_second(launch):
     t.send("esc")
     t.wait_for("esc again to quit")
     t.wait_for("enter open", timeout=3)  # put back through fzf's --listen socket
+
+
+PORT_LAUNCHER = """\
+import dataclasses, sys
+sys.path.insert(0, {src!r})
+from claude_launcher.platforms import linux
+plain = linux.platform
+linux.platform = lambda: dataclasses.replace(plain(), fzf_listen="port")
+from claude_launcher.launcher import main
+sys.exit(main(sys.argv[1:]))
+"""
+
+
+def test_hint_comes_back_through_a_port(launch, tmp_path):
+    # Windows' way: fzf on a localhost port with a key, as Linux's platform.
+    script = tmp_path / "port-launcher"
+    script.write_text(PORT_LAUNCHER.format(src=str(REPO_DIR / "src")))
+    t = launch.term(["python3", str(script)])
+    t.wait_for("Select a project directory for Claude")
+    t.send("esc")
+    t.wait_for("esc again to quit")
+    t.wait_for("enter open", timeout=3)
+    t.send("esc")
+    t.wait_for("esc again to quit")
+    t.send("esc")
+    assert t.wait_exit() == 0
 
 
 def test_typed_path(launch, claude_home):
@@ -259,6 +294,33 @@ def test_enter_shows_a_directorys_sessions_and_enter_again_starts_a_new_one(laun
     t.send("enter")
     t.wait_for("Select a project directory for Claude")
     assert launch.calls() == [(str(proj), "")]
+
+
+def test_each_view_shows_its_own_header_row(launch, claude_home):
+    # fzf 0.70+ with reload-sync could keep the old view's header row; it
+    # depends on timing, so switch a few times.
+    project_with_a_session(claude_home, claude_home.paths.home)
+    t = launch()
+    t.wait_for("Select a project directory for Claude")
+    for _ in range(3):
+        t.send("enter")
+        t.wait_for("an earlier session")
+        t.wait_for("Last active")
+        assert "Last used" not in t.text()
+        t.send("esc")
+        t.wait_for("Last used")
+        assert "Last active" not in t.text()
+
+
+def test_the_users_fzf_defaults_dont_reach_the_picker(launch, claude_home, tmp_path):
+    # Each would change the picker: a short box, opening ~ unasked, other matching.
+    project_with_a_session(claude_home, tmp_path / "project")
+    t = launch(FZF_DEFAULT_OPTS="--height=5 --border --select-1 --exact")
+    t.wait_for("Select a project directory for Claude")
+    assert "╭" not in t.text()  # no --border
+    t.type("prjct")  # fuzzy, not --exact
+    t.wait_for("1/2")
+    assert launch.calls() == []
 
 
 def test_two_enters_at_once_start_a_new_session(launch, claude_home, tmp_path):
@@ -421,3 +483,60 @@ def test_tab_titled_while_picking_and_put_back(launch):
     first = raw.find(named)
     again = raw.find(named, raw.find(b"fake claude in"))
     assert 0 <= pushed < first < again < popped
+
+
+def test_ctrl_c_belongs_to_claude(launch, tmp_path):
+    hold = tmp_path / "hold"
+    t = launch(CLAUDE_HOLD=str(hold))
+    t.wait_for("Select a project directory for Claude")
+    t.send("enter")
+    t.wait_for("fake claude in")
+    t.send("ctrl-c")
+    t.wait_for("claude got ctrl-c")
+    hold.touch()
+    t.wait_for("Select a project directory for Claude")  # the launcher is still there
+    quit_with_esc(t)
+
+
+def test_hang_up_leaves_the_terminal_alone(launch):
+    t = launch()
+    t.wait_for("Select a project directory for Claude")
+    os.killpg(t.pid, signal.SIGHUP)  # as the kernel does when the terminal goes: fzf too
+    assert t.wait_exit() == 129
+    assert b"\x1b]111" not in bytes(t.raw)  # no colors put back
+    assert list(launch.runtime.iterdir()) == []
+
+
+def test_hang_up_while_claude_runs_waits_for_claude(launch, tmp_path):
+    hold = tmp_path / "hold"
+    t = launch(CLAUDE_HOLD=str(hold))
+    t.wait_for("Select a project directory for Claude")
+    t.send("enter")
+    t.wait_for("fake claude in")
+    os.kill(t.pid, signal.SIGHUP)  # the launcher alone: its Claude is still running
+    t.settle(0.5)
+    assert t.status is None
+    hold.touch()
+    assert t.wait_exit() == 129
+
+
+def test_term_puts_the_colors_back(launch):
+    t = launch()
+    t.wait_for("Select a project directory for Claude")
+    os.killpg(t.pid, signal.SIGTERM)
+    assert t.wait_exit() == 143
+    raw = bytes(t.raw)
+    assert 0 <= raw.find(b"\x1b]11;#1f1e1d") < raw.rfind(b"\x1b]111\x1b\\")
+    assert list(launch.runtime.iterdir()) == []
+
+
+def test_fzf_killed_ends_the_launcher(launch, claude_home, tmp_path):
+    # An fzf killed by a signal isn't a pick: nothing may start in ~.
+    killer = tmp_path / "killer"
+    killer.mkdir()
+    fzf = killer / "fzf"
+    fzf.write_text(f'#!/bin/sh\n[ "$1" = --version ] && exec {shutil.which("fzf")} "$@"\nkill -KILL $$\n')
+    fzf.chmod(0o755)
+    t = launch(PATH=f"{killer}:{tmp_path / 'bin'}:/usr/local/bin:/usr/bin:/bin")
+    assert t.wait_exit() == 128 + signal.SIGKILL
+    assert launch.calls() == []

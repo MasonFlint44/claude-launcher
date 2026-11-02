@@ -10,33 +10,47 @@ left alone.
 
 from __future__ import annotations
 
-import hashlib
-import io
 import os
 import platform
 import re
 import shutil
 import subprocess
-import tarfile
-import tempfile
-import urllib.request
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
+from .paths import REPO_DIR
+
+# Fetching's modules (urllib, hashlib, tarfile, zipfile) are imported where
+# they're used: the picker imports this module on every key press.
+
 MIN_VERSION = (0, 67, 0)
 PINNED = "0.74.5"
-# fzf_0.74.5_checksums.txt from the release, by `uname -m`.
-PINNED_BUILDS = {
-    "x86_64": ("linux_amd64", "d47d7f882972c7d674dbbba998ffa4116e68379616ffac7695d0671e9a722c5f"),
-    "aarch64": ("linux_arm64", "cf058001da21724a469b714a29cf4aab9cbe860d218a0d6c1b5b661efad7784c"),
-    "armv7l": ("linux_armv7", "dbf45f895a6b272725679b0aa46b5fc4683cc869ec89bbbd1c3a661304cecc34"),
+# The release's own checksums file, as it is. To move the pin, add the new
+# release's file and change PINNED.
+CHECKSUMS = REPO_DIR / "share" / "fzf" / f"fzf_{PINNED}_checksums.txt"
+# Your fzf defaults are for fzf in your shell; the picker is laid out and
+# keyed on its own, and options it doesn't set (--height, --exact, --bind ...)
+# would change what it shows or which row Enter takes.
+USER_DEFAULTS = ("FZF_DEFAULT_OPTS", "FZF_DEFAULT_OPTS_FILE")
+# fzf's names for processors, by what platform.machine() says on each OS.
+ARCHES = {
+    "x86_64": "amd64",
+    "amd64": "amd64",
+    "aarch64": "arm64",
+    "arm64": "arm64",
+    "armv7l": "armv7",
+    "armv6l": "armv6",
+    "ppc64le": "ppc64le",
+    "riscv64": "riscv64",
+    "s390x": "s390x",
+    "loongarch64": "loong64",
 }
 _RELEASES = "https://github.com/junegunn/fzf/releases/download"
 
 
-def private_dir(env: Mapping[str, str] = os.environ) -> Path:
-    data = env.get("XDG_DATA_HOME") or os.path.join(env.get("HOME") or str(Path.home()), ".local", "share")
-    return Path(data) / "claude-launcher" / "bin"
+def private_dir(data_dir: Path) -> Path:
+    """Where the fetched fzf goes, in the launcher's own data directory."""
+    return data_dir / "bin"
 
 
 def version(path: str) -> tuple[int, ...] | None:
@@ -52,19 +66,17 @@ def show(v: tuple[int, ...] | None) -> str:
     return ".".join(map(str, v)) if v else "none"
 
 
-def candidates(env: Mapping[str, str] = os.environ) -> list[str]:
+def candidates(own_dir: Path, env: Mapping[str, str] = os.environ) -> list[str]:
     """The system's fzf first, then the launcher's own copy."""
     found = [p for p in (shutil.which("fzf", path=env.get("PATH")),) if p]
-    own = private_dir(env) / "fzf"
-    if os.access(own, os.X_OK):
-        found.append(str(own))
+    found += [str(own) for own in (own_dir / "fzf", own_dir / "fzf.exe") if own.is_file() and os.access(own, os.X_OK)]
     return found
 
 
-def find(env: Mapping[str, str] = os.environ) -> tuple[str | None, tuple[int, ...] | None]:
+def find(own_dir: Path, env: Mapping[str, str] = os.environ) -> tuple[str | None, tuple[int, ...] | None]:
     """The fzf to use, and its version; or (None, the newest version seen)."""
     newest = None
-    for path in candidates(env):
+    for path in candidates(own_dir, env):
         v = version(path)
         if v and v >= MIN_VERSION:
             return path, v
@@ -72,35 +84,80 @@ def find(env: Mapping[str, str] = os.environ) -> tuple[str | None, tuple[int, ..
     return None, newest
 
 
+def checksums(path: Path | None = None) -> dict[str, str]:
+    """{file name: sha256} from the pinned release's checksums file."""
+    found = {}
+    for line in (path or CHECKSUMS).read_text(encoding="utf-8").splitlines():
+        parts = line.split()
+        if len(parts) == 2 and len(parts[0]) == 64:
+            found[parts[1]] = parts[0]
+    return found
+
+
+def build_name(system: str, machine: str) -> str | None:
+    """The release's file for this OS (fzf's name for it, like "linux") and
+    processor, or None if there's no build for it."""
+    arch = ARCHES.get(machine.lower())
+    kind = "zip" if system == "windows" else "tar.gz"
+    name = f"fzf-{PINNED}-{system}_{arch}.{kind}"
+    return name if arch and name in checksums() else None
+
+
 def fetch(
     dest: Path,
+    system: str = "linux",
     machine: str | None = None,
     download: Callable[[str], bytes] | None = None,
 ) -> Path:
     """Download the pinned fzf for this machine into `dest`, checking it
     against the release's checksum before it's used. Returns its path."""
+    import hashlib
+    import tempfile
+
     machine = machine or platform.machine()
-    if machine not in PINNED_BUILDS:
-        raise RuntimeError(f"no fzf {PINNED} build for {machine}; install fzf 0.67 or newer yourself")
-    build, sha256 = PINNED_BUILDS[machine]
-    name = f"fzf-{PINNED}-{build}.tar.gz"
+    name = build_name(system, machine)
+    if name is None:
+        raise RuntimeError(f"no fzf {PINNED} build for {system} on {machine}; install fzf 0.67 or newer yourself")
     data = (download or _download)(f"{_RELEASES}/v{PINNED}/{name}")
-    if hashlib.sha256(data).hexdigest() != sha256:
+    if hashlib.sha256(data).hexdigest() != checksums()[name]:
         raise RuntimeError(f"{name} didn't match its checksum; not using it")
-    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
-        member = tar.getmember("fzf")
-        if not member.isfile():
-            raise RuntimeError(f"{name} has no fzf program in it")
-        binary = tar.extractfile(member).read()  # type: ignore[union-attr]
+    program = "fzf.exe" if name.endswith(".zip") else "fzf"
+    binary = _unpack(name, data, program)
     dest.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=dest, prefix=".fzf.")
     with os.fdopen(fd, "wb") as f:
         f.write(binary)
     os.chmod(tmp, 0o755)
-    os.replace(tmp, dest / "fzf")
-    return dest / "fzf"
+    os.replace(tmp, dest / program)
+    return dest / program
+
+
+def _unpack(name: str, data: bytes, program: str) -> bytes:
+    """The fzf program from a release archive: a .tar.gz, or Windows' .zip."""
+    import io
+    import tarfile
+    import zipfile
+
+    try:
+        if name.endswith(".zip"):
+            with zipfile.ZipFile(io.BytesIO(data)) as z:
+                return z.read(program)
+        with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
+            member = tar.getmember(program)
+            if member.isfile():
+                return tar.extractfile(member).read()  # type: ignore[union-attr]
+    except KeyError:
+        pass
+    raise RuntimeError(f"{name} has no {program} program in it")
 
 
 def _download(url: str) -> bytes:
+    import urllib.request
+
     with urllib.request.urlopen(url, timeout=60) as response:
         return response.read()
+
+
+def environ(env: Mapping[str, str] = os.environ) -> dict[str, str]:
+    """`env` without the user's fzf defaults (`USER_DEFAULTS`)."""
+    return {k: v for k, v in env.items() if k not in USER_DEFAULTS}

@@ -7,10 +7,12 @@ import subprocess
 
 import pytest
 
-from claude_launcher.install import APP_ID, ICON_SIZES
 from claude_launcher.paths import REPO_DIR
+from claude_launcher.platforms.linux.desktop import APP_ID, ICON_SIZES
+from conftest import desktop_only
 
-pytestmark = pytest.mark.skipif(not shutil.which("fzf"), reason="needs fzf")
+# In WSL the installer would write to the real Windows Terminal's settings.
+pytestmark = [pytest.mark.skipif(not shutil.which("fzf"), reason="needs fzf"), desktop_only]
 
 
 def run(home, *args):
@@ -90,3 +92,43 @@ def test_uninstall_goes_on_past_a_failed_step(tmp_path):
     assert "could not remove every desktop entry" in done.stderr
     assert "hooks" not in json.loads(settings.read_text())
     assert not (home / ".local" / "bin" / "claude-session-hook").exists()
+
+
+def test_help_lists_the_platforms_terminals(tmp_path):
+    from claude_launcher.platforms.linux.terminals import TERMINALS
+
+    done = run(tmp_path, "--help")
+    assert done.returncode == 0
+    text = " ".join(done.stdout.split())
+    assert "One of: " + " ".join(TERMINALS) + "." in text
+    assert max(len(line) for line in done.stdout.splitlines()) <= 80
+
+
+def test_uninstall_says_so_when_python_fails(tmp_path):
+    home = tmp_path / "home"
+    stubs = home / "stubs"
+    stubs.mkdir(parents=True)
+    # A python3 that passes the version check, then fails as a crash would.
+    real = shutil.which("python3")
+    (stubs / "python3").write_text(
+        f'#!/bin/sh\n[ "$1" = -c ] && exec {real} "$@"\necho "Traceback (most recent call last):" >&2\nexit 1\n'
+    )
+    (stubs / "python3").chmod(0o755)
+    env = {"HOME": str(home), "PATH": f"{stubs}:/usr/bin:/bin", "LANG": "C.UTF-8"}
+    done = subprocess.run([str(REPO_DIR / "install.sh"), "--uninstall"], env=env, capture_output=True, text=True)
+    assert done.returncode == 0
+    assert "the uninstall stopped partway" in done.stderr
+
+
+@pytest.mark.parametrize("name", ["nope.svg", "no/such/dir.svg"])
+def test_an_icon_that_isnt_there(tmp_path, name):
+    done = run(tmp_path, "--icon", str(tmp_path / name))
+    assert done.returncode == 1
+    assert done.stderr.strip().endswith(f"not a file: {tmp_path / name}")
+    assert "realpath" not in done.stderr
+    assert not (tmp_path / ".local").exists()  # stopped before any step
+
+
+def test_help_lists_its_own_options(tmp_path):
+    done = run(tmp_path, "--help")
+    assert "install.sh -h|--help" in done.stdout

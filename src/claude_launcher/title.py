@@ -23,5 +23,12 @@ def set_name(name: str = NAME) -> bytes:
     return f"\x1b]0;{name}\x1b\\".encode()
 
 
-def enabled(env=os.environ) -> bool:
-    return env.get("TERM", "") not in ("", "dumb")
+def dumb(env=os.environ, windows: bool = os.name == "nt") -> bool:
+    """A terminal that takes no escapes. Windows' consoles never set TERM, and
+    take them; elsewhere an unset TERM means none."""
+    term = env.get("TERM", "")
+    return term == "dumb" or (not term and not windows)
+
+
+def enabled(env=os.environ, windows: bool = os.name == "nt") -> bool:
+    return not dumb(env, windows)

@@ -33,30 +33,53 @@ from __future__ import annotations
 import contextlib
 import json
 import os
-import shlex
 import socket
 import subprocess
 import sys
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from . import fzf, logs, text
+from . import fzf, logs, pathtext, text
 from .logs import is_session_id
-from .paths import CORE, Paths
-from .restart import Group, RestartState
+from .paths import Paths
+from .pathtext import (
+    below,
+    expand,
+    first_part,
+    is_inside,
+    split_path,
+    typed_path_like,
+    up_a_level,
+    with_sep,
+    without_sep,
+)
+from .restart import SHARED, Group, Reason, RestartState, reasons, unknown
 from .text import color, pad, truncate, truncate_left
 from .text import width as text_width
 from .theme import Theme
+
+if TYPE_CHECKING:
+    from .platforms import Platform
 
 MAX_WIDTH = 120  # widest the picker gets, in columns
 DIR_COLUMN = 50  # the directory list's first column
 DOUBLE_PRESS_MS = 1000
 HINT_GAP = 8  # the least space between the title and the hints beside it
+SAME_EVENT = 1.0  # seconds between closings counted as one restart or logout
+NUDGE_LINES = 3  # events beyond these share one "more" line
 
 # How fzf reads and matches rows, the same in the picker and in `_nth_match`.
 MATCHING = ["--ansi", "--tiebreak=index", "--delimiter=\t", "--with-nth=2.."]
 # The field fzf matches, after the key: the path, or a session's directory and title.
+
+# How a view switch (or a dismiss) reloads: not reload-sync, which in fzf
+# 0.70 and newer can keep the old view's header row ("Directory  Last used"
+# over a Sessions view) when the new rows come in more than one read. Its
+# rows show no gap either way. Typing in path mode keeps reload-sync: the
+# list's header row is the same there.
+RELOAD_VIEW = "reload"
 NTH = {"projects": "1", "sessions": "2"}
 
 PROJECTS_PROMPT = "project> "
@@ -77,11 +100,18 @@ class State:
     cols: int = 80
     width: int = 80
     key: list | None = None  # [key, time in ms] of a first press waiting for its second
-    restored: list = field(default_factory=lambda: [0, 0.0, []])  # [count, latest, reasons]
+    restored: list = field(default_factory=list)  # [[why, at, count]] per restart or logout, newest first
     has_group_rows: bool = False  # the Sessions view shows ↻ rows
     back: list | None = None  # [query, cursor] the directory list had when left
     pending_pos: int = 0  # the cursor to put back once the list's rows are in
     fzf: str = "fzf"  # the fzf program the picker runs
+    # How key bindings run the core, from the platform when the picker starts.
+    shell: str = ""  # fzf's --with-shell
+    core: str = ""  # the core's command line, with --run DIR
+    listen: str = ""  # fzf's --listen: a socket path, or localhost:0 for a port
+    # What can close a ↻ session, the platform's own included, in the order
+    # they win: [[key, header, row, rank]] (restart.Reason).
+    reasons: list = field(default_factory=lambda: _reason_texts(SHARED))
 
 
 @dataclass
@@ -114,7 +144,6 @@ class Picker:
         theme: Theme | None = None,
         restart: RestartState | None = None,
         now=time.time,
-        core: Path = CORE,
         restore_later=None,
     ):
         self.run = Path(run_dir)
@@ -122,24 +151,43 @@ class Picker:
         self.theme = theme or Theme.load()
         self.restart = restart or RestartState(self.paths)
         self.now = now
-        self.core = shlex.join([str(core), "--run", str(self.run)])
         self._restore_later = restore_later or _restore_header_later
         self.state = self._load_state()
         self._scanned: tuple[list[logs.Session], dict[str, str]] | None = None
+
+    @property
+    def core(self) -> str:
+        """The core's command line, as key bindings run it."""
+        if not self.state.core:  # only before start(), which sets it
+            self._from_platform()
+        return self.state.core
+
+    def _from_platform(self, platform: Platform | None = None) -> None:
+        platform = platform or _platform()
+        self.state.shell = platform.fzf_shell
+        self.state.core = platform.core_command(["--run", str(self.run)])
+        self.state.listen = str(self._file("fzf.sock")) if platform.fzf_listen == "socket" else "localhost:0"
+        self.state.reasons = _reason_texts(reasons(platform.reasons))
+
+    def _reason(self, key: str) -> Reason:
+        return next((Reason(*r) for r in self.state.reasons if r[0] == key), None) or unknown(key)
 
     # --- State ---------------------------------------------------------------
 
     def _file(self, name: str) -> Path:
         return self.run / name
 
+    def _read(self, name: str) -> str:
+        return self._file(name).read_text(encoding="utf-8")
+
     def _write(self, name: str, content: str) -> None:
         tmp = self._file(name + ".tmp")
-        tmp.write_text(content)
+        tmp.write_text(content, encoding="utf-8", newline="")
         os.replace(tmp, self._file(name))
 
     def _load_state(self) -> State:
         try:
-            data = json.loads(self._file("state.json").read_text())
+            data = json.loads(self._file("state.json").read_text(encoding="utf-8"))
             return State(**{k: v for k, v in data.items() if k in State.__dataclass_fields__})
         except (OSError, ValueError, TypeError):
             return State()
@@ -217,27 +265,31 @@ class Picker:
         lines = [title + " " * (room - text_width(title) - text_width(joined(top))) + joined(top) if top else title]
         return lines + [" " * max(0, room - text_width(line)) + line for line in below]
 
-    def _closed_by(self) -> str:
-        """What happened to the ↻ sessions, for the restart line."""
-        reasons = set(self.state.restored[2])
-        if reasons == {"restart"}:
-            return "open when your computer restarted"
-        if reasons == {"logout"}:
-            return "open when your session ended"
-        return "closed by a restart or logout"
-
-    def _nudge(self) -> str:
-        """The line under the title about sessions a restart or logout closed."""
+    def _nudge(self) -> list[str]:
+        """The lines under the title about sessions a restart or logout
+        closed: in the directory list, one per restart or logout, newest
+        first; in a Sessions view, what closed the ↻ rows it shows."""
         if self.state.view == "projects":
-            count, latest, _ = self.state.restored
-            if not count:
-                return ""
-            what = "1 session was" if count == 1 else f"{count} sessions were"
-            when = text.clock(latest, self.now())
-            return self._accent(f"↻ {what} {self._closed_by()} ({when})") + "   ctrl-s " + self._dim("to see them")
+            events = self.state.restored
+            lines = []
+            for why, at, count in events[: NUDGE_LINES if len(events) <= NUDGE_LINES else NUDGE_LINES - 1]:
+                what = "1 session was" if count == 1 else f"{count} sessions were"
+                said = self._reason(why).header
+                lines.append(self._accent(f"↻ {what} open when {said} ({text.clock(at, self.now())})"))
+            if len(events) > NUDGE_LINES:
+                more = sum(count for _, _, count in events[NUDGE_LINES - 1 :])
+                lines.append(self._accent(f"↻ {more} more from earlier"))
+            if lines:
+                lines[0] += "   ctrl-s " + self._dim("to see them")
+            return lines
         if self.state.has_group_rows:
-            return self._accent("↻") + " " + self._dim(self._closed_by())
-        return ""
+            shown = {r["closed"][0] for r in self._sessions() if r["group"] and r.get("closed")}
+            said = [r.header for r in sorted(map(self._reason, shown), key=lambda r: (r.rank, r.key))]
+            if not said:
+                return []
+            joined = said[0] if len(said) == 1 else ", ".join(said[:-1]) + " or " + said[-1]
+            return [self._accent("↻") + " " + self._dim("open when " + joined)]
+        return []
 
     def make_header(self, hints: list[str] | None = None) -> str:
         """The title with the key hints (see `_hint_lines`), then the restart
@@ -249,9 +301,7 @@ class Picker:
             usual = len(lines)
             lines = self._hint_lines(self._title(), [(h, True) for h in hints])
             lines += [" "] * (usual - len(lines))
-        nudge = self._nudge()
-        if nudge:
-            lines.append(nudge)
+        lines += self._nudge()
         lines.append(" ")
         return "\n".join(lines)
 
@@ -265,7 +315,7 @@ class Picker:
             if os.path.isdir(expand(typed) or ""):
                 title, path = "Directories in ", typed
             else:
-                title, path = "No such directory: ", typed.rstrip("/") or "/"
+                title, path = "No such directory: ", without_sep(typed)
         path = text.printable(path)
         return title + truncate_left(path, max(10, self.state.width - 3 - text_width(title))) if path else title
 
@@ -290,7 +340,7 @@ class Picker:
 
     def _projects(self) -> list[list]:
         try:
-            return json.loads(self._file("projects.json").read_text())
+            return json.loads(self._file("projects.json").read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return [[str(self.paths.home), 0.0]]
 
@@ -340,19 +390,17 @@ class Picker:
         parent_own, parent_inside = 0.0, none
         own: dict[str, float] = {}  # name: when Claude last ran in it
         inside: dict[str, tuple[float, str]] = {}  # name: (when, where) for the latest project inside it
-        prefix = parent.rstrip("/") + "/"
+        prefix = with_sep(parent)
         for directory, used in self._projects():
-            directory = os.path.normpath(directory)
-            if not used:
+            rest = below(directory, parent) if used else None
+            if rest is None:
                 continue
-            if directory == parent:
+            if not rest:
                 parent_own = max(parent_own, used)
-            if not directory.startswith(prefix) or directory == parent:
                 continue
-            rest = directory[len(prefix) :]
             if used > parent_inside[0]:
                 parent_inside = (used, rest)
-            name, _, deeper = rest.partition("/")
+            name, deeper = first_part(rest)
             if not deeper:
                 own[name] = max(own.get(name, 0.0), used)
             elif used > inside.get(name, none)[0]:
@@ -385,7 +433,11 @@ class Picker:
         if within is not None:
             sessions = [s for s in sessions if s.cwd and is_inside(s.cwd, within)]
         group = self.restart.load()
-        rows = [{**asdict(s), "group": _group_key(s.id, group, continued_from)} for s in sessions]
+        rows = []
+        for s in sessions:
+            key = _group_key(s.id, group, continued_from)
+            closed = group.sessions[key] if key else None
+            rows.append({**asdict(s), "group": key, "closed": [closed.why, closed.at] if closed else None})
         self._save_sessions(rows)
         return bool(rows)
 
@@ -405,25 +457,37 @@ class Picker:
 
     def _sessions(self) -> list[dict]:
         try:
-            return json.loads(self._file("sessions.json").read_text())
+            return json.loads(self._file("sessions.json").read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return []
 
     def sessions_rows(self) -> list[str]:
         """The Sessions view, header row first. A session whose directory isn't
-        here (deleted, or only inside a devcontainer) has it dimmed and marked."""
-        title_width = self.state.width - 42
+        here (deleted, or only inside a devcontainer) has it dimmed and marked.
+        The first column is a session's age, or for a ↻ session the day and
+        what closed it ("yesterday logout"), as wide as the rows need."""
         now = self.now()
-        out = ["\t" + self._dim("  " + pad("Last active", 11) + " " + pad("Directory", 24) + " Session")]
+        sessions = self._sessions()
+        whens = []
+        for r in sessions:
+            closed = r.get("closed") if r["group"] else None
+            whens.append(
+                _day(closed[1], now) + " " + self._reason(closed[0]).row if closed else text.age(r["active"], now)
+            )
+        grouped = any(r["group"] for r in sessions)
+        heading = "When" if grouped else "Last active"  # a ↻ row says when it closed, not when it was last used
+        column = max([len("Last active") + 1, *(text_width(w) for w in whens)])
+        title_width = self.state.width - 31 - column
+        out = ["\t" + self._dim("  " + pad(heading, column) + " " + pad("Directory", 24) + " Session")]
         if self.state.view == "directory":
             out.append(f"{NEW_SESSION}{self.state.dir}\t \t{self._accent('+ New session')}")
-        for r in self._sessions():
+        for r, when in zip(sessions, whens, strict=True):
             cwd = r["cwd"]
             missing = not os.path.isdir(cwd)
             note = " (missing)" if missing else ""
             directory = truncate_left(self._session_dir(cwd), 24 - len(note)) + note
             directory = pad(self._dim(directory) if missing else directory, 24)
-            when = pad(text.age(r["active"], now), 11)
+            when = pad(when, column)
             if r["group"]:
                 mark, when = self._accent("↻") + " ", self._accent(when)
             else:
@@ -440,10 +504,11 @@ class Picker:
         if self.state.view == "directory" and within:
             if is_inside(home, within):
                 return text.printable(self.paths.tilde(cwd))
-            return text.printable(os.path.relpath(cwd, os.path.dirname(within)))
-        if cwd == home:
+            rest, top = below(cwd, within), pathtext.name(within)
+            return text.printable(pathtext.join(top, rest))
+        if pathtext.same(cwd, home):
             return "~"
-        return text.printable(os.path.basename(cwd.rstrip("/")) or cwd)
+        return text.printable(pathtext.name(cwd))
 
     def rows(self, view: str | None = None, query: str | None = None) -> list[str]:
         view = view or self.state.view
@@ -483,7 +548,7 @@ class Picker:
         wait = "rebind(result)+" if self.state.pending_pos else ""
         nth = NTH["projects" if view == "projects" else "sessions"]
         return (
-            f"{wait}{query_action}+change-prompt({prompt})+change-nth({nth})+reload-sync({self.core} ui menu)+first"
+            f"{wait}{query_action}+change-prompt({prompt})+change-nth({nth})+{RELOAD_VIEW}({self.core} ui menu)+first"
             f"+change-header:{header}"
         )
 
@@ -492,16 +557,17 @@ class Picker:
         reopens the picker after a pick that didn't work out, without
         re-reading the logs."""
         if not again:
-            path, version = fzf.find()
+            platform = _platform()
+            path, version = fzf.find(fzf.private_dir(platform.data_dir(os.environ)))
             if path is None:
                 raise FzfTooOld(
                     f"claude-launcher needs fzf {fzf.show(fzf.MIN_VERSION)} or newer, and found "
-                    f"{fzf.show(version)}. Run install.sh in the claude-launcher repo to get one."
+                    f"{fzf.show(version)}. Run {_installer()} in the claude-launcher repo to get one."
                 )
-            for name in ("accept", "sessions.json"):
-                self._file(name).unlink(missing_ok=True)
+            self._file("sessions.json").unlink(missing_ok=True)
             group = self.restart.sort()
             self.state = State(restored=_restored(group), fzf=path)
+            self._from_platform(platform)
             self._build_projects()
         self.state.cols = cols
         self.state.width = min(cols, MAX_WIDTH)
@@ -522,12 +588,12 @@ class Picker:
             "--tabstop=1",  # the tab before a note shows as one space
             "--header-lines=1",
             "--header-first",
-            f"--header={self._file('header').read_text()}",
+            f"--header={self._read('header')}",
             f"--prompt={PROJECTS_PROMPT}",
             "--info=inline-right",
             f"--margin=0,{self.state.cols - self.state.width},0,0",
-            f"--listen={self._file('fzf.sock')}",
-            "--with-shell=bash -c",
+            f"--listen={self.state.listen}",
+            *([f"--with-shell={self.state.shell}"] if self.state.shell else []),
             f"--bind=change:transform:{c} ui change {{q}}",
             "--bind=start:unbind(result)",  # bound only while a cursor waits to be put back
             f"--bind=result:transform:{c} ui result {{1}}",
@@ -568,11 +634,11 @@ class Picker:
             rows = self.directories(query)
             key = _nth_match(self.state.fzf, [self._dir_row(d) for d in rows], query, _cursor())
             row = next((d for d in rows if d.path == key and not d.is_parent), None)
-            return f"change-query:{row.shown}/" if row else ""
+            return f"change-query:{with_sep(row.shown)}" if row else ""
         key = _nth_match(self.state.fzf, self.projects_rows(query)[1:], query, _cursor())
         if not key or not os.path.isdir(key):
             return ""
-        return f"change-query:{self.paths.tilde(key).rstrip('/')}/"
+        return f"change-query:{with_sep(self.paths.tilde(key))}"
 
     def on_sessions(self) -> str:
         """Ctrl-S: every session; from there, back to the directory list."""
@@ -624,13 +690,13 @@ class Picker:
         rows = self._sessions()
         for r in rows:
             if r["group"] and (keys is None or r["group"] in keys):
-                r["group"] = None
+                r["group"], r["closed"] = None, None
         self._save_sessions(rows)
         self.state.restored = _restored(group)
         self.state.key = None
         header = self._set_header()
         self._save_state()
-        return f"reload-sync({self.core} ui menu)+change-header:{header}"
+        return f"{RELOAD_VIEW}({self.core} ui menu)+change-header:{header}"
 
     def on_key(self, key: str, query: str) -> str:
         """Esc, Ctrl-C, Ctrl-D and Alt-X.
@@ -670,7 +736,7 @@ class Picker:
                 if self.state.view == "recent":
                     return self._dismiss(None)
                 return self._dismiss(sorted({r["group"] for r in self._sessions() if r["group"]}))
-            return f"{action}+change-header:{self._file('header').read_text()}"
+            return f"{action}+change-header:{self._read('header')}"
 
         self.state.key = [key, now_ms]
         self._save_state()
@@ -682,7 +748,7 @@ class Picker:
         """The header to put back after a first press, unless another key came since."""
         if self.state.key != token:
             return None
-        return self._file("header").read_text()
+        return self._file("header").read_text(encoding="utf-8")
 
     # --- After fzf exits -------------------------------------------------------
 
@@ -690,7 +756,7 @@ class Picker:
         """What Enter chose, or a message saying why nothing was."""
         pos, row = 1, ""
         try:
-            lines = self._file("accept").read_text().split("\n")
+            lines = self._file("accept").read_text(encoding="utf-8").split("\n")
             pos = max(1, int(lines[0]))
             row = lines[1]
         except (OSError, ValueError, IndexError):
@@ -736,15 +802,47 @@ class Picker:
         return f"Nothing matches: {query}"
 
 
+def _platform() -> Platform:
+    from .platforms import current
+
+    return current()
+
+
+def _installer(os_name: str = os.name) -> str:
+    """The installer to run again: native Windows has its own (WSL is Linux)."""
+    return "install.ps1" if os_name == "nt" else "install.sh"
+
+
+def _reason_texts(found: tuple[Reason, ...]) -> list:
+    return [[r.key, r.header, r.row, r.rank] for r in found]
+
+
 def _restored(group: Group) -> list:
-    latest = group.latest
-    return [len(group), latest.at if latest else 0.0, sorted(group.reasons)]
+    """The group by what closed it: [[why, at, count]], newest first. The
+    sessions one restart or logout closed share its time, or nearly: a time
+    worked out from the uptime moves a little between reads."""
+    events: list[list] = []
+    for c in sorted(group.sessions.values(), key=lambda c: c.at, reverse=True):
+        same = next((e for e in events if e[0] == c.why and e[1] - c.at <= SAME_EVENT), None)
+        if same:
+            same[2] += 1
+        else:
+            events.append([c.why, c.at, 1])
+    return events
 
 
-def is_inside(path: str, directory: str) -> bool:
-    """`path` is `directory` or somewhere inside it."""
-    path, directory = os.path.normpath(path), os.path.normpath(directory)
-    return path == directory or path.startswith(directory.rstrip("/") + "/")
+def _day(then: float, now: float) -> str:
+    """The day `then` was: today, yesterday, its weekday ("Mon") within the
+    week, else its date ("Oct 22"), as `text.clock` says it: a ↻ row can be
+    up to KEEP (a week) old, and a week ago has today's weekday."""
+    t, today = time.localtime(then), time.localtime(now)
+    if t[:3] == today[:3]:
+        return "today"
+    if t[:3] == time.localtime(time.mktime((*today[:2], today[2] - 1, 12, 0, 0, 0, 0, -1)))[:3]:
+        return "yesterday"
+    if now - then < 6 * 86400:
+        return time.strftime("%a", t)
+    return time.strftime("%b ", t) + str(t.tm_mday)
 
 
 def _action(name: str, arg: str) -> str:
@@ -753,39 +851,6 @@ def _action(name: str, arg: str) -> str:
         if c not in arg:
             return f"{name}{o}{arg}{c}"
     raise ValueError(f"no brackets for {arg!r}")
-
-
-def typed_path_like(query: str) -> bool:
-    return query.startswith(("/", "~"))
-
-
-def split_path(query: str) -> tuple[str, str]:
-    """A typed path split into the directory so far (ending in /) and the
-    start of a name in it. `~` and `~user` on their own are that home."""
-    if query.startswith("~") and "/" not in query:
-        return query + "/", ""
-    head, _, partial = query.rpartition("/")
-    return head + "/", partial
-
-
-def expand(typed: str) -> str | None:
-    """The directory a typed path names, or None for an unknown ~user."""
-    path = os.path.expanduser(typed)
-    return None if path.startswith("~") else os.path.normpath(path)
-
-
-def up_a_level(query: str) -> str:
-    """Esc in path mode: drop a half-typed name, else the last directory.
-    "" once there's nothing left above (~/, / or ~user)."""
-    head, partial = split_path(query)
-    if partial:
-        return head
-    if "/" not in query:  # ~ or ~user
-        return ""
-    above = head.rstrip("/")
-    if not above or above.startswith("~") and "/" not in above:
-        return ""
-    return above.rpartition("/")[0] + "/"
 
 
 def _is_dir(entry: os.DirEntry) -> bool:
@@ -831,21 +896,33 @@ def _nth_match(fzf_path: str, rows: list[str], query: str, pos: int, nth: str = 
     if not query:
         matched = rows
     else:
+        # Bytes: text mode would write \r\n on Windows, and fzf would keep the \r.
         done = subprocess.run(
             [fzf_path, f"--filter={query}", *MATCHING, f"--nth={nth}"],
-            input="".join(r + "\n" for r in rows),
+            input="".join(r + "\n" for r in rows).encode("utf-8", "surrogateescape"),
             capture_output=True,
-            text=True,
+            env=fzf.environ(),  # matching as the picker's fzf does
         )
-        matched = done.stdout.splitlines()
+        matched = [line for line in done.stdout.decode("utf-8", "surrogateescape").split("\n") if line]
     if len(matched) < pos:
         return ""
     return matched[pos - 1].split("\t", 1)[0]
 
 
 def _restore_header_later(run: Path, token: list) -> None:
-    """In a second, put the key hints back through fzf's --listen socket,
-    unless another key came first. fzf can't time anything itself."""
+    """In a second, put the key hints back through fzf's --listen address,
+    unless another key came first. fzf can't time anything itself, so this
+    runs on after the key press returns: forked where there's fork, else as a
+    detached core process (Windows)."""
+    if not hasattr(os, "fork"):
+        from .paths import CORE
+
+        flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        args = [sys.executable, str(CORE), "--run", str(run), "ui", "restore-header", json.dumps(token)]
+        subprocess.Popen(
+            args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=flags
+        )
+        return
     if os.fork():
         return
     try:
@@ -853,19 +930,35 @@ def _restore_header_later(run: Path, token: list) -> None:
         devnull = os.open(os.devnull, os.O_RDWR)
         for fd in (0, 1, 2):  # let fzf stop waiting for this command's output
             os.dup2(devnull, fd)
-        time.sleep(DOUBLE_PRESS_MS / 1000)
-        header = Picker(run).restore_header(token)
-        if header is not None:
-            send_action(run / "fzf.sock", f"change-header:{header}")
+        restore_header(run, token)
     finally:
         os._exit(0)
 
 
-def send_action(sock_path: Path, action: str) -> None:
+def restore_header(run: Path, token: list) -> None:
+    time.sleep(DOUBLE_PRESS_MS / 1000)
+    picker = Picker(run)
+    header = picker.restore_header(token)
+    if header is not None:
+        send_action(picker.state.listen or str(run / "fzf.sock"), f"change-header:{header}")
+
+
+def send_action(listen: str, action: str, env: dict[str, str] | os._Environ = os.environ) -> None:
+    """Send fzf an action through its --listen address: a Unix socket, or
+    localhost:0, whose port fzf gives its commands in FZF_PORT."""
     body = action.encode()
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+    key = env.get("FZF_API_KEY", "")
+    request = (
+        b"POST / HTTP/1.1\r\nHost: localhost\r\nx-api-key: %s\r\nContent-Length: %d\r\n\r\n" % (key.encode(), len(body))
+        + body
+    )
+    if listen.startswith("localhost:"):
+        s = socket.create_connection(("127.0.0.1", int(env.get("FZF_PORT", "0"))), timeout=2)
+    else:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         s.settimeout(2)
-        s.connect(str(sock_path))
-        s.sendall(b"POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: %d\r\n\r\n" % len(body) + body)
+        s.connect(listen)
+    with s:
+        s.sendall(request)
         with contextlib.suppress(OSError):
             s.recv(1024)

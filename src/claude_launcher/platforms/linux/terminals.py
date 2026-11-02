@@ -30,8 +30,8 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from .paths import THEME_FILE
-from .theme import Theme
+from ...paths import THEME_FILE
+from ...theme import Theme
 
 APP_ID = "io.github.masonflint44.ClaudeLauncher"
 PROFILE_NAME = "Claude Code"
