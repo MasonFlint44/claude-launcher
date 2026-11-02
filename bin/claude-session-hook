@@ -100,25 +100,28 @@ write() {  # atomically, so the launcher never reads half a record
   printf '%s\n' "$1" > "$record.tmp" && mv -f "$record.tmp" "$record"
 }
 
+old=
+[[ -f $record ]] && read -r old < "$record"
+mine=
+[[ $old == '{'*'}' && $old == *"\"session_id\":\"$session_id\""* ]] && mine=1
+
 case ${1:-} in
   start)
     # Another session's record under this pid: a Claude killed with no end
     # (a logout, say) whose pid came back before the launcher sorted it. Keep
     # it aside, under its session's ID, for the launcher to find.
-    old=
-    [[ -f $record ]] && read -r old < "$record"
     if [[ $old =~ \"session_id\":\"($uuid)\" && ${BASH_REMATCH[1]} != "$session_id" ]]; then
       mv -f "$record" "${record}_${BASH_REMATCH[1]}"
     fi
     write "{$fields,\"started_at\":$EPOCHREALTIME}" ;;
   end)
     case $reason in
-      prompt_input_exit|clear|resume|logout) rm -f "$record" ;;
+      # Only this session's record: another's (no start was seen for this
+      # one) is left for the launcher to sort.
+      prompt_input_exit|clear|resume|logout) [[ -n $mine ]] && rm -f "$record" ;;
       *)
-        old=
-        [[ -f $record ]] && read -r old < "$record"
-        # Another session's record (no start was seen for this one): start afresh.
-        [[ $old == '{'*'}' && $old == *"\"session_id\":\"$session_id\""* ]] || old="{$fields,\"started_at\":$EPOCHREALTIME}"
+        # Another session's record: start afresh.
+        [[ -n $mine ]] || old="{$fields,\"started_at\":$EPOCHREALTIME}"
         write "${old%\}},\"end_reason\":\"$reason\",\"ended_at\":$EPOCHREALTIME}" ;;
     esac ;;
 esac

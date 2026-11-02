@@ -38,6 +38,10 @@ _BOOT_ROW = re.compile(r"^\s*-?\d+\s+([0-9a-f]{32})\s", re.MULTILINE)
 Runner = Callable[[Sequence[str]], str | None]
 
 
+class LookupFailed(Exception):
+    """The journal lists the boot, but asking about it failed (timed out, say)."""
+
+
 def run_journalctl(args: Sequence[str]) -> str | None:
     """journalctl's output, or None if it can't be run or fails."""
     try:
@@ -66,6 +70,7 @@ class Journal:
     def __init__(self, run: Runner = run_journalctl):
         self._run = run
         self._last_entries: dict[str, float] | None | bool = False  # False: not asked yet
+        self._failed: set[str] = set()  # boots whose last entry couldn't be looked up
         self._restarts: dict[str, float | None] = {}
         self._logouts: dict[tuple[str, str], list[Logout]] = {}
         self._desktop_ends: dict[str, list[float]] = {}
@@ -101,24 +106,29 @@ class Journal:
         return self._boots() is not None
 
     def last_entry(self, boot_id: str) -> float | None:
-        """When boot `boot_id` last logged anything, or None if the journal doesn't have it."""
+        """When boot `boot_id` last logged anything, or None if the journal
+        doesn't have it. Raises LookupFailed if the journal lists it but
+        can't say."""
         boots = self._boots()
         boot_id = normalize_boot_id(boot_id)
         if not boots or boot_id not in boots:
             return None
+        if boot_id in self._failed:
+            raise LookupFailed(boot_id)
         if boots[boot_id] is None:
             out = self._run(["-b", boot_id, "-n", "1", "-o", "json", "--output-fields=__REALTIME_TIMESTAMP"])
             try:
                 boots[boot_id] = int(json.loads(out or "")["__REALTIME_TIMESTAMP"]) / 1e6
             except (ValueError, KeyError, TypeError):
-                return None
+                self._failed.add(boot_id)  # once per sort: a timeout takes seconds
+                raise LookupFailed(boot_id) from None
         return boots[boot_id]
 
     def restart_time(self, boot_id: str) -> float | None:
         """When the restart that ended boot `boot_id` began: logind's shutdown
         message, else the boot's last journal entry (after a crash or power
         cut, or when only your own journal can be read). None if the journal
-        doesn't have that boot."""
+        doesn't have that boot; LookupFailed if it lists it but can't say."""
         boot_id = normalize_boot_id(boot_id)
         if boot_id in self._restarts:
             return self._restarts[boot_id]
@@ -250,6 +260,12 @@ class JournalEvents:
         self._user = user
 
     def events(self, record, same_boot: bool) -> list[Event] | None:
+        try:
+            return self._events(record, same_boot)
+        except LookupFailed:
+            return None  # asked again at the next sort
+
+    def _events(self, record, same_boot: bool) -> list[Event] | None:
         logouts = self.journal.logouts(record.boot_id, self._user())
         if logouts is None:
             return None
@@ -264,7 +280,7 @@ class JournalEvents:
             if restart is not None:
                 events.append(Event(restart, self.journal.last_entry(record.boot_id) or restart, "restart"))
             elif record.ended is not None:
-                # The journal no longer has that boot (kept only in memory,
+                # The journal doesn't list that boot any more (kept only in memory,
                 # vacuumed, or cleared), so the restart may have been when
                 # this Claude ended. A false ↻ row is cheap; a missed session isn't.
                 events.append(Event(record.ended, record.ended, "restart"))
