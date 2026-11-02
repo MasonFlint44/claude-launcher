@@ -1165,6 +1165,27 @@ class TestPick:
         self.accept(env, "", monkeypatch=monkeypatch)
         assert env.picker().pick(sid) == Pick(str(d), sid)
 
+    def test_pasted_session_id_that_continues_one_in_the_group(self, env, monkeypatch):
+        # The projects view has no Sessions rows to ask, so the group itself says.
+        d = project(env, "proj", NOW - 60)
+        newer = env.log(d, conversation("newer", d))
+        older = env.log(d, conversation("older", d) + [{"type": "continued-in", "continuedInSessionId": newer}])
+        env.paths.state.mkdir(parents=True, exist_ok=True)
+        env.paths.restored.write_text(json.dumps({older: closed(NOW - 300)}))
+        start(env)
+        self.accept(env, "", monkeypatch=monkeypatch)
+        picked = env.picker().pick(newer)
+        assert picked == Pick(str(d), newer) and picked.ungroup == [newer, older]
+
+    def test_pasted_session_id_in_the_group(self, env, monkeypatch):
+        d = project(env, "proj", NOW - 60)
+        sid = sid_in(env, d)
+        env.paths.state.mkdir(parents=True, exist_ok=True)
+        env.paths.restored.write_text(json.dumps({sid: closed(NOW - 300)}))
+        start(env)
+        self.accept(env, "", monkeypatch=monkeypatch)
+        assert env.picker().pick(sid).ungroup == [sid]
+
     def test_unknown_session_id(self, env, monkeypatch):
         start(env)
         self.accept(env, "", monkeypatch=monkeypatch)

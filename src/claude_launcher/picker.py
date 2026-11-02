@@ -767,6 +767,20 @@ class Picker:
 
     # --- After fzf exits -------------------------------------------------------
 
+    def _group_of(self, session_id: str) -> str | None:
+        """The session's key in the restart group, if it's in it. From the
+        Sessions view's rows when they hold it (they know what was dismissed);
+        else, as for an ID pasted in the projects view, from the group itself."""
+        for r in self._sessions():
+            if r["id"] == session_id:
+                return r["group"]
+        group = self.restart.load()
+        if not group.sessions:
+            return None
+        if session_id in group.sessions:  # no need to read the logs
+            return session_id
+        return _group_key(session_id, group, self._scan()[1])
+
     def pick(self, query: str) -> Pick | str:
         """What Enter chose, or a message saying why nothing was."""
         pos, row = 1, ""
@@ -805,7 +819,7 @@ class Picker:
             directory = logs.session_dir(self.paths, session_id)
             if directory is None:
                 return f"No session with ID {session_id}"
-            group = next((r["group"] for r in self._sessions() if r["id"] == session_id and r["group"]), None)
+            group = self._group_of(session_id)
             ungroup = list(dict.fromkeys([session_id, group] if group else [session_id]))
             return Pick(resume_dir(directory, self.paths), session_id, ungroup)
         if choice:
