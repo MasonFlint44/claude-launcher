@@ -1,0 +1,6 @@
+# The image is built from the repo's root (run.sh) and needs only these.
+*
+!pyproject.toml
+!uv.lock
+!tests/docker/distro/packages.sh
+!tests/docker/distro/check.sh

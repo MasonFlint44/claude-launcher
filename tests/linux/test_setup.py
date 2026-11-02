@@ -212,6 +212,19 @@ def test_check_turns_down_last_times_terminal(home, tmp_path, monkeypatch, saved
     assert str(e.value).endswith("; run install.sh --terminal auto (or --terminal NAME)")
 
 
+@pytest.mark.parametrize("content", [b"not a png", b"\x89PNG\r\n\x1a\n\0\0"])
+def test_check_turns_down_a_damaged_kept_icon(home, tmp_path, content):
+    kept = tmp_path / "data" / "claude-launcher" / "icon.png"
+    kept.parent.mkdir(parents=True)
+    kept.write_bytes(content)
+    with pytest.raises(ValueError) as e:
+        LinuxSetup().check(None, None)
+    assert str(e.value) == f"{kept} isn't a square PNG any more; run install.sh --icon FILE (or --icon default)"
+    setup = LinuxSetup()
+    setup.check(None, "default")
+    setup.check(None, str(desktop.ICONS_DIR / "claude-launcher-256.png"))
+
+
 def test_check_lets_a_new_terminal_replace_last_times(home, tmp_path, monkeypatch):
     monkeypatch.setattr(terminals.Terminal, "installed", lambda self: self.name != "ghostty")
     save_terminals(tmp_path, ["ghostty"])
@@ -228,6 +241,7 @@ def test_check_lets_a_new_terminal_replace_last_times(home, tmp_path, monkeypatc
         ("x.jpg", b"", "svg or .png"),
         ("missing.svg", None, "svg or .png"),
         ("wide.png", b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR" + (64).to_bytes(4, "big") + (32).to_bytes(4, "big"), "square"),
+        ("short.png", b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0", "square"),
     ],
 )
 def test_check_turns_down_an_icon(home, tmp_path, name, content, error):

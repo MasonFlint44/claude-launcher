@@ -169,7 +169,7 @@ def _icon_targets(ctx: Context) -> list[Path]:
 
 def _png_size(path: Path) -> int | None:
     head = path.read_bytes()[:24]
-    if head[:8] != b"\x89PNG\r\n\x1a\n":
+    if len(head) < 24 or head[:8] != b"\x89PNG\r\n\x1a\n":  # short: a cut-off download
         return None
     width, height = struct.unpack(">II", head[16:24])
     return width if width == height else None
@@ -195,6 +195,19 @@ def check_icon(icon: str) -> Path:
     return src
 
 
+def _kept_icon(ctx: Context) -> Path | None:
+    """The copy of your icon an earlier --icon kept, if there is one."""
+    return next(iter(sorted((ctx.data_home / "claude-launcher").glob("icon.*"))), None)
+
+
+def check_kept_icon(ctx: Context) -> None:
+    """Raises if the icon kept from last time, which a run without --icon
+    puts in again, isn't one the desktop can show any more."""
+    own = _kept_icon(ctx)
+    if own is not None and own.suffix == ".png" and (not own.is_file() or _png_size(own) is None):
+        raise ValueError(f"{own} isn't a square PNG any more; run install.sh --icon FILE (or --icon default)")
+
+
 def install_icon(ctx: Context, icon: str | None) -> str:
     """Put the app icon in the icon theme: yours if you've given one (--icon
     FILE, kept until --icon default), else the one in share/icons."""
@@ -213,17 +226,14 @@ def install_icon(ctx: Context, icon: str | None) -> str:
         for old in own_dir.glob("icon.*"):
             if old != kept:
                 old.unlink()
-    remove_icon(ctx)
+    check_kept_icon(ctx)  # before the current icon comes out
     theme = ctx.data_home / "icons" / "hicolor"
-    own = next(iter(sorted(own_dir.glob("icon.*"))), None)
+    own = _kept_icon(ctx)
     if own is not None:
         if own.suffix == ".svg":
             pairs = [(own, theme / "scalable" / "apps" / f"{APP_ID}.svg")]
         else:
-            size = _png_size(own)
-            if size is None:  # the kept copy got damaged
-                raise ValueError(f"{own} isn't a square PNG any more; use --icon FILE or --icon default")
-            size = theme_size(size)
+            size = theme_size(_png_size(own) or 0)  # checked above
             pairs = [(own, theme / f"{size}x{size}" / "apps" / f"{APP_ID}.png")]
         what = f"Installed your icon ({own})"
     else:
@@ -232,6 +242,7 @@ def install_icon(ctx: Context, icon: str | None) -> str:
             (ICONS_DIR / f"claude-launcher-{s}.png", theme / f"{s}x{s}" / "apps" / f"{APP_ID}.png") for s in ICON_SIZES
         ]
         what = "Installed the default icon"
+    _unlink_icons(ctx)
     for src, dest in pairs:
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.symlink_to(src)
@@ -239,10 +250,14 @@ def install_icon(ctx: Context, icon: str | None) -> str:
     return what
 
 
-def remove_icon(ctx: Context) -> None:
+def _unlink_icons(ctx: Context) -> None:
     for path in _icon_targets(ctx):
         if path.is_symlink() or path.exists():
             path.unlink()
+
+
+def remove_icon(ctx: Context) -> None:
+    _unlink_icons(ctx)
     _refresh_icons(ctx)
 
 

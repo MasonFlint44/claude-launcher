@@ -233,8 +233,9 @@ class Ptyxis(_GSettingsProfile):
         }
 
     def uninstall(self, ctx: Context) -> None:
-        super().uninstall(ctx)
+        # First: the palette is ours to take out even when gsettings can't run.
         self.palette_file(ctx).unlink(missing_ok=True)
+        super().uninstall(ctx)
 
     def install(self, ctx: Context) -> None:
         # Ptyxis uses the first profile when default-profile-uuid doesn't name

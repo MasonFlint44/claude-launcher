@@ -19,7 +19,7 @@ The installer:
 4. Links the theme to `~/.config/ghostty/themes/claude-dark`.
 5. Adds the app icon and a **Claude Code** desktop launcher for your terminal (see below), with a Claude Code profile in terminals that use profiles.
 
-It checks `--terminal` (or, without it, the terminal it was set up with last time) and `--icon` first, and changes nothing if one is wrong or isn't installed any more; `--terminal auto` picks again. Re-running it is safe; it updates what's already there, and remembers the options you gave it last time. It never replaces a file that isn't one of its own links.
+It checks `--terminal` and `--icon` (or, without them, the terminal and icon it was set up with last time) first, and changes nothing if one is wrong or isn't installed any more; `--terminal auto` picks again. Re-running it is safe; it updates what's already there, and remembers the options you gave it last time. It never replaces a file that isn't one of its own links.
 
 | Option | Does |
 |---|---|

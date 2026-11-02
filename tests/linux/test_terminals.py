@@ -391,6 +391,20 @@ class TestInstallTerminals:
         assert (ctx.data_home / "applications" / f"{APP_ID}.desktop").read_text() == before
         assert desktop.saved_terminals(ctx) == ["ghostty"]
 
+    def test_ptyxis_palette_goes_without_gsettings(self, ctx):
+        desktop.install_terminals(ctx, ["ptyxis"])
+
+        run = ctx.run
+
+        def no_gsettings(argv):
+            if argv[0] == "gsettings":
+                raise FileNotFoundError(argv[0])
+            return run(argv)
+
+        ctx.run = no_gsettings
+        desktop.remove_terminals(ctx)
+        assert not TERMINALS["ptyxis"].palette_file(ctx).exists()
+
     def test_remove(self, ctx):
         desktop.install_terminals(ctx, ["konsole", "guake"])
         desktop.remove_terminals(ctx)
@@ -470,12 +484,24 @@ class TestIcon:
         desktop.remove_icon(ctx)
         assert self.installed(ctx) == []
 
-    def test_a_damaged_kept_icon_says_so(self, ctx):
+    def test_a_damaged_kept_icon_says_so_and_changes_nothing(self, ctx, tmp_path):
+        desktop.install_icon(ctx, self.png(tmp_path / "mine.png", 256))
         kept = ctx.data_home / "claude-launcher" / "icon.png"
-        kept.parent.mkdir(parents=True)
         kept.write_bytes(b"not a png")
         with pytest.raises(ValueError, match="isn't a square PNG any more"):
             desktop.install_icon(ctx, None)
+        assert self.installed(ctx) == [f"256x256/apps/{APP_ID}.png"]
+
+    @pytest.mark.parametrize("icon", [None, "default", "mine"])
+    def test_the_icon_cache_is_updated_once(self, ctx, tmp_path, monkeypatch, icon):
+        monkeypatch.setattr(desktop.shutil, "which", lambda p: "/usr/bin/" + p)
+        theme = ctx.data_home / "icons" / "hicolor"
+        theme.mkdir(parents=True)
+        (theme / "index.theme").write_text("")
+        desktop.install_icon(ctx, self.png(tmp_path / "mine.png", 64) if icon == "mine" else icon)
+        assert [c[0] for c in ctx.run.calls] == ["gtk-update-icon-cache"]
+        desktop.remove_icon(ctx)
+        assert [c[0] for c in ctx.run.calls] == ["gtk-update-icon-cache"] * 2
 
     def test_theme_sizes_are_hicolors(self):
         index = Path("/usr/share/icons/hicolor/index.theme")

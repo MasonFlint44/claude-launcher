@@ -22,7 +22,7 @@ distro() {
     t=$(tag distro "$image")
     log=$work/distro-$(tr ':/' '--' <<< "$image").log
     printf '%-20s ' "$image"
-    if ! docker build -q --build-arg "BASE=$image" -t "$t" "$here/distro" > "$log" 2>&1; then
+    if ! docker build -q --build-arg "BASE=$image" -t "$t" -f "$here/distro/Dockerfile" "$repo" > "$log" 2>&1; then
       echo "image build failed (see $log)"; failed+=("$image")
       [[ -z ${CI:-} ]] || cat "$log"
       continue

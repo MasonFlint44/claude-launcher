@@ -33,7 +33,7 @@ uvx ruff@0.17.3 format src tests bin/claude-launcher bin/claude-session-hook.py 
 shellcheck bin/claude-session-hook install.sh scripts/render-icons.sh tests/docker/run.sh tests/docker/*/*.sh tests/docker/terminals/systemd-run
 ```
 
-Run these before calling a change done, and the Docker layer a change touches (docs/dev/linux.md). CI runs everything. Tests need fzf 0.67+ on PATH. Skipped where they can't run: the Ghostty theme check (no Ghostty), the old-Python checks (no Python older than 3.10; CI's floors job sets `CLAUDE_LAUNCHER_TEST_OLD_PYTHON`) and `tests/wsl/` (WSL only).
+Run these before calling a change done, and the Docker layer a change touches (docs/dev/linux.md). CI runs everything. Tests need fzf 0.67+ on PATH. Skipped where they can't run (`pytest -rs` says which and why): the Ghostty theme check (no Ghostty), the old-Python checks (no Python older than 3.10; CI's floors job sets `CLAUDE_LAUNCHER_TEST_OLD_PYTHON`) and `tests/wsl/` (WSL only), the only skips `tests/docker/distro/check.sh` allows. A dev machine can add: install.sh's tests (fzf older than 0.67, or WSL), a hook test (no locale with a decimal comma), two desktop checks (no PyGObject, no hicolor `index.theme`), and a terminal check (every terminal installed).
 
 ## Rules
 
