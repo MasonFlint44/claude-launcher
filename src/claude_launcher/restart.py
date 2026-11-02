@@ -421,26 +421,41 @@ class RestartState:
                 return self._open_at_boot_end(record, now, boot_end)
             return _UNDECIDED
         if record.ended is None:
-            after = [e for e in events if e.start >= record.started]
-            first = min(after, key=lambda e: e.start, default=None)
-            if first:
-                return Closed(first.start, first.why)
-            if not same_boot:  # it was open when that boot ended, though the system no longer says when
-                return self._open_at_boot_end(record, now, boot_end)
-            return None  # it crashed, or was killed
+            return self._closed_without_end(record, events, same_boot, now, boot_end)
+        return self._closed_with_end(record, record.ended, events, same_boot, boot_end)
+
+    def _closed_without_end(
+        self, record: Record, events: list[Event], same_boot: bool, now: float, boot_end: float | None
+    ) -> Closed | None:
+        """A Claude that never recorded an end was closed by the first event
+        after it started."""
+        first = min((e for e in events if e.start >= record.started), key=lambda e: e.start, default=None)
+        if first:
+            return Closed(first.start, first.why)
+        if not same_boot:  # it was open when that boot ended, though the system no longer says when
+            return self._open_at_boot_end(record, now, boot_end)
+        return None  # it crashed, or was killed
+
+    def _closed_with_end(
+        self, record: Record, ended: float, events: list[Event], same_boot: bool, boot_end: float | None
+    ) -> Closed | None | object:
+        """A Claude that recorded an end was closed by an event it ended
+        within the margins of."""
         if not same_boot:
             lost = self.events.boot_lost(record)
             if lost is None:
                 return _UNDECIDED
-            if lost and boot_end is not None:
+            if lost:
                 # A restart closes every Claude still open within seconds, so
                 # their ends bunch at the boot's last moment, and the latest
                 # end stands in for the restart. If none was open then, the
                 # last tab closed by hand comes back: a ↻ row to dismiss.
                 from .platforms import Event  # here: platforms imports this module
 
+                # This record has an end and is from that boot, so its boot has one.
+                assert boot_end is not None
                 events = [*events, Event(boot_end, boot_end, "restart")]
-        matches = [e for e in events if closes(e, record.ended)]
+        matches = [e for e in events if closes(e, ended)]
         if not matches:
             # In this boot, the system can still have lost what closed it:
             # Windows' Fast Startup keeps the boot across shutdowns, and the
