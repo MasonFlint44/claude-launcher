@@ -194,3 +194,59 @@ class TestUnusualFiles:
         assert json.loads(raw)["model"] == "opus"
         assert hook_settings.remove_hook(path)
         assert json.loads(path.read_text()) == {"model": "opus"}
+
+
+def _windows_forms(tmp_path):
+    """What Windows' install writes: cmd /c the .cmd, by %LOCALAPPDATA% or by path."""
+    from claude_launcher.platforms.windows import data_dir
+    from claude_launcher.platforms.windows.setup import WindowsSetup
+
+    env = {"USERPROFILE": str(tmp_path / "Jo Smith"), "LOCALAPPDATA": str(tmp_path / "Jo Smith" / "AppData" / "Local")}
+    return [
+        WindowsSetup(data_dir(env), env={**env, "SystemRoot": "C:\\Windows"}).hook_command(),
+        WindowsSetup(tmp_path / "data", env=env).hook_command(),
+    ]
+
+
+class TestWhichHooksAreOurs:
+    """Ours by the name of what runs, not by a name appearing somewhere."""
+
+    @pytest.mark.parametrize(
+        "hook",
+        [
+            Path("/home/me/.local/bin/claude-session-hook"),  # Linux and WSL
+            Path("/home/John Doe/.local/bin/claude-session-hook"),
+            ["C:\\Python\\python.exe", "-I", "C:\\cl\\bin\\claude-session-hook.py"],  # Windows before the .cmd
+        ],
+        ids=["linux", "spaced", "python"],
+    )
+    def test_every_form_written_is_ours(self, tmp_path, hook):
+        path = tmp_path / "settings.json"
+        hook_settings.add_hook(path, hook)
+        assert hook_settings.remove_hook(path)
+        assert json.loads(path.read_text()) == {}
+
+    def test_windows_forms_are_ours(self, tmp_path):
+        for argv in _windows_forms(tmp_path):
+            path = tmp_path / "settings.json"
+            hook_settings.add_hook(path, argv)
+            assert hook_settings.remove_hook(path)
+            assert json.loads(path.read_text()) == {}
+
+    WRAPPERS = [
+        {"type": "command", "command": "my-claude-session-hook-wrapper start"},
+        {"type": "command", "command": "/x/claude-session-hook-wrapper start"},
+        {"type": "command", "command": "/x/claude-session-hook/run.sh start"},
+        {"type": "command", "command": "bash -c '~/.local/bin/claude-session-hook start; logger hi'"},
+        {"type": "command", "command": "C:\\w\\my-claude-session-hook.cmd", "args": ["start"]},
+    ]
+
+    def test_someone_elses_wrapper_is_left_alone(self, tmp_path):
+        path = tmp_path / "settings.json"
+        theirs = {"hooks": self.WRAPPERS}
+        path.write_text(json.dumps({"hooks": {"SessionStart": [theirs]}}))
+        hook_settings.add_hook(path, Path("/x/claude-session-hook"))
+        groups = json.loads(path.read_text())["hooks"]["SessionStart"]
+        assert groups[0] == theirs and len(groups) == 2
+        hook_settings.remove_hook(path)
+        assert json.loads(path.read_text()) == {"hooks": {"SessionStart": [theirs]}}
