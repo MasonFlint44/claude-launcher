@@ -130,6 +130,47 @@ def test_not_started_when_claude_cant_start(monkeypatch, tmp_path):
     assert calls == []
 
 
+class CapturesArgv:
+    """subprocess.run and Popen as _Signals.run calls them: records argv."""
+
+    def __init__(self, monkeypatch):
+        self.argv = []
+        monkeypatch.setattr(subprocess, "run", self.run)
+        monkeypatch.setattr(subprocess, "Popen", self.popen)
+
+    def run(self, argv, **kwargs):
+        self.argv.append(argv)
+        return subprocess.CompletedProcess(argv, 0)
+
+    def popen(self, argv, **kwargs):
+        self.argv.append(argv)
+        return FakeChild(argv)
+
+
+class FakeChild:
+    def __init__(self, args):
+        self.args = args
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def wait(self):
+        return 0
+
+
+@pytest.mark.parametrize("started", [None, lambda: None], ids=["run", "popen"])
+def test_a_command_line_reaches_subprocess_as_it_is(monkeypatch, started):
+    # npm's claude.cmd on Windows: one string for cmd, not a list of its characters.
+    captured = CapturesArgv(monkeypatch)
+    line = '"C:\\Windows\\System32\\cmd.exe" /d /e:on /v:off /s /c ""C:\\npm\\claude.cmd" "-c""'
+    launcher._Signals.run(RunsForReal(), line, started)
+    launcher._Signals.run(RunsForReal(), ("claude", "-c"), started)
+    assert captured.argv == [line, ["claude", "-c"]]
+
+
 class FakeRestart:
     dropped: list = []
 

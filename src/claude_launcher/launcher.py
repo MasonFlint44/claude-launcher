@@ -71,17 +71,19 @@ class _Signals:
         return handler
 
     def run(
-        self, argv: Sequence[str], started: Callable[[], None] | None = None, **kwargs
+        self, argv: Sequence[str] | str, started: Callable[[], None] | None = None, **kwargs
     ) -> subprocess.CompletedProcess:
         """Run a child in the foreground, calling `started` once it has. A
         handler, not SIG_IGN, for Ctrl-C: an ignored signal stays ignored in
-        the child, a handler doesn't."""
+        the child, a handler doesn't. A str is a Windows command line, passed
+        on as it is (npm's claude.cmd through cmd)."""
+        argv = argv if isinstance(argv, str) else list(argv)
         old = signal.signal(signal.SIGINT, lambda *_: None)
         self.in_child = True
         try:
             if started is None:
-                return subprocess.run(list(argv), **kwargs)
-            with subprocess.Popen(list(argv), **kwargs) as child:
+                return subprocess.run(argv, **kwargs)
+            with subprocess.Popen(argv, **kwargs) as child:
                 started()
                 return subprocess.CompletedProcess(child.args, child.wait())
         finally:
