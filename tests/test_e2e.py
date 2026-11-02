@@ -270,14 +270,16 @@ def in_the_group(claude_home, sid):
     claude_home.paths.restored.write_text(json.dumps({sid: {"at": time.time() - 3600, "why": "restart"}}))
 
 
-def left_the_group(claude_home, sid, timeout=5.0) -> bool:
+def left_the_group(t: Term, claude_home, sid, timeout=5.0) -> bool:
     """Whether the session leaves the group within `timeout`: the launcher
-    takes it out just after starting claude."""
+    takes it out just after starting claude. The terminal keeps being read,
+    then a little longer, so what came after shows on it."""
     end = time.time() + timeout
     while sid in json.loads(claude_home.paths.restored.read_text()):
         if time.time() > end:
             return False
-        time.sleep(0.05)
+        t.settle(0.05)
+    t.settle(0.5)
     return True
 
 
@@ -294,7 +296,7 @@ def test_a_resumed_session_leaves_the_group_once_claude_starts(launch, claude_ho
     t.send("enter")
     t.wait_for("fake claude in")
     assert launch.calls() == [(str(proj), f"--resume {sid}")]
-    assert left_the_group(claude_home, sid)
+    assert left_the_group(t, claude_home, sid)
     assert "Select a project directory" not in t.text()  # while Claude still runs
     hold.touch()
     t.wait_for("Select a project directory for Claude")
@@ -483,7 +485,7 @@ def test_resume_on_the_command_line_leaves_the_group_once_claude_starts(launch, 
     hold = tmp_path / "hold"
     t = launch("--resume", sid, CLAUDE_HOLD=str(hold))
     t.wait_for("fake claude in")
-    assert left_the_group(claude_home, sid)
+    assert left_the_group(t, claude_home, sid)
     assert t.status is None  # while Claude still runs
     hold.touch()
     assert t.wait_exit() == 0
