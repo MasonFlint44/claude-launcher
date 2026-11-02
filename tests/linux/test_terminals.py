@@ -385,6 +385,23 @@ class TestIcon:
         desktop.install_icon(ctx, None)
         assert (ctx.data_home / "icons/hicolor/scalable/apps" / f"{APP_ID}.svg").read_text() == "<svg/>"
 
+    def test_the_kept_copy_given_again(self, ctx, tmp_path):
+        mine = tmp_path / "clawd.svg"
+        mine.write_text("<svg/>")
+        desktop.install_icon(ctx, str(mine))
+        kept = ctx.data_home / "claude-launcher" / "icon.svg"
+        assert desktop.install_icon(ctx, str(kept)) == f"Installed your icon ({kept})"
+        assert kept.read_text() == "<svg/>"
+        assert self.installed(ctx) == ["scalable/apps/" + APP_ID + ".svg"]
+
+    def test_a_new_kind_of_icon_replaces_the_kept_one(self, ctx, tmp_path):
+        mine = tmp_path / "clawd.svg"
+        mine.write_text("<svg/>")
+        desktop.install_icon(ctx, str(mine))
+        desktop.install_icon(ctx, self.png(tmp_path / "clawd.png", 256))
+        assert sorted(p.name for p in (ctx.data_home / "claude-launcher").iterdir()) == ["icon.png"]
+        assert self.installed(ctx) == [f"256x256/apps/{APP_ID}.png"]
+
     def test_your_png_goes_by_its_size(self, ctx):
         desktop.install_icon(ctx, str(desktop.ICONS_DIR / "claude-launcher-256.png"))
         assert self.installed(ctx) == [f"256x256/apps/{APP_ID}.png"]

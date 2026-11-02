@@ -193,9 +193,14 @@ def install_icon(ctx: Context, icon: str | None) -> str:
     elif icon:
         src = check_icon(icon)
         own_dir.mkdir(parents=True, exist_ok=True)
+        # Copied in beside the old one first: --icon can name the kept copy.
+        kept = own_dir / f"icon{src.suffix.lower()}"
+        tmp = own_dir / ".icon.tmp"
+        shutil.copyfile(src, tmp)
+        os.replace(tmp, kept)
         for old in own_dir.glob("icon.*"):
-            old.unlink()
-        shutil.copyfile(src, own_dir / f"icon{src.suffix.lower()}")
+            if old != kept:
+                old.unlink()
     remove_icon(ctx)
     theme = ctx.data_home / "icons" / "hicolor"
     own = next(iter(sorted(own_dir.glob("icon.*"))), None)
