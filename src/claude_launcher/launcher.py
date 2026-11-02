@@ -116,7 +116,12 @@ def _resume(args: Sequence[str]) -> tuple[str, list[str]] | int | None:
         group = state.sort()
     except OSError:  # can't write the group: resume anyway, from what's there
         group = state.load()
-    key = group_of(session_id, group, lambda: logs.scan_sessions(paths.all_log_dirs())[1])
+
+    def continued_from() -> dict[str, str]:
+        log = paths.log_for(session_id)  # continuations never leave their log directory
+        return logs.scan_sessions([log.parent] if log else [])[1]
+
+    key = group_of(session_id, group, continued_from)
     return resume_dir(directory, paths), ungroup_keys(session_id, key)
 
 
