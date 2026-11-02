@@ -164,7 +164,8 @@ def _png_size(path: Path) -> int | None:
 
 
 # The sizes hicolor's index.theme lists. GTK looks for an app icon only in
-# those, so a PNG of another size goes in the next one up (GTK scales it).
+# those, so a PNG of another size goes in the next one up, or 512 if it's bigger
+# (GTK scales it).
 THEME_SIZES = (16, 22, 24, 32, 36, 48, 64, 72, 96, 128, 192, 256, 512)
 
 
@@ -202,7 +203,10 @@ def install_icon(ctx: Context, icon: str | None) -> str:
         if own.suffix == ".svg":
             pairs = [(own, theme / "scalable" / "apps" / f"{APP_ID}.svg")]
         else:
-            size = theme_size(_png_size(own))
+            size = _png_size(own)
+            if size is None:  # the kept copy got damaged
+                raise ValueError(f"{own} isn't a square PNG any more; use --icon FILE or --icon default")
+            size = theme_size(size)
             pairs = [(own, theme / f"{size}x{size}" / "apps" / f"{APP_ID}.png")]
         what = f"Installed your icon ({own})"
     else:

@@ -413,6 +413,13 @@ class TestIcon:
         desktop.remove_icon(ctx)
         assert self.installed(ctx) == []
 
+    def test_a_damaged_kept_icon_says_so(self, ctx):
+        kept = ctx.data_home / "claude-launcher" / "icon.png"
+        kept.parent.mkdir(parents=True)
+        kept.write_bytes(b"not a png")
+        with pytest.raises(ValueError, match="isn't a square PNG any more"):
+            desktop.install_icon(ctx, None)
+
     def test_theme_sizes_are_hicolors(self):
         index = Path("/usr/share/icons/hicolor/index.theme")
         if not index.is_file():
