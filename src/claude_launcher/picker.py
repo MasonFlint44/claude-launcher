@@ -134,6 +134,9 @@ class Pick:
 
     dir: str
     session_id: str = ""
+    # Keys to take out of the restart group once Claude has started, so a
+    # Claude that can't start leaves its ↻ row for another go.
+    ungroup: list[str] = field(default_factory=list, compare=False)
 
 
 class Picker:
@@ -803,8 +806,8 @@ class Picker:
             if directory is None:
                 return f"No session with ID {session_id}"
             group = next((r["group"] for r in self._sessions() if r["id"] == session_id and r["group"]), None)
-            self.restart.drop([session_id] + ([group] if group else []))
-            return Pick(resume_dir(directory, self.paths), session_id)
+            ungroup = list(dict.fromkeys([session_id, group] if group else [session_id]))
+            return Pick(resume_dir(directory, self.paths), session_id, ungroup)
         if choice:
             return Pick(choice) if os.path.isdir(choice) else f"Not a directory: {choice}"
         if view != "projects" and not query:

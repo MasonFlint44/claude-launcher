@@ -1153,8 +1153,10 @@ class TestPick:
         p, _ = start(env)
         p.on_sessions()
         self.accept(env, sid, monkeypatch=monkeypatch)
-        assert env.picker().pick("") == Pick(str(d), sid)
-        assert json.loads(env.paths.restored.read_text()) == {}  # resuming takes it out of the group
+        picked = env.picker().pick("")
+        assert picked == Pick(str(d), sid) and picked.ungroup == [sid]
+        # Out of the group only once Claude has started (the launcher's job).
+        assert sid in json.loads(env.paths.restored.read_text())
 
     def test_pasted_session_id(self, env, monkeypatch):
         d = project(env, "proj", NOW - 60)

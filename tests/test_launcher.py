@@ -41,8 +41,10 @@ class FakeSignals:
         self.codes = list(codes)
         self.runs = []
 
-    def run(self, argv, **kwargs):
+    def run(self, argv, started=None, **kwargs):
         self.runs.append((argv, kwargs))
+        if started:
+            started()
         return subprocess.CompletedProcess(argv, self.codes.pop(0), stdout=b"\n")
 
 
@@ -92,10 +94,11 @@ def test_fzf_too_old(loop, capsys):
 class RunsForReal:
     def __init__(self):
         self.env = None
+        self.pending, self.in_child = None, False
 
-    def run(self, argv, **kwargs):
+    def run(self, argv, started=None, **kwargs):
         self.env = kwargs.get("env")
-        return subprocess.run(argv, **kwargs)
+        return launcher._Signals.run(self, argv, started, **kwargs)
 
 
 def test_claude_not_on_path(monkeypatch, tmp_path, capsys):
@@ -109,6 +112,61 @@ def test_no_such_directory(tmp_path, capsys):
     gone = str(tmp_path / "gone")
     assert launcher._claude(RunsForReal(), gone, []) is None
     assert capsys.readouterr().err.strip() == f"No such directory: {gone}"
+
+
+def test_started_once_claude_runs(monkeypatch, tmp_path):
+    monkeypatch.setattr(launcher, "_claude_command", lambda args: [sys.executable, "-c", "raise SystemExit(3)"])
+    calls = []
+    assert launcher._claude(RunsForReal(), str(tmp_path), [], lambda: calls.append(1)) == 3
+    assert calls == [1]
+
+
+def test_not_started_when_claude_cant_start(monkeypatch, tmp_path):
+    monkeypatch.setenv("PATH", str(tmp_path / "nothing"))
+    monkeypatch.setattr(launcher, "_claude_command", lambda args: ["claude", *args])
+    calls = []
+    assert launcher._claude(RunsForReal(), str(tmp_path), [], lambda: calls.append(1)) is None
+    assert launcher._claude(RunsForReal(), str(tmp_path / "gone"), [], lambda: calls.append(1)) is None
+    assert calls == []
+
+
+class FakeRestart:
+    dropped: list = []
+
+    def __init__(self, paths):
+        pass
+
+    def drop(self, keys):
+        FakeRestart.dropped.append(list(keys))
+
+
+@pytest.fixture
+def restart(monkeypatch):
+    FakeRestart.dropped = []
+    monkeypatch.setattr(launcher, "RestartState", FakeRestart)
+    return FakeRestart
+
+
+def test_a_resumed_session_leaves_the_group_once_claude_starts(loop, restart, tmp_path):
+    FakePicker.result = Pick(str(tmp_path), "sid", ["sid", "older"])
+    loop(0, 0, launcher.QUIT)
+    assert restart.dropped == [["sid", "older"]]
+
+
+def test_a_session_that_cant_start_stays_in_the_group(loop, restart, tmp_path):
+    FakePicker.result = Pick(str(tmp_path / "gone"), "sid", ["sid"])
+    loop(0, launcher.QUIT)
+    assert restart.dropped == []
+
+
+def test_leaving_the_group_failing_doesnt_stop_claude(loop, restart, tmp_path, monkeypatch):
+    def fail(self, keys):
+        raise PermissionError(13, "denied")
+
+    monkeypatch.setattr(FakeRestart, "drop", fail)
+    FakePicker.result = Pick(str(tmp_path), "sid", ["sid"])
+    code, signals = loop(0, 0, launcher.QUIT)
+    assert code == 0 and len(signals.runs) == 3
 
 
 @pytest.mark.skipif(os.name == "nt", reason="PWD is POSIX's")

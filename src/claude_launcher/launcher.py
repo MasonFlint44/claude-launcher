@@ -11,6 +11,7 @@ exit, as a shell would, so Claude is never left running without the launcher.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import secrets
 import shutil
@@ -19,12 +20,13 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from . import fzf, logs, text, theme, title
 from .paths import Paths
 from .picker import FzfTooOld, Pick, Picker, resume_dir
+from .restart import RestartState
 
 USAGE = """\
 Pick a project directory or a recent session, then start Claude Code there.
@@ -68,13 +70,20 @@ class _Signals:
 
         return handler
 
-    def run(self, argv: Sequence[str], **kwargs) -> subprocess.CompletedProcess:
-        """Run a child in the foreground. A handler, not SIG_IGN, for Ctrl-C:
-        an ignored signal stays ignored in the child, a handler doesn't."""
+    def run(
+        self, argv: Sequence[str], started: Callable[[], None] | None = None, **kwargs
+    ) -> subprocess.CompletedProcess:
+        """Run a child in the foreground, calling `started` once it has. A
+        handler, not SIG_IGN, for Ctrl-C: an ignored signal stays ignored in
+        the child, a handler doesn't."""
         old = signal.signal(signal.SIGINT, lambda *_: None)
         self.in_child = True
         try:
-            return subprocess.run(list(argv), **kwargs)
+            if started is None:
+                return subprocess.run(list(argv), **kwargs)
+            with subprocess.Popen(list(argv), **kwargs) as child:
+                started()
+                return subprocess.CompletedProcess(child.args, child.wait())
         finally:
             self.in_child = False
             signal.signal(signal.SIGINT, old)
@@ -191,8 +200,11 @@ def _claude_command(
     return f'"{comspec}" /d /e:on /v:off /s /c "{line}"'
 
 
-def _claude(signals: _Signals, directory: str, args: Sequence[str]) -> int | None:
-    """Run claude in `directory`. Its exit code, or None if it couldn't start."""
+def _claude(
+    signals: _Signals, directory: str, args: Sequence[str], started: Callable[[], None] | None = None
+) -> int | None:
+    """Run claude in `directory`, calling `started` once it has. Its exit
+    code, or None if it couldn't start."""
     if not os.path.isdir(directory):  # Windows says "directory name is invalid", not "not found"
         print(f"No such directory: {directory}", file=sys.stderr)
         return None
@@ -200,7 +212,7 @@ def _claude(signals: _Signals, directory: str, args: Sequence[str]) -> int | Non
     if os.name != "nt":  # as a shell's cd would: cwd alone leaves PWD naming where the launcher started
         env = {**os.environ, "PWD": directory}
     try:
-        return signals.run(_claude_command(args), cwd=directory, env=env).returncode
+        return signals.run(_claude_command(args), started=started, cwd=directory, env=env).returncode
     except ValueError as e:
         print(e, file=sys.stderr)
     except FileNotFoundError as e:
@@ -209,6 +221,18 @@ def _claude(signals: _Signals, directory: str, args: Sequence[str]) -> int | Non
     except (NotADirectoryError, PermissionError) as e:
         print(f"Can't open {directory}: {e.strerror}", file=sys.stderr)
     return None
+
+
+def _ungroup(keys: list[str]) -> Callable[[], None] | None:
+    """What takes a resumed session out of the restart group, once Claude is running."""
+    if not keys:
+        return None
+
+    def ungroup() -> None:
+        with contextlib.suppress(OSError):  # Claude is running; the row staying is all that's lost
+            RestartState(Paths.from_env()).drop(keys)
+
+    return ungroup
 
 
 def _loop(signals: _Signals, run: Path, args: list[str]) -> int:
@@ -244,7 +268,7 @@ def _loop(signals: _Signals, run: Path, args: list[str]) -> int:
             continue
         again = False
         resume = ["--resume", result.session_id] if result.session_id else []
-        if _claude(signals, result.dir, [*resume, *args]) is None:
+        if _claude(signals, result.dir, [*resume, *args], _ungroup(result.ungroup)) is None:
             time.sleep(1)
 
 
